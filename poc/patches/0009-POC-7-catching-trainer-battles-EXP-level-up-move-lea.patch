@@ -1,0 +1,1706 @@
+From a57cad6077e8e8c88746b366219d161894097fbf Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Sun, 4 Oct 2026 21:55:07 +0300
+Subject: [PATCH] POC-7: catching, trainer battles, EXP/level-up/move
+ learning/evolution after grid battles
+
+- Poke Balls from the Custom screen (an item slot used instead of chips): Emerald's
+  Cmd_handleballthrow odds (catch rate, ball bonus, HP, sleep/freeze x2, poison/burn/paralysis
+  x1.5, Net/Dive/Nest/Repeat/Timer/Master), shake animation, Pokedex flags, nickname
+  (DoNamingScreen), GiveMonToPlayer / PC.
+- Single trainer battles on the grid: party from CreateNPCTrainerParty (exported), trainers send out
+  their next Pokemon, no running / catching, Teleport fails, trainer EXP x1.5, prize money
+  (GetTrainerMoneyToGive, Amulet Coin), victory music by class, white-out on a loss.
+  Double-battle trainers, Frontier, Hill, secret bases stay vanilla.
+- EXP per fainted opponent as Cmd_getexp (sent-in split, Exp. Share, Lucky Egg, traded, EVs),
+  given level by level after the battle with Emerald's MonTryLearningNewMove and the
+  delete-a-move flow through the real summary screen (HM moves protected), then
+  GetEvolutionTargetSpecies -> EvolutionScene after a win. Pay Day money. Pokerus on exit.
+- Self-test hooks: PKBN_TEST_BALLS / _THROW / _TRAINER / _EVOLVE / _FORGET, PKBN_AUTO_PRESS.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/battle_main.h        |   1 +
+ include/pkbn/battle_stub.h   |   6 +-
+ include/pkbn/grid_battle.h   |   4 +-
+ include/pkbn/grid_internal.h |  20 +-
+ include/pkbn/render.h        |   2 +
+ src/battle_main.c            |   4 +-
+ src/battle_setup.c           |   5 +-
+ src/pkbn/battle_stub.c       |  44 ++-
+ src/pkbn/grid_battle.c       | 253 ++++++++++++++-
+ src/pkbn/grid_catch.c        | 107 ++++++
+ src/pkbn/grid_draw.c         |  57 +++-
+ src/pkbn/grid_moves.c        |   8 +
+ src/pkbn/post_battle.c       | 612 +++++++++++++++++++++++++++++++++++
+ src/pkbn/render.c            |  40 +++
+ src/pkbn/selftest.c          |  45 ++-
+ src/platform/sdl2.c          |  11 +-
+ 16 files changed, 1178 insertions(+), 41 deletions(-)
+ create mode 100644 src/pkbn/grid_catch.c
+ create mode 100644 src/pkbn/post_battle.c
+
+diff --git a/include/battle_main.h b/include/battle_main.h
+index ea6e5be..5e83284 100755
+--- a/include/battle_main.h
++++ b/include/battle_main.h
+@@ -85,6 +85,7 @@ extern const struct OamData gOamData_BattleSpritePlayerSide;
+ extern const u8 gTypeEffectiveness[336];
+ extern const u8 gTypeNames[NUMBER_OF_MON_TYPES][TYPE_NAME_LENGTH + 1];
+ extern const struct TrainerMoney gTrainerMoneyTable[];
++u8 CreateNPCTrainerParty(struct Pokemon *party, u16 trainerNum, bool8 firstTrainer); // PKBN: exported for src/pkbn
+ extern const u8 gAbilityNames[][ABILITY_NAME_LENGTH + 1];
+ extern const u8 *const gAbilityDescriptionPointers[];
+ 
+diff --git a/include/pkbn/battle_stub.h b/include/pkbn/battle_stub.h
+index be837e8..1a6c8c0 100644
+--- a/include/pkbn/battle_stub.h
++++ b/include/pkbn/battle_stub.h
+@@ -16,8 +16,8 @@ void CB2_PkbnBattleStub(void);
+ 
+ // Contract entry/exit shared by modules (mirrors battle_main.c behaviour).
+ void PkbnContract_Enter(void);
+-// participants: bitmask of party slots that battled and are still standing; they share the EXP
+-// like Gen 3 (Cmd_getexp divides by the number of sent-in Pokémon). 0 = lead only.
+-void PkbnContract_Exit(u8 outcome, u8 participants);
++// Sets gBattleOutcome and hands back to gMain.savedCallback. EXP, money and the rest are given
++// before this by the battle module (grid: src/pkbn/post_battle.c).
++void PkbnContract_Exit(u8 outcome);
+ 
+ #endif // GUARD_PKBN_BATTLE_STUB_H
+diff --git a/include/pkbn/grid_battle.h b/include/pkbn/grid_battle.h
+index 03207e4..cf4ce1a 100644
+--- a/include/pkbn/grid_battle.h
++++ b/include/pkbn/grid_battle.h
+@@ -5,7 +5,7 @@
+ // Design notes: poc/POC-1..5.md. PC (PORTABLE) builds only.
+ void CB2_PkbnGridBattle(void);
+ 
+-enum { PKBN_GRID_INTRO, PKBN_GRID_CUSTOM, PKBN_GRID_FIGHT, PKBN_GRID_END, PKBN_GRID_PICK, PKBN_GRID_TIMESTOP };
++enum { PKBN_GRID_INTRO, PKBN_GRID_CUSTOM, PKBN_GRID_FIGHT, PKBN_GRID_END, PKBN_GRID_PICK, PKBN_GRID_TIMESTOP, PKBN_GRID_THROW, PKBN_GRID_SENDOUT };
+ 
+ struct PkbnGridDebug
+ {
+@@ -17,6 +17,8 @@ struct PkbnGridDebug
+     u8 nextKind;          // GK_* of the next queued chip
+     bool8 nextPositionFree;
+     bool8 cursorIsWild;
++    u8 itemRow;           // Custom-screen row of the Poké Ball slot
++    bool8 ballUsable;
+     bool8 gaugeFull;
+     u8 handCount, cursor, pickedCount;
+     bool8 cursorPicked;
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index be4523a..6487505 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -53,7 +53,7 @@
+ #define PANEL_EFFECT_FRAMES  900  // TUNE: poison / holy / grass panels fade after this long
+ #define MAX_ATTACKS          10
+ 
+-enum { ST_INTRO, ST_CUSTOM, ST_FIGHT, ST_END, ST_PICK, ST_TIMESTOP };
++enum { ST_INTRO, ST_CUSTOM, ST_FIGHT, ST_END, ST_PICK, ST_TIMESTOP, ST_THROW, ST_SENDOUT };
+ enum { SIDE_PLAYER, SIDE_ENEMY };
+ enum { PICK_WILD, PICK_BATON, PICK_FAINT };
+ enum { TS_SWITCH, TS_ASSIST, TS_BENCH };
+@@ -219,6 +219,17 @@ struct GridBattle
+     u8 paCount;
+     char paPreview[32];
+     u8 tsPA;                   // time-stop bench entry for a Program Advance (index + 1)
++    // trainer battles
++    bool8 trainer;
++    u8 enemySlot;              // gEnemyParty index currently out
++    u8 enemyCount;
++    u8 sentIn;                 // player slots sent in against the current enemy (Cmd_getexp sentInPokes)
++    u32 pendingExp[PKBN_PARTY_MAX]; // EXP earned so far, given level by level after the battle
++    u32 paydayMoney;
++    // catching (Custom screen item slot)
++    u16 ballItem;              // ITEM_*_BALL selected on the Custom screen (0 = none in the bag)
++    u8 throwShakes;            // Cmd_handleballthrow result: 0-3 shakes, 4 = caught (BALL_3_SHAKES_SUCCESS + 1)
++    bool8 caught;
+     char flashText[48];        // "COMBO!" / "PROGRAM ADVANCE!" call-out
+     u16 flashTimer;
+ };
+@@ -274,7 +285,14 @@ void Field_ResetFighterConditions(struct Fighter *f);
+ void Field_PushBack(u8 side, u8 panels);
+ const char *Field_StatName(u8 stat);
+ 
++// grid_catch.c
++u16 Catch_NextBall(u16 from, s8 dir);
++u8 Catch_Throw(u16 ball);
++
+ // grid_draw.c
+ void Draw_Overlay(u16 *fb);
+ 
++// post_battle.c
++void PkbnPostBattle_Start(void);
++
+ #endif // GUARD_PKBN_GRID_INTERNAL_H
+diff --git a/include/pkbn/render.h b/include/pkbn/render.h
+index 4017733..896f084 100644
+--- a/include/pkbn/render.h
++++ b/include/pkbn/render.h
+@@ -15,6 +15,8 @@ s32 Pkbn_DrawText(u16 *fb, s32 x, s32 y, const char *text, u16 color, s32 scale)
+ s32 Pkbn_TextWidth(const char *text, s32 scale);
+ // Converts a Gen 3 string (charmap.txt encoding, EOS-terminated) to uppercase ASCII.
+ void Pkbn_GameStringToAscii(char *dst, const u8 *src, u32 maxLen);
++// Same for dialogue: line breaks and prompts become spaces, control codes are dropped.
++void Pkbn_GameTextToAscii(char *dst, const u8 *src, u32 maxLen);
+ 
+ // 32x32 Pokémon icon (pokemon_icon.c), decoded to BGR555; 0 = transparent.
+ void Pkbn_DecodeMonIcon(u16 *dst32x32, u16 species, u32 personality, u8 frame);
+diff --git a/src/battle_main.c b/src/battle_main.c
+index 3cea395..0bc0730 100644
+--- a/src/battle_main.c
++++ b/src/battle_main.c
+@@ -71,7 +71,7 @@ static void CB2_HandleStartMultiPartnerBattle(void);
+ static void CB2_HandleStartMultiBattle(void);
+ static void CB2_HandleStartBattle(void);
+ static void TryCorrectShedinjaLanguage(struct Pokemon *mon);
+-static u8 CreateNPCTrainerParty(struct Pokemon *party, u16 trainerNum, bool8 firstTrainer);
++u8 CreateNPCTrainerParty(struct Pokemon *party, u16 trainerNum, bool8 firstTrainer); // PKBN: non-static, used by src/pkbn (trainer grid battles)
+ static void BattleMainCB1(void);
+ static void CB2_EndLinkBattle(void);
+ static void EndLinkBattleInSteps(void);
+@@ -1957,7 +1957,7 @@ static void SpriteCB_UnusedBattleInit_Main(struct Sprite *sprite)
+     }
+ }
+ 
+-static u8 CreateNPCTrainerParty(struct Pokemon *party, u16 trainerNum, bool8 firstTrainer)
++u8 CreateNPCTrainerParty(struct Pokemon *party, u16 trainerNum, bool8 firstTrainer)
+ {
+     u32 nameHash = 0;
+     u32 personalityValue;
+diff --git a/src/battle_setup.c b/src/battle_setup.c
+index 5d9894d..881b9e0 100644
+--- a/src/battle_setup.c
++++ b/src/battle_setup.c
+@@ -90,6 +90,7 @@ static void CB2_GiveStarter(void);
+ static void CB2_StartFirstBattle(void);
+ static void CB2_EndFirstBattle(void);
+ static void CB2_EndTrainerBattle(void);
++static void CB2_EndRematchBattle(void);
+ static bool32 IsPlayerDefeated(u32 battleOutcome);
+ static u16 GetRematchTrainerId(u16 trainerId);
+ static void RegisterTrainerInMatchCall(void);
+@@ -372,7 +373,9 @@ static void Task_BattleStart(u8 taskId)
+         {
+             CleanupOverworldWindowsAndTilemaps();
+             // PKBN POC-0: route plain wild battles to our module (research/02, §1)
+-            if (gMain.savedCallback == CB2_EndWildBattle && PkbnBattle_ShouldHandle())
++            // PKBN POC-7: and single trainer battles (CB2_EndTrainerBattle / CB2_EndRematchBattle)
++            if ((gMain.savedCallback == CB2_EndWildBattle || gMain.savedCallback == CB2_EndTrainerBattle
++                 || gMain.savedCallback == CB2_EndRematchBattle) && PkbnBattle_ShouldHandle())
+                 SetMainCallback2(PkbnBattle_GetEntryCallback());
+             else
+                 SetMainCallback2(CB2_InitBattle);
+diff --git a/src/pkbn/battle_stub.c b/src/pkbn/battle_stub.c
+index 0e29acc..905e6b7 100644
+--- a/src/pkbn/battle_stub.c
++++ b/src/pkbn/battle_stub.c
+@@ -16,6 +16,10 @@
+ #include "event_data.h"
+ #include "data.h"
+ #include "util.h"
++#include "battle_main.h"
++#include "battle_setup.h"
++#include "constants/opponents.h"
++#include "constants/trainers.h"
+ #include "pkbn/battle_stub.h"
+ #include "pkbn/grid_battle.h"
+ 
+@@ -52,9 +56,16 @@ static u8 GetMode(void)
+ 
+ bool8 PkbnBattle_ShouldHandle(void)
+ {
+-    // Scope: plain wild battles only (gBattleTypeFlags == 0, set by
+-    // DoStandardWildBattle, battle_setup.c:407). Everything else -> vanilla.
+-    return GetMode() != PKBN_MODE_OFF && gBattleTypeFlags == 0;
++    // Scope: plain wild battles (gBattleTypeFlags == 0, set by DoStandardWildBattle, battle_setup.c:407)
++    // and single trainer battles (exactly BATTLE_TYPE_TRAINER, BattleSetup_StartTrainerBattle :1315)
++    // whose trainer isn't a double-battle trainer (CreateNPCTrainerParty ORs gTrainers[].doubleBattle
++    // into the flags). Secret bases, Frontier, Trainer Hill, doubles, multi, link -> vanilla.
++    if (GetMode() == PKBN_MODE_OFF)
++        return FALSE;
++    if (gBattleTypeFlags == 0)
++        return TRUE;
++    return GetMode() == PKBN_MODE_GRID && gBattleTypeFlags == BATTLE_TYPE_TRAINER
++        && gTrainerBattleOpponent_A != TRAINER_SECRET_BASE && !gTrainers[gTrainerBattleOpponent_A].doubleBattle;
+ }
+ 
+ MainCallback PkbnBattle_GetEntryCallback(void)
+@@ -127,32 +138,40 @@ static void GiveWinRewards(u8 participants)
+ 
+ void PkbnContract_Enter(void)
+ {
+-    u16 species = GetMonData(&gEnemyParty[0], MON_DATA_SPECIES);
++    u16 species;
+ 
+     // Entry side of the contract (battle_main.c:703, :1139)
+     gPreBattleCallback1 = gMain.callback1;
+     gMain.callback1 = NULL;   // stop overworld per-frame logic while "in battle"
+     gMain.inBattle = TRUE;
+ 
+-    // Pokédex "seen" (battle_script_commands.c:4707)
++    // Trainer battles: the enemy party is built when the battle starts (CB2_InitBattleInternal,
++    // battle_main.c:697), not by the overworld.
++    if (gBattleTypeFlags & BATTLE_TYPE_TRAINER)
++        CreateNPCTrainerParty(&gEnemyParty[0], gTrainerBattleOpponent_A, TRUE);
++
++    // Pokédex "seen" for the first opponent (battle_script_commands.c:4707); later ones are
++    // marked when they come out.
++    species = GetMonData(&gEnemyParty[0], MON_DATA_SPECIES);
+     HandleSetPokedexFlag(SpeciesToNationalPokedexNum(species), FLAG_SET_SEEN,
+                          GetMonData(&gEnemyParty[0], MON_DATA_PERSONALITY));
+ 
+-    PKBN_LOG("wild battle: species %u Lv %u (flags 0x%08x)", species,
+-             (unsigned)GetMonData(&gEnemyParty[0], MON_DATA_LEVEL), (unsigned)gBattleTypeFlags);
++    PKBN_LOG("%s battle: species %u Lv %u (flags 0x%08x, trainer %u)", (gBattleTypeFlags & BATTLE_TYPE_TRAINER) ? "trainer" : "wild",
++             species, (unsigned)GetMonData(&gEnemyParty[0], MON_DATA_LEVEL), (unsigned)gBattleTypeFlags,
++             (unsigned)gTrainerBattleOpponent_A);
+ }
+ 
+-void PkbnContract_Exit(u8 outcome, u8 participants)
++void PkbnContract_Exit(u8 outcome)
+ {
+     gBattleOutcome = outcome;
+-    if (outcome == B_OUTCOME_WON)
+-        GiveWinRewards(participants);
+ 
+     // Exit side of the contract (ReturnFromBattleToOverworld, battle_main.c:5228-5259)
++    RandomlyGivePartyPokerus(gPlayerParty);
++    PartySpreadPokerus(gPlayerParty);
+     gSpecialVar_Result = gBattleOutcome;
+     gMain.inBattle = FALSE;
+     gMain.callback1 = gPreBattleCallback1;
+-    gLeveledUpInBattle = 0;   // vanilla clears this via TryEvolvePokemon; evolution not implemented yet
++    gLeveledUpInBattle = 0;   // evolutions already ran in the post-battle flow (src/pkbn/post_battle.c)
+     PKBN_LOG("outcome %u -> returning to overworld", gBattleOutcome);
+     SetMainCallback2(gMain.savedCallback);
+ }
+@@ -165,5 +184,6 @@ void CB2_PkbnBattleStub(void)
+     if (++sFrames < STUB_BATTLE_FRAMES)
+         return;
+     sFrames = 0;
+-    PkbnContract_Exit(B_OUTCOME_WON, 0);
++    GiveWinRewards(0);
++    PkbnContract_Exit(B_OUTCOME_WON);
+ }
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index ff58ca0..f2e50ba 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -21,6 +21,13 @@
+ #include "sound.h"
+ #include "data.h"
+ #include "contest_effect.h"
++#include "pokedex.h"
++#include "event_data.h"
++#include "item.h"
++#include "string_util.h"
++#include "constants/hold_effects.h"
++#include "constants/items.h"
++#include "constants/trainers.h"
+ #include "constants/abilities.h"
+ #include "constants/battle_move_effects.h"
+ #include "constants/moves.h"
+@@ -132,6 +139,7 @@ static void LoadActiveFromParty(u8 slot)
+     p->lastMove = MOVE_NONE;
+     sB.active = slot;
+     sB.party[slot].participated = TRUE;
++    sB.sentIn |= 1 << slot; // Cmd_getexp: everyone sent in against the current opponent shares its EXP
+ }
+ 
+ static void DoSwitch(u8 target, bool8 keepStages)
+@@ -288,6 +296,8 @@ static void LoadPartyMember(u8 slot, struct Pokemon *mon)
+ static void LoadEnemy(struct Pokemon *mon)
+ {
+     struct Fighter *f = &sB.f[SIDE_ENEMY];
++    HandleSetPokedexFlag(SpeciesToNationalPokedexNum(GetMonData(mon, MON_DATA_SPECIES)), FLAG_SET_SEEN,
++                         GetMonData(mon, MON_DATA_PERSONALITY)); // seen when it comes out (battle_script_commands.c:4707)
+     MonToBattleMon(mon, &f->bm);
+     Pkbn_GameStringToAscii(f->name, gSpeciesNames[f->bm.species], sizeof(f->name));
+     Pkbn_DecodeMonIcon(f->icon[0], f->bm.species, f->bm.personality, 0);
+@@ -400,6 +410,12 @@ static void Begin(void)
+                  sB.party[sB.folder.chips[i].owner].name, sB.folder.chips[i].slot);
+     }
+ 
++    sB.trainer = (gBattleTypeFlags & BATTLE_TYPE_TRAINER) != 0;
++    for (i = 0; i < PARTY_SIZE; i++)
++        if (GetMonData(&gEnemyParty[i], MON_DATA_SPECIES) != SPECIES_NONE)
++            sB.enemyCount = i + 1;
++    sB.enemySlot = 0;
++    sB.ballItem = Catch_NextBall(0, 1);
+     LoadActiveFromParty(lead < 0 ? 0 : lead);
+     LoadEnemy(&gEnemyParty[0]);
+     sB.f[SIDE_PLAYER].x = 1;
+@@ -408,7 +424,16 @@ static void Begin(void)
+     sB.f[SIDE_ENEMY].y = 1;
+     sB.aiStepTimer = ENEMY_STEP_MIN;
+     sB.aiAttackTimer = 120;
+-    snprintf(sB.banner, sizeof(sB.banner), "WILD %s APPEARED!", sB.f[SIDE_ENEMY].name);
++    if (sB.trainer)
++    {
++        char cls[16], nm[16];
++        Pkbn_GameStringToAscii(cls, gTrainerClassNames[gTrainers[gTrainerBattleOpponent_A].trainerClass], sizeof(cls));
++        Pkbn_GameStringToAscii(nm, gTrainers[gTrainerBattleOpponent_A].trainerName, sizeof(nm));
++        // sText_Trainer1WantsToBattle (battle_message.c:385)
++        snprintf(sB.banner, sizeof(sB.banner), "%s %s WANTS TO BATTLE!", cls, nm);
++    }
++    else
++        snprintf(sB.banner, sizeof(sB.banner), "WILD %s APPEARED!", sB.f[SIDE_ENEMY].name);
+     sB.state = ST_INTRO;
+     sB.timer = 70;
+     gPkbnFrameOverlay = Overlay;
+@@ -418,7 +443,6 @@ static void Begin(void)
+ static void Finish(void)
+ {
+     s32 i, m;
+-    u8 participants = 0;
+ 
+     SyncActiveToParty();
+     // Write-back required by the contract (research/02 §4): HP, PP and status for every party member.
+@@ -435,14 +459,12 @@ static void Finish(void)
+             u8 pp = sB.party[i].bm.pp[m];
+             SetMonData(&gPlayerParty[i], MON_DATA_PP1 + m, &pp);
+         }
+-        if (sB.party[i].participated && sB.party[i].bm.hp > 0)
+-            participants |= 1 << i;
+     }
+ 
+     gPkbnFrameOverlay = NULL;
+     sActive = FALSE;
+     FreeBattleResources();
+-    PkbnContract_Exit(sB.outcome, participants);
++    PkbnPostBattle_Start(); // messages, catching, EXP, new moves, evolution, then the contract exit
+ }
+ 
+ static u16 EnemyAttackInterval(void)
+@@ -462,8 +484,26 @@ static void EndBattle(u8 outcome, const char *text)
+     sB.state = ST_END;
+     sB.timer = 90;
+     Moves_Clear();
+-    if (outcome == B_OUTCOME_WON)
++    if (outcome == B_OUTCOME_WON && sB.trainer)
++    {
++        // HandleEndTurn_BattleWon (battle_main.c:4960)
++        switch (gTrainers[gTrainerBattleOpponent_A].trainerClass)
++        {
++        case TRAINER_CLASS_ELITE_FOUR: case TRAINER_CLASS_CHAMPION:
++            PlayBGM(MUS_VICTORY_LEAGUE); break;
++        case TRAINER_CLASS_TEAM_AQUA: case TRAINER_CLASS_TEAM_MAGMA: case TRAINER_CLASS_AQUA_ADMIN:
++        case TRAINER_CLASS_AQUA_LEADER: case TRAINER_CLASS_MAGMA_ADMIN: case TRAINER_CLASS_MAGMA_LEADER:
++            PlayBGM(MUS_VICTORY_AQUA_MAGMA); break;
++        case TRAINER_CLASS_LEADER:
++            PlayBGM(MUS_VICTORY_GYM_LEADER); break;
++        default:
++            PlayBGM(MUS_VICTORY_TRAINER); break;
++        }
++    }
++    else if (outcome == B_OUTCOME_WON)
+         PlayBGM(MUS_VICTORY_WILD);
++    else if (outcome == B_OUTCOME_CAUGHT)
++        PlayBGM(MUS_CAUGHT);
+     else if (outcome == B_OUTCOME_LOST)
+         PlaySE(SE_FAINT);
+     else
+@@ -554,7 +594,41 @@ static void FormProgramAdvances(void)
+ static void UpdateCustom(void)
+ {
+     u16 keys = gMain.newKeys;
+-    u8 rows = sB.handCount + 1; // + wildcard slot
++    u8 rows = sB.handCount + 2; // + wildcard slot + item (Poké Ball) slot
++    u8 itemRow = sB.handCount + 1;
++
++    if (sB.cursor == itemRow && (keys & (DPAD_LEFT | DPAD_RIGHT)) && sB.ballItem)
++    {
++        sB.ballItem = Catch_NextBall(sB.ballItem, (keys & DPAD_RIGHT) ? 1 : -1);
++        PlaySE(SE_SELECT);
++    }
++    if (sB.cursor == itemRow && (keys & A_BUTTON))
++    {
++        // Using an item takes the place of the chips this Custom (like choosing BAG in Emerald).
++        if (sB.trainer)
++        {
++            SetMsg("THE TRAINER BLOCKED THE BALL!", 60); // sText_TrainerBlockedBall
++            PlaySE(SE_FAILURE);
++        }
++        else if (sB.ballItem == 0 || sB.queueCount > 0)
++            PlaySE(SE_FAILURE);
++        else
++        {
++            s32 i;
++            RemoveBagItem(sB.ballItem, 1);
++            sB.throwShakes = Catch_Throw(sB.ballItem);
++            PKBN_LOG("threw ball %u: %u shakes%s", sB.ballItem, sB.throwShakes > 3 ? 3 : sB.throwShakes,
++                     sB.throwShakes == 4 ? " - CAUGHT" : "");
++            for (i = 0; i < HAND_SIZE; i++)
++                sB.picked[i] = FALSE;
++            sB.wildPicked = FALSE;
++            sB.gauge = 0;
++            sB.state = ST_THROW;
++            sB.timer = 0;
++            PlaySE(SE_BALL_THROW);
++        }
++        return;
++    }
+ 
+     if (keys & DPAD_UP)
+     {
+@@ -625,6 +699,8 @@ static bool8 TryTeleportEscape(u8 side, u16 move)
+ {
+     if (gBattleMoves[move].effect != EFFECT_TELEPORT)
+         return FALSE;
++    if (sB.trainer)
++        return FALSE; // Gen 3: Teleport fails in trainer battles (the grid version just blinks)
+     if (side == SIDE_PLAYER)
+     {
+         if (sB.f[SIDE_PLAYER].noEscape)
+@@ -804,7 +880,9 @@ static void UpdatePlayer(void)
+ 
+     if (keys & SELECT_BUTTON)
+     {
+-        if (p->noEscape)
++        if (sB.trainer)
++            SetMsg("NO RUNNING FROM A TRAINER BATTLE!", 50);
++        else if (p->noEscape)
+             SetMsg("CAN'T ESCAPE!", 40);
+         else
+         {
+@@ -1020,6 +1098,119 @@ static void Tick(struct Fighter *f)
+     if (f->charging) f->charging--;
+ }
+ 
++static u8 HoldEffectOf(u8 slot)
++{
++    u16 item = GetMonData(&gPlayerParty[slot], MON_DATA_HELD_ITEM);
++    if (item == ITEM_ENIGMA_BERRY)
++        return gSaveBlock1Ptr->enigmaBerry.holdEffect;
++    return GetItemHoldEffect(item);
++}
++
++// Cmd_getexp (battle_script_commands.c:3255-3420), run when an opponent faints. The EXP is banked and
++// given level by level after the battle (src/pkbn/post_battle.c), where the level-up screens live.
++static void AwardExpForFaintedEnemy(void)
++{
++    const struct BattlePokemon *e = &sB.f[SIDE_ENEMY].bm;
++    u32 calculatedExp = gSpeciesInfo[e->species].expYield * e->level / 7;
++    u32 exp, shareExp = 0;
++    s32 i, viaSentIn = 0, viaExpShare = 0;
++
++    for (i = 0; i < sB.partyCount; i++)
++    {
++        if (!PartyAlive(i))
++            continue;
++        if (sB.sentIn & (1 << i))
++            viaSentIn++;
++        if (HoldEffectOf(i) == HOLD_EFFECT_EXP_SHARE)
++            viaExpShare++;
++    }
++    if (viaExpShare)
++    {
++        exp = viaSentIn ? calculatedExp / 2 / viaSentIn : 0;
++        if (exp == 0) exp = 1;
++        shareExp = calculatedExp / 2 / viaExpShare;
++        if (shareExp == 0) shareExp = 1;
++    }
++    else
++    {
++        exp = viaSentIn ? calculatedExp / viaSentIn : 0;
++        if (exp == 0) exp = 1;
++    }
++    for (i = 0; i < sB.partyCount; i++)
++    {
++        u8 hold = HoldEffectOf(i);
++        u32 gain;
++        if (hold != HOLD_EFFECT_EXP_SHARE && !(sB.sentIn & (1 << i)))
++            continue;
++        if (GetMonData(&gPlayerParty[i], MON_DATA_LEVEL) == MAX_LEVEL || !PartyAlive(i))
++            continue;
++        gain = (sB.sentIn & (1 << i)) ? exp : 0;
++        if (hold == HOLD_EFFECT_EXP_SHARE)
++            gain += shareExp;
++        if (hold == HOLD_EFFECT_LUCKY_EGG)
++            gain = gain * 150 / 100;
++        if (sB.trainer)
++            gain = gain * 150 / 100;
++        if (IsTradedMon(&gPlayerParty[i]))
++            gain = gain * 150 / 100;
++        sB.pendingExp[i] += gain;
++        MonGainEVs(&gPlayerParty[i], e->species);
++        PKBN_LOG("slot %d banks %u EXP for %s (pending %u)", (int)i, (unsigned)gain, sB.f[SIDE_ENEMY].name,
++                 (unsigned)sB.pendingExp[i]);
++    }
++}
++
++static s8 NextEnemySlot(void)
++{
++    s32 i;
++    for (i = sB.enemySlot + 1; i < sB.enemyCount; i++)
++        if (GetMonData(&gEnemyParty[i], MON_DATA_SPECIES) != SPECIES_NONE && GetMonData(&gEnemyParty[i], MON_DATA_HP) > 0)
++            return i;
++    return -1;
++}
++
++// Ball throw (time stops, as for any Custom choice): flight, the Pokémon is drawn in, then
++// Emerald's 0-3 shakes. TUNE timings.
++#define THROW_FLIGHT 30
++#define THROW_ABSORB 12
++#define THROW_SHAKE  32
++static void UpdateThrow(void)
++{
++    u8 shakes = sB.throwShakes > 3 ? 3 : sB.throwShakes;
++    u16 end = THROW_FLIGHT + THROW_ABSORB + THROW_SHAKE * shakes + 24;
++    sB.timer++;
++    if (sB.timer > THROW_FLIGHT + THROW_ABSORB && ((sB.timer - THROW_FLIGHT - THROW_ABSORB) % THROW_SHAKE) == 1
++     && (sB.timer - THROW_FLIGHT - THROW_ABSORB) / THROW_SHAKE < shakes)
++        PlaySE(SE_BALL);
++    if (sB.timer == THROW_FLIGHT)
++        PlaySE(SE_BALL_OPEN);
++    if (sB.timer < end)
++        return;
++    if (sB.throwShakes == 4)
++    {
++        char text[40];
++        struct Pokemon *mon = &gEnemyParty[sB.enemySlot];
++        u32 hp = sB.f[SIDE_ENEMY].bm.hp, status = sB.f[SIDE_ENEMY].bm.status1;
++        // Cmd_handleballthrow: the ball is recorded; the caught Pokémon keeps its battle HP and status
++        SetMonData(mon, MON_DATA_POKEBALL, &sB.ballItem);
++        SetMonData(mon, MON_DATA_HP, &hp);
++        SetMonData(mon, MON_DATA_STATUS, &status);
++        sB.caught = TRUE;
++        snprintf(text, sizeof(text), "GOTCHA! %s WAS CAUGHT!", sB.f[SIDE_ENEMY].name); // sText_GotchaPkmnCaughtPlayer
++        EndBattle(B_OUTCOME_CAUGHT, text);
++        return;
++    }
++    // sText_PkmnBrokeFree / ItAppearedCaught / AarghAlmostHadIt / ShootSoClose (battle_message.c:468-471)
++    {
++        static const char *const sBrokeFree[] = {
++            "OH, NO! THE POKEMON BROKE FREE!", "AWW! IT APPEARED TO BE CAUGHT!",
++            "AARGH! ALMOST HAD IT!", "SHOOT! IT WAS SO CLOSE, TOO!" };
++        Flash(sBrokeFree[shakes], 90);
++    }
++    sB.ballItem = Catch_NextBall(sB.ballItem ? sB.ballItem - 1 : 0, 1); // keep the same ball if any are left
++    sB.state = ST_FIGHT;
++}
++
+ static void CheckFaints(void)
+ {
+     if (sB.state != ST_FIGHT)
+@@ -1027,7 +1218,33 @@ static void CheckFaints(void)
+     if (sB.f[SIDE_ENEMY].bm.hp == 0)
+     {
+         char text[40];
+-        snprintf(text, sizeof(text), "WILD %s FAINTED!", sB.f[SIDE_ENEMY].name);
++        s8 next;
++        u32 zero = 0;
++        SetMonData(&gEnemyParty[sB.enemySlot], MON_DATA_HP, &zero);
++        AwardExpForFaintedEnemy();
++        next = sB.trainer ? NextEnemySlot() : -1;
++        if (next >= 0)
++        {
++            // Gen 3 trainers send out their next Pokémon (the party order here; Emerald's AI may
++            // pick a better match, GetMostSuitableMonToSwitchInto - not modelled yet).
++            char cls[16], nm[16], mon[16];
++            Pkbn_GameStringToAscii(cls, gTrainerClassNames[gTrainers[gTrainerBattleOpponent_A].trainerClass], sizeof(cls));
++            Pkbn_GameStringToAscii(nm, gTrainers[gTrainerBattleOpponent_A].trainerName, sizeof(nm));
++            Pkbn_GameStringToAscii(mon, gSpeciesNames[GetMonData(&gEnemyParty[next], MON_DATA_SPECIES)], sizeof(mon));
++            snprintf(sB.banner, sizeof(sB.banner), "%s SENT OUT %s!", nm, mon);
++            (void)cls;
++            sB.enemySlot = next;
++            sB.state = ST_SENDOUT;
++            sB.timer = 70;
++            Moves_Clear();
++            PlaySE(SE_FAINT);
++            PKBN_LOG("trainer sends out slot %d", (int)next);
++            return;
++        }
++        if (sB.trainer)
++            snprintf(text, sizeof(text), "FOE %s FAINTED!", sB.f[SIDE_ENEMY].name);
++        else
++            snprintf(text, sizeof(text), "WILD %s FAINTED!", sB.f[SIDE_ENEMY].name);
+         EndBattle(B_OUTCOME_WON, text);
+     }
+     else if (sB.f[SIDE_PLAYER].bm.hp == 0)
+@@ -1126,6 +1343,22 @@ void CB2_PkbnGridBattle(void)
+             CheckFaints();
+         }
+         break;
++    case ST_THROW:
++        UpdateThrow();
++        break;
++    case ST_SENDOUT:
++        if (--sB.timer == 0)
++        {
++            LoadEnemy(&gEnemyParty[sB.enemySlot]);
++            sB.f[SIDE_ENEMY].x = 4;
++            sB.f[SIDE_ENEMY].y = 1;
++            if (!Field_CanStand(SIDE_ENEMY, 4, 1))
++                sB.f[SIDE_ENEMY].x = 5;
++            sB.sentIn = 1 << sB.active; // a new opponent: EXP goes to whoever faces it
++            sB.aiAttackTimer = 90;
++            sB.state = ST_FIGHT;
++        }
++        break;
+     case ST_END:
+         if (--sB.timer == 0)
+             Finish();
+@@ -1173,6 +1406,8 @@ void PkbnGrid_GetDebug(struct PkbnGridDebug *d)
+             if (PkbnGrid_HandSelectable(i))
+                 d->anySelectable = TRUE;
+     d->cursorIsWild = sB.cursor == sB.handCount;
++    d->itemRow = sB.handCount + 1;
++    d->ballUsable = !sB.trainer && sB.ballItem && sB.queueCount == 0;
+     d->pickedCount = 0;
+     for (i = 0; i < sB.handCount; i++)
+         d->pickedCount += sB.picked[i];
+diff --git a/src/pkbn/grid_catch.c b/src/pkbn/grid_catch.c
+new file mode 100644
+index 0000000..e408431
+--- /dev/null
++++ b/src/pkbn/grid_catch.c
+@@ -0,0 +1,107 @@
++// Grid battle: throwing a Poké Ball from the Custom screen.
++//
++// The odds are Emerald's own: Cmd_handleballthrow (battle_script_commands.c:9925) with
++// sBallCatchBonuses (:841). Lower HP, sleep/freeze (x2) and poison/burn/paralysis (x1.5) all
++// help, exactly as in Emerald. Shakes: 4 checks of Random() < 1048560 / Sqrt(Sqrt(16711680 / odds)).
++#include "pkbn/grid_internal.h"
++#include "event_data.h"
++#include "item.h"
++#include "overworld.h"
++#include "pokedex.h"
++#include "random.h"
++#include "constants/items.h"
++#include "constants/maps.h"
++#include "constants/map_types.h"
++
++#ifdef PORTABLE
++
++// sBallCatchBonuses (battle_script_commands.c:841), indexed from ITEM_ULTRA_BALL
++static const u8 sBallCatchBonuses[] =
++{
++    [ITEM_ULTRA_BALL - ITEM_ULTRA_BALL]  = 20,
++    [ITEM_GREAT_BALL - ITEM_ULTRA_BALL]  = 15,
++    [ITEM_POKE_BALL - ITEM_ULTRA_BALL]   = 10,
++    [ITEM_SAFARI_BALL - ITEM_ULTRA_BALL] = 15
++};
++
++// Next ball in the bag after `from` (wrapping), or 0 if there are none. dir = +1 / -1.
++u16 Catch_NextBall(u16 from, s8 dir)
++{
++    s32 i, item = from ? from : (dir > 0 ? LAST_BALL : FIRST_BALL);
++    for (i = 0; i <= LAST_BALL - FIRST_BALL; i++)
++    {
++        item += dir;
++        if (item > LAST_BALL) item = FIRST_BALL;
++        if (item < FIRST_BALL) item = LAST_BALL;
++        if (item != ITEM_SAFARI_BALL && CheckBagHasItem(item, 1))
++            return item;
++    }
++    return (from && from != ITEM_SAFARI_BALL && CheckBagHasItem(from, 1)) ? from : 0;
++}
++
++// Returns the number of shakes (0-3), or 4 when the Pokémon is caught (BALL_3_SHAKES_SUCCESS).
++u8 Catch_Throw(u16 ball)
++{
++    const struct Fighter *t = &sB.f[SIDE_ENEMY];
++    u8 ballMultiplier = 10;
++    u8 catchRate = gSpeciesInfo[t->bm.species].catchRate;
++    u32 odds;
++    u8 shakes;
++
++    if (ball == ITEM_MASTER_BALL)
++        return 4;
++    if (ball > ITEM_SAFARI_BALL)
++    {
++        switch (ball)
++        {
++        case ITEM_NET_BALL:
++            ballMultiplier = (t->bm.types[0] == TYPE_WATER || t->bm.types[1] == TYPE_WATER
++                           || t->bm.types[0] == TYPE_BUG || t->bm.types[1] == TYPE_BUG) ? 30 : 10;
++            break;
++        case ITEM_DIVE_BALL:
++            ballMultiplier = (GetCurrentMapType() == MAP_TYPE_UNDERWATER) ? 35 : 10;
++            break;
++        case ITEM_NEST_BALL:
++            if (t->bm.level < 40)
++            {
++                ballMultiplier = 40 - t->bm.level;
++                if (ballMultiplier <= 9)
++                    ballMultiplier = 10;
++            }
++            break;
++        case ITEM_REPEAT_BALL:
++            ballMultiplier = GetSetPokedexFlag(SpeciesToNationalPokedexNum(t->bm.species), FLAG_GET_CAUGHT) ? 30 : 10;
++            break;
++        case ITEM_TIMER_BALL:
++            // battleTurnCounter -> our turn clock (one Custom gauge per turn)
++            ballMultiplier = sB.turn + 10 > 40 ? 40 : sB.turn + 10;
++            break;
++        default: // Luxury, Premier
++            ballMultiplier = 10;
++            break;
++        }
++    }
++    else
++    {
++        ballMultiplier = sBallCatchBonuses[ball - ITEM_ULTRA_BALL];
++    }
++
++    odds = (catchRate * ballMultiplier / 10) * (t->bm.maxHP * 3 - t->bm.hp * 2) / (3 * t->bm.maxHP);
++    if (t->bm.status1 & (STATUS1_SLEEP | STATUS1_FREEZE))
++        odds *= 2;
++    if (t->bm.status1 & (STATUS1_POISON | STATUS1_BURN | STATUS1_PARALYSIS | STATUS1_TOXIC_POISON))
++        odds = (odds * 15) / 10;
++
++    PKBN_LOG("ball %u: catch rate %u x%u/10, HP %u/%u, status 0x%x -> odds %u", ball, catchRate, ballMultiplier,
++             t->bm.hp, t->bm.maxHP, (unsigned)t->bm.status1, (unsigned)odds);
++    if (odds > 254)
++        return 4;
++    odds = Sqrt(Sqrt(odds ? 16711680 / odds : 16711680)); // SAFE_DIV as vanilla
++    odds = odds ? 1048560 / odds : 0;
++    // for (shakes = 0; shakes < BALL_3_SHAKES_SUCCESS && Random() < odds; shakes++);  (BALL_3_SHAKES_SUCCESS = 4)
++    for (shakes = 0; shakes < 4 && Random() < odds; shakes++)
++        ;
++    return shakes; // 4 = caught
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index a560ac0..ae7a746 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -1,6 +1,7 @@
+ // Grid battle: drawing (overlay on the PC port's 240x160 frame). See include/pkbn/grid_internal.h.
+ #include "pkbn/grid_internal.h"
+ #include "data.h"
++#include "item.h"
+ #include "constants/moves.h"
+ #include "pkbn/render.h"
+ 
+@@ -188,8 +189,10 @@ static void DrawFighter(u16 *fb, u8 side)
+     u16 tint = f->hurtFlash ? COL_TEXT : (f->statusFlash && (sB.frame & 2)) ? COL_STATUS : 0;
+ 
+     PanelOrigin(f->x, f->y, &x, &y);
+-    if (f->bm.hp == 0 && (sB.state == ST_END || sB.state == ST_PICK))
++    if (f->bm.hp == 0 && (sB.state == ST_END || sB.state == ST_PICK || sB.state == ST_SENDOUT))
+         return; // fainted
++    if (side == SIDE_ENEMY && ((sB.state == ST_THROW && sB.timer >= 30) || (sB.state == ST_END && sB.caught)))
++        return; // inside the ball
+     if (f->invuln && (f->invulnKind == INVULN_UNDERGROUND || f->invulnKind == INVULN_UNDERWATER))
+     {
+         // underground: just a mound
+@@ -367,7 +370,7 @@ static void DrawCustomScreen(u16 *fb)
+         Pkbn_DrawText(fb, 10, 60, "NO CHIPS LEFT - BUSTER ONLY", COL_TEXT, 1);
+     for (i = 0; i <= sB.handCount; i++)
+     {
+-        s32 y = 60 + i * 9;
++        s32 y = 60 + i * 8;
+         bool8 ok = PkbnGrid_HandSelectable(i);
+         bool8 picked = (i < sB.handCount) ? sB.picked[i] : sB.wildPicked;
+         u16 color = picked ? COL_GAUGE : ok ? COL_TEXT : COL_DIM;
+@@ -405,11 +408,30 @@ static void DrawCustomScreen(u16 *fb)
+     if (sB.paPreview[0] && (sB.frame & 8))
+     {
+         snprintf(line, sizeof(line), "PROGRAM ADVANCE: %s!", sB.paPreview);
+-        Pkbn_DrawText(fb, 10, 110, line, COL_PA, 1);
++        Pkbn_DrawText(fb, 10, 114, line, COL_PA, 1);
+     }
+-    Pkbn_DrawText(fb, 10, 118, "A:ADD  B:UNDO  SAME LETTER OR SAME MOVE", COL_DIM, 1);
+-    Pkbn_DrawText(fb, 10, 126, "GREEN = BENCHED, SWITCHES IN TO USE IT", COL_HP, 1);
+-    Pkbn_DrawText(fb, 10, 134, "START:FIGHT", COL_GAUGE_FULL, 1);
++    {
++        // Item slot (Poké Balls): used instead of chips, like choosing BAG in Emerald.
++        s32 y = 60 + (sB.handCount + 1) * 8;
++        bool8 usable = !sB.trainer && sB.ballItem && sB.queueCount == 0;
++        if (sB.cursor == sB.handCount + 1)
++            Pkbn_DrawText(fb, 8, y, ">", COL_GAUGE_FULL, 1);
++        if (sB.trainer)
++            snprintf(line, sizeof(line), "BALL: CAN'T CATCH A TRAINER'S POKEMON");
++        else if (sB.ballItem == 0)
++            snprintf(line, sizeof(line), "BALL: NONE IN THE BAG");
++        else
++        {
++            char nm[16];
++            Pkbn_GameStringToAscii(nm, GetItemName(sB.ballItem), sizeof(nm));
++            snprintf(line, sizeof(line), "BALL: %s X%u   L/R:CHANGE%s", nm, CountTotalItemQuantityInBag(sB.ballItem),
++                     sB.queueCount ? "  (NO CHIPS)" : "");
++        }
++        Pkbn_DrawText(fb, 14, y, line, usable ? COL_PA : COL_DIM, 1);
++    }
++    Pkbn_DrawText(fb, 10, 121, "A:ADD  B:UNDO  SAME LETTER OR SAME MOVE", COL_DIM, 1);
++    Pkbn_DrawText(fb, 10, 128, "GREEN = BENCHED, SWITCHES IN TO USE IT", COL_HP, 1);
++    Pkbn_DrawText(fb, 10, 135, "START:FIGHT", COL_GAUGE_FULL, 1);
+ }
+ 
+ static void DrawPicker(u16 *fb)
+@@ -473,6 +495,27 @@ void Draw_Overlay(u16 *fb)
+     DrawFighter(fb, SIDE_PLAYER);
+     DrawFighter(fb, SIDE_ENEMY);
+     DrawAttacksOverlay(fb);
++    if (sB.state == ST_THROW || (sB.state == ST_END && sB.caught))
++    {
++        s32 x0, y0, x1, y1, bx, by, t = (sB.state == ST_THROW) ? sB.timer : 999;
++        PanelOrigin(sB.f[SIDE_PLAYER].x, sB.f[SIDE_PLAYER].y, &x0, &y0);
++        PanelOrigin(sB.f[SIDE_ENEMY].x, sB.f[SIDE_ENEMY].y, &x1, &y1);
++        if (t < 30)
++        {
++            bx = x0 + (x1 - x0) * t / 30 + PANEL_W / 2 - 3;
++            by = y0 + (y1 - y0) * t / 30 + PANEL_H / 2 - 3 - 4 * 30 * t * (30 - t) / 900;
++        }
++        else
++        {
++            s32 k = (t - 42) % 32;
++            bx = x1 + PANEL_W / 2 - 3 + ((t >= 42 && k < 16) ? ((k / 4) & 1 ? 2 : -2) : 0); // wobble
++            by = y1 + PANEL_H - 9;
++        }
++        Pkbn_FillRect(fb, bx, by, 7, 3, PKBN_RGB(31, 4, 4));
++        Pkbn_FillRect(fb, bx, by + 3, 7, 1, COL_BOMB);
++        Pkbn_FillRect(fb, bx, by + 4, 7, 3, COL_TEXT);
++        Pkbn_FrameRect(fb, bx - 1, by - 1, 9, 9, COL_BOMB);
++    }
+     DrawBottomHud(fb);
+ 
+     if (sB.state == ST_TIMESTOP)
+@@ -492,7 +535,7 @@ void Draw_Overlay(u16 *fb)
+         Pkbn_FillRect(fb, (DISPLAY_WIDTH - bw) / 2 - 3, 38, bw + 6, 9, COL_BOX);
+         Pkbn_DrawText(fb, (DISPLAY_WIDTH - bw) / 2, 40, sB.flashText, (sB.frame & 4) ? COL_PA : COL_TEXT, 1);
+     }
+-    if (sB.state == ST_INTRO || sB.state == ST_END)
++    if (sB.state == ST_INTRO || sB.state == ST_END || sB.state == ST_SENDOUT)
+     {
+         bw = Pkbn_TextWidth(sB.banner, 2);
+         Pkbn_FillRect(fb, 0, 42, DISPLAY_WIDTH, 18, COL_BOX);
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 04acf77..54a5f55 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -629,6 +629,14 @@ static void SecondaryEffect(struct Attack *a, u8 defSide)
+                 Field_ApplyStatStage(atkSide, s, 1, FALSE);
+         }
+         break;
++    case EFFECT_PAY_DAY:
++        // MOVE_EFFECT_PAYDAY: coins worth 5 x the user's level, picked up after a win (player side only)
++        if (atkSide == SIDE_PLAYER)
++        {
++            sB.paydayMoney += a->user.level * 5;
++            SetMsg("COINS SCATTERED EVERYWHERE!", 50);
++        }
++        break;
+     case EFFECT_SECRET_POWER: // Cmd_getsecretpowereffect (:9639)
+         if (roll && onTarget)
+         {
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+new file mode 100644
+index 0000000..4bf2c67
+--- /dev/null
++++ b/src/pkbn/post_battle.c
+@@ -0,0 +1,612 @@
++// After a grid battle: the parts of Emerald's battle end that need screens.
++//
++// Order follows Emerald's battle scripts and battle_main.c:
++//  1. Outcome text: trainer win (BattleScript_LocalTrainerBattleWon: "defeated", the trainer's lose text,
++//     getmoneyreward), Pay Day money, white-out (BattleScript_LocalBattleLost), or a catch
++//     (BattleScript_SuccessBallThrow: Pokédex flags, nickname via DoNamingScreen, givecaughtmon).
++//  2. EXP, one level at a time (Cmd_getexp + the controller's level-up), with Emerald's own move
++//     learning: MonTryLearningNewMove (pokemon.c:3014) and the delete-a-move flow of
++//     Cmd_yesnoboxlearnmove (battle_script_commands.c:5415) using the real summary screen.
++//  3. Evolutions after a win (TryEvolvePokemon, battle_main.c:5191 -> EvolutionScene).
++//  4. The contract exit (PkbnContract_Exit).
++// The screen is our overlay: a text box with A/B prompts. PKBN_SELFTEST auto-answers (A for text, B for prompts).
++#ifdef PORTABLE
++#include <stdarg.h>
++#endif
++#include "pkbn/grid_internal.h"
++#include "battle_main.h"
++#include "battle_setup.h"
++#include "constants/flags.h"
++#include "constants/characters.h"
++#include "constants/game_stat.h"
++#include "data.h"
++#include "event_data.h"
++#include "evolution_scene.h"
++#include "item.h"
++#include "main.h"
++#include "money.h"
++#include "naming_screen.h"
++#include "overworld.h"
++#include "pokedex.h"
++#include "pokemon_storage_system.h"
++#include "pokemon_summary_screen.h"
++#include "sound.h"
++#include "string_util.h"
++#include "window.h"
++#include "constants/hold_effects.h"
++#include "constants/songs.h"
++#include "constants/trainers.h"
++#include "pkbn/battle_stub.h"
++#include "pkbn/render.h"
++
++#ifdef PORTABLE
++
++enum
++{
++    PB_START,
++    PB_TEXT,          // show sLines, wait for A
++    PB_NICK_ASK,      // "Give a nickname...?" A/B
++    PB_NICK_RETURN,   // back from the naming screen
++    PB_GIVE_CAUGHT,
++    PB_EXP_NEXT,      // find the next party slot with banked EXP
++    PB_LEVEL_STEP,    // one level
++    PB_LEARN_FIRST,
++    PB_LEARN_NEXT,
++    PB_DELETE_ASK,    // "Delete a move to make room for X?" A/B
++    PB_STOP_ASK,      // "Stop learning X?" A/B
++    PB_SUMMARY_RETURN,
++    PB_EVO_NEXT,
++    PB_EXIT,
++};
++
++struct PostBattle
++{
++    u8 step;
++    u8 next;                 // step after the current text
++    char lines[4][64];
++    u8 lineCount;
++    bool8 prompt;            // A=YES / B=NO
++    u16 waitFrames;
++    u8 slot;                 // party slot being processed
++    u32 targetExp;
++    u16 move;                // move being learned
++    u8 evoBits;
++    u8 nick[POKEMON_NAME_LENGTH + 1];
++    bool8 autopilot;
++};
++
++static struct PostBattle sPB;
++
++static void CB2_PkbnPostBattle(void);
++
++// ---- text ----------------------------------------------------------------------------------------
++
++static void Say(u8 next, const char *fmt, ...)
++{
++    char buf[256];
++    va_list ap;
++    u32 len, start = 0;
++    va_start(ap, fmt);
++    vsnprintf(buf, sizeof(buf), fmt, ap);
++    va_end(ap);
++    // word-wrap to 56 columns, 4 lines max
++    sPB.lineCount = 0;
++    len = strlen(buf);
++    while (start < len && sPB.lineCount < 4)
++    {
++        u32 end = start + 56;
++        if (end >= len)
++            end = len;
++        else
++        {
++            u32 b = end;
++            while (b > start && buf[b] != ' ')
++                b--;
++            if (b > start)
++                end = b;
++        }
++        memcpy(sPB.lines[sPB.lineCount], buf + start, end - start);
++        sPB.lines[sPB.lineCount][end - start] = '\0';
++        sPB.lineCount++;
++        start = end;
++        while (buf[start] == ' ')
++            start++;
++    }
++    sPB.prompt = FALSE;
++    sPB.next = next;
++    sPB.step = PB_TEXT;
++    sPB.waitFrames = 0;
++    printf("[pkbn-post] %s\n", buf);
++    fflush(stdout);
++}
++
++static void Ask(u8 step, const char *fmt, ...)
++{
++    char buf[256];
++    va_list ap;
++    va_start(ap, fmt);
++    vsnprintf(buf, sizeof(buf), fmt, ap);
++    va_end(ap);
++    Say(0, "%s", buf);
++    sPB.prompt = TRUE;
++    sPB.step = step;
++}
++
++static void MonName(char *dst, u32 size, u8 slot)
++{
++    u8 nick[POKEMON_NAME_LENGTH + 2];
++    GetMonData(&gPlayerParty[slot], MON_DATA_NICKNAME, nick);
++    nick[POKEMON_NAME_LENGTH] = EOS;
++    Pkbn_GameStringToAscii(dst, nick, size);
++}
++
++static void MoveName(char *dst, u32 size, u16 move)
++{
++    Pkbn_GameStringToAscii(dst, gMoveNames[move], size);
++}
++
++static void PlayerName(char *dst, u32 size)
++{
++    Pkbn_GameStringToAscii(dst, gSaveBlock2Ptr->playerName, size);
++}
++
++// ---- overlay ---------------------------------------------------------------------------------------
++
++#define COL_BG   PKBN_RGB(2, 3, 6)
++#define COL_BOX  PKBN_RGB(4, 5, 10)
++#define COL_EDGE PKBN_RGB(28, 28, 28)
++#define COL_TEXT PKBN_RGB(31, 31, 31)
++#define COL_HINT PKBN_RGB(31, 26, 4)
++
++static void Overlay(u16 *fb)
++{
++    s32 i;
++    Pkbn_FillRect(fb, 0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, COL_BG);
++    // party strip: whoever the current step is about
++    if (sPB.slot < PARTY_SIZE && GetMonData(&gPlayerParty[sPB.slot], MON_DATA_SPECIES) != SPECIES_NONE)
++    {
++        static u16 sIcon[32 * 32];
++        static u16 sIconSpecies;
++        u16 sp = GetMonData(&gPlayerParty[sPB.slot], MON_DATA_SPECIES);
++        char line[40], name[16];
++        if (sp != sIconSpecies)
++        {
++            Pkbn_DecodeMonIcon(sIcon, sp, GetMonData(&gPlayerParty[sPB.slot], MON_DATA_PERSONALITY), 0);
++            sIconSpecies = sp;
++        }
++        if (sPB.step >= PB_EXP_NEXT && sPB.step <= PB_SUMMARY_RETURN)
++        {
++            Pkbn_BlitIcon(fb, sIcon, 104, 30, FALSE, 0);
++            MonName(name, sizeof(name), sPB.slot);
++            snprintf(line, sizeof(line), "%s  LV. %u", name, (unsigned)GetMonData(&gPlayerParty[sPB.slot], MON_DATA_LEVEL));
++            Pkbn_DrawText(fb, (DISPLAY_WIDTH - Pkbn_TextWidth(line, 1)) / 2, 66, line, COL_TEXT, 1);
++        }
++    }
++    Pkbn_FillRect(fb, 4, 100, 232, 52, COL_BOX);
++    Pkbn_FrameRect(fb, 4, 100, 232, 52, COL_EDGE);
++    for (i = 0; i < sPB.lineCount; i++)
++        Pkbn_DrawText(fb, 10, 106 + i * 9, sPB.lines[i], COL_TEXT, 1);
++    if (sPB.prompt)
++        Pkbn_DrawText(fb, 150, 143, "A:YES  B:NO", COL_HINT, 1);
++    else if ((gMain.vblankCounter1 / 16) & 1)
++        Pkbn_DrawText(fb, 226, 143, ">", COL_HINT, 1);
++}
++
++static void ShowOverlay(void)
++{
++    gPkbnFrameOverlay = Overlay;
++}
++
++static void HideOverlay(void)
++{
++    gPkbnFrameOverlay = NULL;
++}
++
++// ---- steps -----------------------------------------------------------------------------------------
++
++static u8 TrainerLoseText(char *dst, u32 size)
++{
++    Pkbn_GameTextToAscii(dst, GetTrainerALoseText(), size);
++    return dst[0] != '\0';
++}
++
++// GetTrainerMoneyToGive (battle_script_commands.c:5598), single trainer.
++static u32 TrainerMoney(void)
++{
++    const struct Trainer *t = &gTrainers[gTrainerBattleOpponent_A];
++    u32 lastMonLevel = 0, i, multiplier = 1;
++    switch (t->partyFlags)
++    {
++    case 0: lastMonLevel = t->party.NoItemDefaultMoves[t->partySize - 1].lvl; break;
++    case F_TRAINER_PARTY_CUSTOM_MOVESET: lastMonLevel = t->party.NoItemCustomMoves[t->partySize - 1].lvl; break;
++    case F_TRAINER_PARTY_HELD_ITEM: lastMonLevel = t->party.ItemDefaultMoves[t->partySize - 1].lvl; break;
++    default: lastMonLevel = t->party.ItemCustomMoves[t->partySize - 1].lvl; break;
++    }
++    for (i = 0; gTrainerMoneyTable[i].classId != 0xFF; i++)
++        if (gTrainerMoneyTable[i].classId == t->trainerClass)
++            break;
++    // gBattleStruct->moneyMultiplier: 2 if an Amulet Coin holder was sent in (battle_util.c:3310)
++    for (i = 0; i < sB.partyCount; i++)
++        if (sB.party[i].participated && GetItemHoldEffect(GetMonData(&gPlayerParty[i], MON_DATA_HELD_ITEM)) == HOLD_EFFECT_DOUBLE_PRIZE)
++            multiplier = 2;
++    return 4 * lastMonLevel * multiplier * gTrainerMoneyTable[i].value;
++}
++
++static void StepStart(void)
++{
++    char player[16];
++    PlayerName(player, sizeof(player));
++    sPB.slot = 0xFF;
++
++    switch (sB.outcome)
++    {
++    case B_OUTCOME_WON:
++        if (sB.trainer)
++        {
++            static u8 sPart;
++            char cls[16], nm[16], text[200];
++            u32 money;
++            Pkbn_GameStringToAscii(cls, gTrainerClassNames[gTrainers[gTrainerBattleOpponent_A].trainerClass], sizeof(cls));
++            Pkbn_GameStringToAscii(nm, gTrainers[gTrainerBattleOpponent_A].trainerName, sizeof(nm));
++            switch (sPart++)
++            {
++            case 0:
++                Say(PB_START, "%s DEFEATED %s %s!", player, cls, nm); // sText_PlayerDefeatedLinkTrainerTrainer1
++                return;
++            case 1:
++                if (TrainerLoseText(text, sizeof(text)))
++                {
++                    Say(PB_START, "%s", text);
++                    return;
++                }
++                // fall through
++            case 2:
++                sPart = 3;
++                money = TrainerMoney();
++                AddMoney(&gSaveBlock1Ptr->money, money); // Cmd_getmoneyreward
++                Say(PB_START, "%s GOT $%u FOR WINNING!", player, (unsigned)money);
++                return;
++            }
++            sPart = 0;
++        }
++        if (sB.paydayMoney)
++        {
++            // Cmd_givepaydaymoney: gPaydayMoney x moneyMultiplier
++            u32 m = sB.paydayMoney;
++            sB.paydayMoney = 0;
++            AddMoney(&gSaveBlock1Ptr->money, m);
++            Say(PB_START, "%s PICKED UP $%u!", player, (unsigned)m);
++            return;
++        }
++        sPB.step = PB_EXP_NEXT;
++        return;
++    case B_OUTCOME_LOST:
++    {
++        static u8 sPart;
++        if (sPart++ == 0)
++        {
++            Say(PB_START, "%s IS OUT OF USABLE POKEMON!", player); // sText_PlayerWhiteout
++            return;
++        }
++        sPart = 0;
++        Say(PB_EXP_NEXT, "%s WHITED OUT!", player);             // sText_PlayerWhiteout2
++        return;
++    }
++    case B_OUTCOME_CAUGHT:
++    {
++        struct Pokemon *mon = &gEnemyParty[sB.enemySlot];
++        u16 species = GetMonData(mon, MON_DATA_SPECIES);
++        char name[16];
++        Pkbn_GameStringToAscii(name, gSpeciesNames[species], sizeof(name));
++        IncrementGameStat(GAME_STAT_POKEMON_CAPTURES); // BattleScript_SuccessBallThrow
++        // Cmd_trysetcaughtmondexflags: first catch registers it
++        if (!GetSetPokedexFlag(SpeciesToNationalPokedexNum(species), FLAG_GET_CAUGHT))
++        {
++            HandleSetPokedexFlag(SpeciesToNationalPokedexNum(species), FLAG_SET_CAUGHT, GetMonData(mon, MON_DATA_PERSONALITY));
++            Say(PB_NICK_ASK, "%s'S DATA WAS ADDED TO THE POKEDEX.", name); // sText_PkmnDataAddedToDex
++            return;
++        }
++        sPB.step = PB_NICK_ASK;
++        return;
++    }
++    default:
++        sPB.step = PB_EXP_NEXT;
++        return;
++    }
++}
++
++static void StepGiveCaught(void)
++{
++    struct Pokemon *mon = &gEnemyParty[sB.enemySlot];
++    char name[16];
++    u8 nick[POKEMON_NAME_LENGTH + 2];
++    GetMonData(mon, MON_DATA_NICKNAME, nick);
++    nick[POKEMON_NAME_LENGTH] = EOS;
++    Pkbn_GameStringToAscii(name, nick, sizeof(name));
++    // Cmd_givecaughtmon
++    if (GiveMonToPlayer(mon) != MON_GIVEN_TO_PARTY)
++        Say(PB_EXP_NEXT, "%s WAS SENT TO %s PC.", name, FlagGet(FLAG_SYS_PC_LANETTE) ? "LANETTE'S" : "SOMEONE'S");
++    else
++        sPB.step = PB_EXP_NEXT;
++}
++
++static void StepExpNext(void)
++{
++    u8 i;
++    for (i = 0; i < PARTY_SIZE; i++)
++    {
++        if (sB.pendingExp[i] && GetMonData(&gPlayerParty[i], MON_DATA_SPECIES) != SPECIES_NONE)
++        {
++            char name[16];
++            u32 gain = sB.pendingExp[i];
++            sB.pendingExp[i] = 0;
++            sPB.slot = i;
++            sPB.targetExp = GetMonData(&gPlayerParty[i], MON_DATA_EXP) + gain;
++            MonName(name, sizeof(name), i);
++            Say(PB_LEVEL_STEP, "%s GAINED %u EXP. POINTS!", name, (unsigned)gain); // sText_PkmnGainedEXP
++            return;
++        }
++    }
++    sPB.step = PB_EVO_NEXT;
++}
++
++// One level at a time, as Emerald's EXP bar does it: each level runs the move-learning check.
++static void StepLevel(void)
++{
++    struct Pokemon *mon = &gPlayerParty[sPB.slot];
++    u8 level = GetMonData(mon, MON_DATA_LEVEL);
++    u8 growth = gSpeciesInfo[GetMonData(mon, MON_DATA_SPECIES)].growthRate;
++    u32 exp = GetMonData(mon, MON_DATA_EXP);
++    char name[16];
++
++    if (level < MAX_LEVEL && sPB.targetExp >= gExperienceTables[growth][level + 1])
++    {
++        exp = gExperienceTables[growth][level + 1];
++        SetMonData(mon, MON_DATA_EXP, &exp);
++        CalculateMonStats(mon); // also adds the max-HP increase to current HP (pokemon.c)
++        AdjustFriendship(mon, FRIENDSHIP_EVENT_GROW_LEVEL);
++        gLeveledUpInBattle |= 1 << sPB.slot;
++        sPB.evoBits |= 1 << sPB.slot;
++        MonName(name, sizeof(name), sPB.slot);
++        PlayFanfare(MUS_LEVEL_UP);
++        Say(PB_LEARN_FIRST, "%s GREW TO LV. %u!", name, (unsigned)GetMonData(mon, MON_DATA_LEVEL)); // sText_PkmnGrewToLv
++        return;
++    }
++    // no more levels: bank the rest
++    exp = sPB.targetExp;
++    if (level >= MAX_LEVEL)
++        exp = gExperienceTables[growth][MAX_LEVEL];
++    SetMonData(mon, MON_DATA_EXP, &exp);
++    CalculateMonStats(mon);
++    sPB.step = PB_EXP_NEXT;
++}
++
++static void HandleLearnResult(u16 result)
++{
++    char name[16], move[16];
++    MonName(name, sizeof(name), sPB.slot);
++    if (result == MOVE_NONE)
++    {
++        sPB.step = PB_LEVEL_STEP;
++        return;
++    }
++    if (result == MON_ALREADY_KNOWS_MOVE)
++    {
++        sPB.step = PB_LEARN_NEXT;
++        return;
++    }
++    if (result == MON_HAS_MAX_MOVES)
++    {
++        sPB.move = gMoveToLearn;
++        MoveName(move, sizeof(move), sPB.move);
++        // sText_TryToLearnMove1 / 2 / 3
++        Say(PB_DELETE_ASK, "%s IS TRYING TO LEARN %s. BUT %s CAN'T LEARN MORE THAN FOUR MOVES.", name, move, name);
++        return;
++    }
++    MoveName(move, sizeof(move), result);
++    PlayFanfare(MUS_LEVEL_UP);
++    Say(PB_LEARN_NEXT, "%s LEARNED %s!", name, move); // sText_PkmnLearnedMove
++}
++
++static void StepEvoNext(void)
++{
++    u8 i;
++    if (sB.outcome != B_OUTCOME_WON) // TryEvolvePokemon only runs after a win (battle_main.c:5169)
++    {
++        sPB.step = PB_EXIT;
++        return;
++    }
++    for (i = 0; i < PARTY_SIZE; i++)
++    {
++        if (sPB.evoBits & (1 << i))
++        {
++            u16 species;
++            sPB.evoBits &= ~(1 << i);
++            species = GetEvolutionTargetSpecies(&gPlayerParty[i], EVO_MODE_NORMAL, ITEM_NONE);
++            if (species != SPECIES_NONE)
++            {
++                if (sPB.autopilot && getenv("PKBN_TEST_EVOLVE") == NULL)
++                {
++                    printf("[pkbn-post] slot %u would evolve into species %u (evolution scene skipped in self-test)\n", i, species);
++                    continue;
++                }
++                HideOverlay();
++                FreeAllWindowBuffers();
++                gCB2_AfterEvolution = CB2_PkbnPostBattle;
++                EvolutionScene(&gPlayerParty[i], species, TRUE, i);
++                return;
++            }
++        }
++    }
++    sPB.step = PB_EXIT;
++}
++
++static bool8 Confirm(bool8 *yes)
++{
++    u16 keys = gMain.newKeys;
++    if (sPB.autopilot)
++    {
++        if (++sPB.waitFrames < 8)
++            return FALSE;
++        *yes = !sPB.prompt || (sPB.step == PB_DELETE_ASK && getenv("PKBN_TEST_FORGET") != NULL); // text: A; prompts: NO
++        return TRUE;
++    }
++    if (keys & A_BUTTON) { *yes = TRUE; PlaySE(SE_SELECT); return TRUE; }
++    if (keys & B_BUTTON) { *yes = FALSE; PlaySE(SE_SELECT); return TRUE; }
++    return FALSE;
++}
++
++static void CB2_PkbnPostBattle(void)
++{
++    bool8 yes;
++    char name[16], move[16];
++
++    if (gPkbnFrameOverlay != Overlay && sPB.step != PB_EXIT)
++        ShowOverlay(); // back from the naming / summary / evolution screens
++
++    switch (sPB.step)
++    {
++    case PB_START:
++        StepStart();
++        break;
++    case PB_TEXT:
++        if (Confirm(&yes))
++            sPB.step = sPB.next;
++        break;
++    case PB_NICK_ASK:
++        if (!sPB.prompt)
++        {
++            Pkbn_GameStringToAscii(name, gSpeciesNames[GetMonData(&gEnemyParty[sB.enemySlot], MON_DATA_SPECIES)], sizeof(name));
++            Ask(PB_NICK_ASK, "GIVE A NICKNAME TO THE CAPTURED %s?", name); // sText_GiveNicknameCaptured
++            break;
++        }
++        if (Confirm(&yes))
++        {
++            sPB.prompt = FALSE;
++            if (yes)
++            {
++                // Cmd_trygivecaughtmonnick
++                struct Pokemon *mon = &gEnemyParty[sB.enemySlot];
++                GetMonData(mon, MON_DATA_NICKNAME, sPB.nick);
++                HideOverlay();
++                sPB.step = PB_NICK_RETURN;
++                DoNamingScreen(NAMING_SCREEN_CAUGHT_MON, sPB.nick, GetMonData(mon, MON_DATA_SPECIES),
++                               GetMonGender(mon), GetMonData(mon, MON_DATA_PERSONALITY), CB2_PkbnPostBattle);
++                return;
++            }
++            sPB.step = PB_GIVE_CAUGHT;
++        }
++        break;
++    case PB_NICK_RETURN:
++        SetMonData(&gEnemyParty[sB.enemySlot], MON_DATA_NICKNAME, sPB.nick);
++        sPB.step = PB_GIVE_CAUGHT;
++        break;
++    case PB_GIVE_CAUGHT:
++        StepGiveCaught();
++        break;
++    case PB_EXP_NEXT:
++        StepExpNext();
++        break;
++    case PB_LEVEL_STEP:
++        StepLevel();
++        break;
++    case PB_LEARN_FIRST:
++        HandleLearnResult(MonTryLearningNewMove(&gPlayerParty[sPB.slot], TRUE));
++        break;
++    case PB_LEARN_NEXT:
++        HandleLearnResult(MonTryLearningNewMove(&gPlayerParty[sPB.slot], FALSE));
++        break;
++    case PB_DELETE_ASK:
++        if (!sPB.prompt)
++        {
++            MoveName(move, sizeof(move), sPB.move);
++            Ask(PB_DELETE_ASK, "DELETE A MOVE TO MAKE ROOM FOR %s?", move); // sText_TryToLearnMove3
++            break;
++        }
++        if (Confirm(&yes))
++        {
++            sPB.prompt = FALSE;
++            if (yes)
++            {
++                HideOverlay();
++                FreeAllWindowBuffers();
++                sPB.step = PB_SUMMARY_RETURN;
++                ShowSelectMovePokemonSummaryScreen(gPlayerParty, sPB.slot, gPlayerPartyCount - 1, CB2_PkbnPostBattle, sPB.move);
++                return;
++            }
++            sPB.step = PB_STOP_ASK;
++        }
++        break;
++    case PB_STOP_ASK:
++        if (!sPB.prompt)
++        {
++            MoveName(move, sizeof(move), sPB.move);
++            Ask(PB_STOP_ASK, "STOP LEARNING %s?", move); // sText_StopLearningMove
++            break;
++        }
++        if (Confirm(&yes))
++        {
++            sPB.prompt = FALSE;
++            if (yes || sPB.autopilot)
++            {
++                MonName(name, sizeof(name), sPB.slot);
++                MoveName(move, sizeof(move), sPB.move);
++                Say(PB_LEARN_NEXT, "%s DID NOT LEARN %s.", name, move); // sText_DidNotLearnMove
++            }
++            else
++                sPB.step = PB_DELETE_ASK;
++        }
++        break;
++    case PB_SUMMARY_RETURN:
++    {
++        u8 pos = GetMoveSlotToReplace();
++        if (pos == MAX_MON_MOVES)
++        {
++            sPB.step = PB_STOP_ASK;
++            break;
++        }
++        {
++            u16 old = GetMonData(&gPlayerParty[sPB.slot], MON_DATA_MOVE1 + pos);
++            char oldName[16];
++            if (IsHMMove2(old))
++            {
++                Say(PB_DELETE_ASK, "HM MOVES CAN'T BE FORGOTTEN NOW."); // sText_HMMovesCantBeForgotten
++                break;
++            }
++            RemoveMonPPBonus(&gPlayerParty[sPB.slot], pos);
++            SetMonMoveSlot(&gPlayerParty[sPB.slot], sPB.move, pos);
++            MonName(name, sizeof(name), sPB.slot);
++            MoveName(oldName, sizeof(oldName), old);
++            MoveName(move, sizeof(move), sPB.move);
++            // sText_123Poof, sText_PkmnForgotMove, sText_PkmnLearnedMove
++            Say(PB_LEARN_NEXT, "1, 2, AND... POOF! %s FORGOT %s. AND... %s LEARNED %s!", name, oldName, name, move);
++            PlayFanfare(MUS_LEVEL_UP);
++        }
++        break;
++    }
++    case PB_EVO_NEXT:
++        StepEvoNext();
++        break;
++    case PB_EXIT:
++        HideOverlay();
++        PkbnContract_Exit(sB.outcome);
++        return;
++    }
++}
++
++void PkbnPostBattle_Start(void)
++{
++    memset(&sPB, 0, sizeof(sPB));
++    sPB.slot = 0xFF;
++    sPB.autopilot = getenv("PKBN_SELFTEST") != NULL;
++    gLeveledUpInBattle = 0;
++    // The fight is over and its sprite buffers are freed: the summary / naming screens must take
++    // their out-of-battle paths (pokemon_summary_screen.c:3910 reads battle sprite buffers when inBattle).
++    gMain.inBattle = FALSE;
++    if (sB.outcome == B_OUTCOME_CAUGHT)
++        sB.paydayMoney = 0;
++    ShowOverlay();
++    SetMainCallback2(CB2_PkbnPostBattle);
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/render.c b/src/pkbn/render.c
+index 0282146..fa8303e 100644
+--- a/src/pkbn/render.c
++++ b/src/pkbn/render.c
+@@ -2,6 +2,7 @@
+ #include "global.h"
+ #include "pokemon_icon.h"
+ #include "constants/characters.h"
++#include "string_util.h"
+ #include "pkbn/render.h"
+ 
+ void (*gPkbnFrameOverlay)(u16 *pixels) = NULL;
+@@ -43,6 +44,7 @@ static const u8 sGlyphs[][6] = {
+     {'9', 7,5,7,1,6}, {'-', 0,0,7,0,0}, {'.', 0,0,0,0,2}, {':', 0,2,0,2,0}, {'/', 1,1,2,4,4},
+     {'!', 2,2,2,0,2}, {'?', 6,1,2,0,2}, {'\'',2,2,0,0,0}, {'(', 1,2,2,2,1}, {')', 4,2,2,2,4},
+     {'+', 0,2,7,2,0}, {'>', 4,2,1,2,4}, {'<', 1,2,4,2,1}, {',', 0,0,0,2,4}, {'=', 0,7,0,7,0},
++    {'$', 3,6,2,3,6}, {'&', 2,5,2,5,3},
+ };
+ 
+ static const u8 *FindGlyph(char c)
+@@ -105,11 +107,49 @@ void Pkbn_GameStringToAscii(char *dst, const u8 *src, u32 maxLen)
+         else if (c >= 0xBB && c <= 0xD4) o = 'A' + (c - 0xBB);
+         else if (c >= 0xD5 && c <= 0xEE) o = 'A' + (c - 0xD5);
+         else if (c == 0xF0) o = ':';
++        else if (c == 0x1B) o = 'E'; // é (POKé)
+         dst[i] = o;
+     }
+     dst[i] = '\0';
+ }
+ 
++// Dialogue text (trainer speech): line breaks / prompts become spaces, control codes are skipped.
++void Pkbn_GameTextToAscii(char *dst, const u8 *src, u32 maxLen)
++{
++    u32 o = 0;
++    while (*src != EOS && o + 1 < maxLen)
++    {
++        u8 c = *src++;
++        if (c == EXT_CTRL_CODE_BEGIN)
++        {
++            u8 len = GetExtCtrlCodeLength(*src); // includes the code byte itself
++            src += len ? len : 1;
++            continue;
++        }
++        if (c == PLACEHOLDER_BEGIN)
++        {
++            src++;
++            continue;
++        }
++        if (c == CHAR_NEWLINE || c == CHAR_PROMPT_SCROLL || c == CHAR_PROMPT_CLEAR)
++            c = 0x00;
++        if (c == CHAR_e_ACUTE)
++        {
++            dst[o++] = 'E';
++            continue;
++        }
++        {
++            u8 one[2] = { c, EOS };
++            char out[2];
++            Pkbn_GameStringToAscii(out, one, 2);
++            if (out[0] == ' ' && o > 0 && dst[o - 1] == ' ')
++                continue;
++            dst[o++] = out[0];
++        }
++    }
++    dst[o] = '\0';
++}
++
+ // Icons are 4bpp, 32x32 per frame (4x4 tiles of 8x8, 32 bytes/tile, 0x200 bytes/frame),
+ // low nibble = left pixel; palette index 0 is transparent.
+ void Pkbn_DecodeMonIcon(u16 *dst, u16 species, u32 personality, u8 frame)
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index e80a91c..fa46302 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -15,6 +15,8 @@
+ #include "constants/species.h"
+ #include "constants/moves.h"
+ #include "pkbn/move_table.h"
++#include "item.h"
++#include "battle_setup.h"
+ #include "pkbn/grid_battle.h"
+ #include "pkbn/render.h"
+ 
+@@ -61,7 +63,7 @@ static void CB2_SelfTestDone(void)
+     s32 i;
+     printf("[pkbn-selftest] outcome=%u frames_dumped=%u\n", gBattleOutcome, (unsigned)sDumpCount);
+     for (i = 0; i < PARTY_SIZE && GetMonData(&gPlayerParty[i], MON_DATA_SPECIES) != SPECIES_NONE; i++)
+-        printf("[pkbn-selftest]   slot %d: HP %u/%u Lv %u EXP %u PP %u/%u/%u/%u\n", (int)i,
++        printf("[pkbn-selftest]   slot %d: species %u HP %u/%u Lv %u EXP %u PP %u/%u/%u/%u\n", (int)i, (unsigned)GetMonData(&gPlayerParty[i], MON_DATA_SPECIES),
+                (unsigned)GetMonData(&gPlayerParty[i], MON_DATA_HP),
+                (unsigned)GetMonData(&gPlayerParty[i], MON_DATA_MAX_HP),
+                (unsigned)GetMonData(&gPlayerParty[i], MON_DATA_LEVEL),
+@@ -72,7 +74,7 @@ static void CB2_SelfTestDone(void)
+     exit(gBattleOutcome == 0 ? 1 : 0);
+ }
+ 
+-static u8 sPicks[8], sPickIdx, sPicksLeft;
++static u8 sPicks[8], sPickIdx, sPicksLeft, sThrowsLeft;
+ static bool8 sPicksDone;
+ 
+ static void Autopilot(void)
+@@ -87,6 +89,18 @@ static void Autopilot(void)
+     switch (d.state)
+     {
+     case PKBN_GRID_CUSTOM:
++        // PKBN_TEST_THROW=N: throw a ball at the first N Customs (cursor to the item row, A).
++        if (sThrowsLeft > 0 && d.ballUsable)
++        {
++            if (d.cursor != d.itemRow)
++                pressed = DPAD_UP; // the item row is last: wrap upwards
++            else
++            {
++                pressed = A_BUTTON;
++                if (edge) sThrowsLeft--;
++            }
++            break;
++        }
+         // PKBN_TEST_PICKS="0,2,4": on the first Custom, queue these hand positions in this order.
+         if (sPicksLeft > 0)
+         {
+@@ -200,7 +214,7 @@ void Pkbn_SelfTestMaybeStart(void)
+         const char *spec = getenv("PKBN_SELFTEST");
+         char buf[512];
+         char *playerPart = NULL, *enemyPart = NULL;
+-        char *members[PARTY_SIZE];
++        char *members[PARTY_SIZE + 1];
+         s32 nMembers = 0, i;
+         strncpy(buf, spec, sizeof(buf) - 1);
+         buf[sizeof(buf) - 1] = '\0';
+@@ -208,7 +222,7 @@ void Pkbn_SelfTestMaybeStart(void)
+         {
+             playerPart = strtok(buf, ",");
+             enemyPart = strtok(NULL, ",");
+-            for (members[nMembers] = strtok(playerPart, "|"); members[nMembers] != NULL && nMembers < PARTY_SIZE - 1;)
++            for (members[nMembers] = strtok(playerPart, "|"); members[nMembers] != NULL && nMembers < PARTY_SIZE;)
+                 members[++nMembers] = strtok(NULL, "|");
+         }
+         if (nMembers == 0)
+@@ -227,7 +241,30 @@ void Pkbn_SelfTestMaybeStart(void)
+             if (*t == ',') t++;
+         }
+     }
++    // PKBN_TEST_BALLS="item:count,..." puts balls in the bag; PKBN_TEST_THROW=N throws them.
++    SetBagItemsPointers();
++    ClearBag();
++    if (getenv("PKBN_TEST_BALLS") != NULL)
++    {
++        const char *t = getenv("PKBN_TEST_BALLS");
++        while (*t)
++        {
++            unsigned item = 0, count = 0;
++            if (sscanf(t, "%u:%u", &item, &count) == 2)
++                AddBagItem(item, count);
++            while (*t && *t != ',') t++;
++            if (*t == ',') t++;
++        }
++    }
++    if (getenv("PKBN_TEST_THROW") != NULL)
++        sThrowsLeft = (u8)atoi(getenv("PKBN_TEST_THROW"));
+     gBattleTypeFlags = 0;
++    // PKBN_TEST_TRAINER=id: a single trainer battle against gTrainers[id] instead of the wild Pokémon
++    if (getenv("PKBN_TEST_TRAINER") != NULL)
++    {
++        gBattleTypeFlags = BATTLE_TYPE_TRAINER;
++        gTrainerBattleOpponent_A = (u16)atoi(getenv("PKBN_TEST_TRAINER"));
++    }
+     gMain.savedCallback = CB2_SelfTestDone;
+     SetMainCallback2(CB2_SelfTestBattle);
+     printf("[pkbn-selftest] started\n");
+diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
+index edacd0c..3f09d46 100644
+--- a/src/platform/sdl2.c
++++ b/src/platform/sdl2.c
+@@ -455,7 +455,16 @@ u16 Platform_GetKeyInput(void)
+     u16 gamepadKeys = GetXInputKeys();
+     return (gamepadKeys != 0) ? gamepadKeys : keys;
+ #endif
+-
++    // pkbn self-tests: PKBN_AUTO_PRESS=1 taps A every 16 frames (for vanilla screens such as the
++    // evolution scene that wait for a button).
++    {
++        static s8 sAuto = -1;
++        static u32 sTick;
++        if (sAuto < 0)
++            sAuto = getenv("PKBN_AUTO_PRESS") != NULL;
++        if (sAuto)
++            return keys | (((sTick++ / 8) & 1) ? A_BUTTON : 0);
++    }
+     return keys;
+ }
+ 
+-- 
+2.43.0
+
