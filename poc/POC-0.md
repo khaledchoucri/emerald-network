@@ -40,3 +40,8 @@ Save file `pokeemerald.sav` is written in the folder you run from.
 ## Known gaps (by design for POC-0)
 No evolution after level-up, no new moves learned at level-up, no Exp. Share/traded boost, no
 catching, no money — those come with the real battle module.
+
+## Results
+- 2026-10-04 (Khaled, Linux build via WSLg): **PASS** — wild battle hands off to the stub and returns
+  to the field; lead Pokémon receives EXP. Not yet reported: Pokédex "seen", save/reload,
+  `PKBN_STUB=0` A/B, trainer battle.
