@@ -1,0 +1,194 @@
+From 3497d704b484414784f7e4df71e2a2e4cdf225e2 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Sun, 4 Oct 2026 15:54:12 +0300
+Subject: [PATCH] POC-0: route plain wild battles to an instant-win stub that
+ honours the battle contract
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ include/pkbn/battle_stub.h |  13 ++++
+ src/battle_setup.c         |   7 ++-
+ src/pkbn/battle_stub.c     | 126 +++++++++++++++++++++++++++++++++++++
+ 3 files changed, 145 insertions(+), 1 deletion(-)
+ create mode 100644 include/pkbn/battle_stub.h
+ create mode 100644 src/pkbn/battle_stub.c
+
+diff --git a/include/pkbn/battle_stub.h b/include/pkbn/battle_stub.h
+new file mode 100644
+index 0000000..a3daea3
+--- /dev/null
++++ b/include/pkbn/battle_stub.h
+@@ -0,0 +1,13 @@
++#ifndef GUARD_PKBN_BATTLE_STUB_H
++#define GUARD_PKBN_BATTLE_STUB_H
++
++// POC-0: stand-in for Emerald's battle that honours the battle contract
++// documented in research/02-emerald-battle-contract.md, then instantly wins.
++
++// TRUE if the battle about to start should be routed to our module.
++bool8 PkbnBattle_ShouldHandle(void);
++
++// Main callback 2 that replaces CB2_InitBattle for handled battles.
++void CB2_PkbnBattleStub(void);
++
++#endif // GUARD_PKBN_BATTLE_STUB_H
+diff --git a/src/battle_setup.c b/src/battle_setup.c
+index 99897dd..2c251db 100644
+--- a/src/battle_setup.c
++++ b/src/battle_setup.c
+@@ -37,6 +37,7 @@
+ #include "mirage_tower.h"
+ #include "field_screen_effect.h"
+ #include "data.h"
++#include "pkbn/battle_stub.h"
+ #include "constants/battle_frontier.h"
+ #include "constants/battle_setup.h"
+ #include "constants/event_objects.h"
+@@ -370,7 +371,11 @@ static void Task_BattleStart(u8 taskId)
+         if (IsBattleTransitionDone() == TRUE)
+         {
+             CleanupOverworldWindowsAndTilemaps();
+-            SetMainCallback2(CB2_InitBattle);
++            // PKBN POC-0: route plain wild battles to our module (research/02, §1)
++            if (gMain.savedCallback == CB2_EndWildBattle && PkbnBattle_ShouldHandle())
++                SetMainCallback2(CB2_PkbnBattleStub);
++            else
++                SetMainCallback2(CB2_InitBattle);
+             RestartWildEncounterImmunitySteps();
+             ClearPoisonStepCounter();
+             DestroyTask(taskId);
+diff --git a/src/pkbn/battle_stub.c b/src/pkbn/battle_stub.c
+new file mode 100644
+index 0000000..2308ba6
+--- /dev/null
++++ b/src/pkbn/battle_stub.c
+@@ -0,0 +1,126 @@
++// POC-0 battle stub. See research/02-emerald-battle-contract.md for every
++// contract item mirrored here (citations are to pokeemerald-pc_port @ 1165825).
++// System headers must precede global.h (its min/max/abs macros clash with libc).
++#ifdef PORTABLE
++#include <stdio.h>
++#include <stdlib.h>
++#endif
++#include "global.h"
++#include "battle.h"
++#include "main.h"
++#include "pokemon.h"
++#include "pokedex.h"
++#include "event_data.h"
++#include "data.h"
++#include "util.h"
++#include "pkbn/battle_stub.h"
++
++#ifdef PORTABLE
++#define PKBN_LOG(...) do { printf("[pkbn] " __VA_ARGS__); printf("\n"); fflush(stdout); } while (0)
++#else
++#define PKBN_LOG(...) do { } while (0)
++#endif
++
++// Number of frames the stub "battle" lasts, so the hand-off is visible.
++#define STUB_BATTLE_FRAMES 30
++
++static u16 sFrames;
++
++static bool8 IsStubEnabled(void)
++{
++#ifdef PORTABLE
++    // PKBN_STUB=0 restores vanilla battles for A/B comparison.
++    const char *env = getenv("PKBN_STUB");
++    if (env != NULL && env[0] == '0')
++        return FALSE;
++#endif
++    return TRUE;
++}
++
++bool8 PkbnBattle_ShouldHandle(void)
++{
++    // POC-0 scope: plain wild battles only (gBattleTypeFlags == 0, set by
++    // DoStandardWildBattle, battle_setup.c:407). Everything else -> vanilla.
++    return IsStubEnabled() && gBattleTypeFlags == 0;
++}
++
++static s32 GetLeadMonIndex(void)
++{
++    s32 i;
++    for (i = 0; i < PARTY_SIZE; i++)
++    {
++        if (GetMonData(&gPlayerParty[i], MON_DATA_SPECIES) != SPECIES_NONE
++         && !GetMonData(&gPlayerParty[i], MON_DATA_IS_EGG)
++         && GetMonData(&gPlayerParty[i], MON_DATA_HP) != 0)
++            return i;
++    }
++    return -1;
++}
++
++// Wild-battle EXP: expYield * level / 7, minimum 1
++// (Cmd_getexp, battle_script_commands.c:3309-3325). No Exp. Share / traded boost in POC-0.
++static void GiveWinRewards(void)
++{
++    u16 enemySpecies = GetMonData(&gEnemyParty[0], MON_DATA_SPECIES);
++    u8 enemyLevel = GetMonData(&gEnemyParty[0], MON_DATA_LEVEL);
++    s32 lead = GetLeadMonIndex();
++    struct Pokemon *mon;
++    u32 exp, gained, oldLevel, newLevel;
++
++    if (lead < 0)
++        return;
++    mon = &gPlayerParty[lead];
++    oldLevel = GetMonData(mon, MON_DATA_LEVEL);
++    if (oldLevel >= MAX_LEVEL)
++        return; // battle_script_commands.c:3351 skips max-level mons
++
++    gained = gSpeciesInfo[enemySpecies].expYield * enemyLevel / 7;
++    if (gained == 0)
++        gained = 1;
++    exp = GetMonData(mon, MON_DATA_EXP) + gained;
++    SetMonData(mon, MON_DATA_EXP, &exp);
++    MonGainEVs(mon, enemySpecies);            // battle_script_commands.c:3420
++    CalculateMonStats(mon);                   // re-derives level from EXP (pokemon.c:2840-2843)
++    newLevel = GetMonData(mon, MON_DATA_LEVEL);
++
++    if (newLevel > oldLevel)
++        gLeveledUpInBattle |= gBitTable[lead]; // consumed by evolution check in vanilla; logged only here
++
++    PKBN_LOG("lead slot %d gained %u exp (Lv %u -> %u)", (int)lead, (unsigned)gained,
++             (unsigned)oldLevel, (unsigned)newLevel);
++}
++
++void CB2_PkbnBattleStub(void)
++{
++    if (sFrames == 0)
++    {
++        u16 species = GetMonData(&gEnemyParty[0], MON_DATA_SPECIES);
++
++        // Entry side of the contract (battle_main.c:703, :1139)
++        gPreBattleCallback1 = gMain.callback1;
++        gMain.callback1 = NULL;   // stop overworld per-frame logic while "in battle"
++        gMain.inBattle = TRUE;
++
++        // Pokédex "seen" (battle_script_commands.c:4707)
++        HandleSetPokedexFlag(SpeciesToNationalPokedexNum(species), FLAG_SET_SEEN,
++                             GetMonData(&gEnemyParty[0], MON_DATA_PERSONALITY));
++
++        PKBN_LOG("wild battle: species %u Lv %u (flags 0x%08x)", species,
++                 (unsigned)GetMonData(&gEnemyParty[0], MON_DATA_LEVEL), (unsigned)gBattleTypeFlags);
++    }
++
++    if (++sFrames < STUB_BATTLE_FRAMES)
++        return;
++    sFrames = 0;
++
++    gBattleOutcome = B_OUTCOME_WON;
++    GiveWinRewards();
++
++    // Exit side of the contract (ReturnFromBattleToOverworld, battle_main.c:5228-5259)
++    gSpecialVar_Result = gBattleOutcome;
++    gMain.inBattle = FALSE;
++    gMain.callback1 = gPreBattleCallback1;
++    gLeveledUpInBattle = 0;   // vanilla clears this via TryEvolvePokemon; evolution not in POC-0
++    PKBN_LOG("outcome %u -> returning to overworld", gBattleOutcome);
++    SetMainCallback2(gMain.savedCallback);
++}
+-- 
+2.43.0
+

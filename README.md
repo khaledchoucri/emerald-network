@@ -12,7 +12,8 @@ upstream/                 READ-ONLY reference code (never edit; see CLAUDE.md)
   bn6f/                   dism-exe disassembly of MMBN6 Cybeast Falzar (ARM/Thumb asm)
   dism-exe-notes/         dism-exe project notes on the BN disassemblies
 research/                 findings, each backed by file:line citations into upstream/
-poc/                      our proof-of-concept code
+poc/                      our proof-of-concept code (patches/ = our changes to the host; POC-N.md = test plans)
+scripts/                  setup_host.sh: builds the patched host inside WSL
 docs/                     design docs (written only from verified research)
 ```
 

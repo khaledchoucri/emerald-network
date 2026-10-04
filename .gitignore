@@ -7,3 +7,5 @@ upstream/
 build/
 pokeemerald64
 pokeemerald32
+poc/bin/
+*.dll

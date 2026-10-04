@@ -22,7 +22,7 @@ What does the overworld hand to a battle, and what does it read back?
 ## R3. Rendering path in the PC port
 - How `src/platform/sdl2.c` presents frames; where a non-GBA renderer could draw a battle screen.
 
-## POC-0 (after R1): "battle stub"
+## POC-0 (after R1): "battle stub" — BUILT, awaiting play-test → poc/POC-0.md
 In a copy of the host (poc/, never upstream/), replace the wild-battle entry with a stub module that
 immediately returns a win and writes back the outputs found in R1. Success = overworld continues
 correctly (no softlock, party state consistent, save works).
