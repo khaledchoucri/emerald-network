@@ -1,0 +1,9 @@
+upstream/
+*.gba
+*.elf
+*.exe
+*.sav
+*.o
+build/
+pokeemerald64
+pokeemerald32
