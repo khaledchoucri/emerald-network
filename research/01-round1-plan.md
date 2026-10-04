@@ -12,7 +12,7 @@ What does the overworld hand to a battle, and what does it read back?
 - Outputs: `gBattleOutcome`, player party HP/PP/status/EXP/EVs, caught-mon path, trainer flags, money.
 - Deliverable: research/02-emerald-battle-contract.md (cited).
 
-## R2. BN6 battle loop and chip model (reference side)
+## R2. BN6 battle loop and chip model (reference side) — FIRST PASS DONE → 03-bn6-battle-loop.md
 - Read `StartBattle` → `battle_main_8007800` → `battle_update_8007A44`; map the per-frame order.
 - Decode `chip_data_struct` fields; check whether `attack_family`/`attack_subfamily` work as reusable
   attack "shapes" (UNVERIFIED hypothesis — this would ground our move-shape templates).
