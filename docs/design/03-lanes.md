@@ -60,8 +60,8 @@ Decisions already made: 3 layers (element / codes / Program Advances); one code 
 - Treecko *Leer* (L) → Mudkip enters with *Tackle* (L) — canon Leer → Tackle combo across two Pokémon.
 - Wingull *Supersonic* (Z) → Ralts enters with *Confusion* (Z) — stack confusion, then the psychic hit.
 - Mudkip *Mud-Slap* (N) → Poochyena enters with *Sand-Attack* (N) → *Bite* (N) — blind them, then bite.
-- Camerupt *Sunny Day* (S) → Breloom enters with *Solar Beam*-less Grass moves? No — Breloom's Mega Drain is G;
-  Sunny Day is S only. Bridges are deliberate, not universal: Growth (G+S) is the move that joins Sun and Growth.
+- Bridges are deliberate, not universal: *Growth* (G+S) is the move that joins Sun and Growth, so Camerupt's
+  *Sunny Day* only reaches Breloom's grass moves if Growth is in the chain.
 
 ## 3. Program Advances (layer 3) — brand-new moves
 Rules (proposal): exact 3-move order inside one chain; recipe must be letter-legal (all 19 are, checked by the tool);
