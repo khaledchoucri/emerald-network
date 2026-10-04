@@ -1,0 +1,327 @@
+From a548f4aa49251b06f5457ad4a9bd323f73278d9b Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Sun, 4 Oct 2026 17:13:54 +0300
+Subject: [PATCH] POC-3: plus-shaped bomb blast; stat-stage status moves that
+ always land; Speed stage drives tempo
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ include/pkbn/move_shapes.h |   8 ++-
+ src/pkbn/grid_battle.c     | 122 +++++++++++++++++++++++++++++++++----
+ src/pkbn/move_shapes.c     |  29 ++++++++-
+ src/pkbn/selftest.c        |   2 +-
+ 4 files changed, 146 insertions(+), 15 deletions(-)
+
+diff --git a/include/pkbn/move_shapes.h b/include/pkbn/move_shapes.h
+index 43ff93b..4ee1500 100644
+--- a/include/pkbn/move_shapes.h
++++ b/include/pkbn/move_shapes.h
+@@ -8,13 +8,19 @@ enum
+     SHAPE_CANNON,    // BN6 family 0x14: hits the first target down the row
+     SHAPE_LONGSWORD, // BN6 family 0x13 sub 2: hits up to 2 panels ahead
+     SHAPE_SPREADER,  // BN6 family 0x25: Cannon + 3x3 splash around the target
+-    SHAPE_GRENADE,   // BN6 family 0x12 (MiniBomb): thrown 3 panels ahead, 3x3 blast on landing
++    SHAPE_GRENADE,   // BN6 family 0x12 (MiniBomb): thrown 3 panels ahead, + shaped blast on landing (no diagonals)
+     SHAPE_LOCKON,    // BN6 MachGun family 0x29 idea: lock onto the target, then a hit it can't dodge
+     SHAPE_BARRIER,   // BN6 Barrier (family 0x15 sub 4, param 1): absorbs the next hit
++    SHAPE_STATUS,    // pure status move (stat stages): always lands, ignores position, Barrier and i-frames
+     SHAPE_COUNT
+ };
+ 
+ u8 Pkbn_ShapeForMove(u16 move);
++
++// Stat-stage change of a pure status move (Gen 3 effect ids). Returns FALSE if the move
++// isn't a stat-stage move. *stat = STAT_ATK..STAT_EVASION, *delta = +/-1 or 2,
++// *onSelf = TRUE for raises (Growl targets the foe, Howl the user).
++bool8 Pkbn_GetStatChange(u16 move, u8 *stat, s8 *delta, bool8 *onSelf);
+ const char *Pkbn_ShapeLabel(u8 shape);
+ 
+ #endif // GUARD_PKBN_MOVE_SHAPES_H
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 95dad88..87656c7 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -80,6 +80,7 @@ struct Fighter
+     u16 lockout;
+     u16 iframes;
+     u16 hurtFlash;
++    u16 statusFlash;
+     bool8 barrier;
+     u8 protectUses;     // consecutive successful barriers (Gen 3 protectUses)
+     u8 lastShape;       // shape of the last move used (buster doesn't count)
+@@ -114,6 +115,7 @@ struct GridBattle
+     u32 frame;
+     struct Fighter f[2];
+     u16 gauge;
++    u16 gaugeSub;
+     struct Chip hand[MAX_HAND];
+     u8 handCount;
+     u8 cursor;
+@@ -292,13 +294,14 @@ static void DirectShapeCells(u8 side, u8 shape, s8 x, s8 y, u8 cells[GRID_ROWS][
+     }
+ }
+ 
++// Bomb blast: the landing panel plus its 4 orthogonal neighbours (no diagonals).
+ static void BlastCells(s8 cx, s8 cy, u8 cells[GRID_ROWS][GRID_COLS])
+ {
+-    s8 dx, dy;
+-    for (dy = -1; dy <= 1; dy++)
+-        for (dx = -1; dx <= 1; dx++)
+-            if (InGrid(cx + dx, cy + dy))
+-                cells[cy + dy][cx + dx] = 1;
++    static const s8 sOffsets[5][2] = { {0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1} };
++    s32 i;
++    for (i = 0; i < 5; i++)
++        if (InGrid(cx + sOffsets[i][0], cy + sOffsets[i][1]))
++            cells[cy + sOffsets[i][1]][cx + sOffsets[i][0]] = 1;
+ }
+ 
+ // One hit on the opponent of atkSide. move == MOVE_NONE means Buster (fixedDamage).
+@@ -353,6 +356,57 @@ static void FlashCells(const u8 cells[GRID_ROWS][GRID_COLS], u8 frames)
+                 sB.fx[r][c] = frames;
+ }
+ 
++// ---- Status moves -----------------------------------------------------------------------
++
++static const char *const sStatNames[NUM_BATTLE_STATS] =
++{
++    [STAT_HP] = "HP", [STAT_ATK] = "ATTACK", [STAT_DEF] = "DEFENSE", [STAT_SPEED] = "SPEED",
++    [STAT_SPATK] = "SP. ATK", [STAT_SPDEF] = "SP. DEF", [STAT_ACC] = "ACCURACY", [STAT_EVASION] = "EVASION",
++};
++
++// Pure status moves never miss and ignore position, Barrier and i-frames (design rule; in Gen 3
++// Protect would block Growl etc.). Stage limits MIN_STAT_STAGE..MAX_STAT_STAGE as in Gen 3.
++static void ApplyStatusMove(u8 side, u16 move)
++{
++    u8 stat;
++    s8 delta;
++    bool8 onSelf;
++    struct Fighter *target;
++    s32 stage;
++    char text[40];
++
++    if (!Pkbn_GetStatChange(move, &stat, &delta, &onSelf))
++        return;
++    target = onSelf ? &sB.f[side] : &sB.f[side ^ 1];
++    stage = target->bm.statStages[stat];
++    if ((delta > 0 && stage >= MAX_STAT_STAGE) || (delta < 0 && stage <= MIN_STAT_STAGE))
++    {
++        snprintf(text, sizeof(text), "%s WON'T GO %s!", sStatNames[stat], delta > 0 ? "HIGHER" : "LOWER");
++        SetMsg(text, 50);
++        PlaySE(SE_FAILURE);
++        return;
++    }
++    stage += delta;
++    if (stage < MIN_STAT_STAGE) stage = MIN_STAT_STAGE;
++    if (stage > MAX_STAT_STAGE) stage = MAX_STAT_STAGE;
++    target->bm.statStages[stat] = stage;
++    target->statusFlash = 12;
++    snprintf(text, sizeof(text), "%s %s%s", sStatNames[stat],
++             delta > 1 ? "ROSE SHARPLY" : delta > 0 ? "ROSE" : delta < -1 ? "HARSHLY FELL" : "FELL",
++             (stat == STAT_ACC || stat == STAT_EVASION) ? " (NO GRID EFFECT)" : "!");
++    SetMsg(text, 60);
++    PlaySE(delta > 0 ? SE_EXP_MAX : SE_BOO);
++    PKBN_LOG("%s used move %u: %s's stat %u %+d -> stage %d", sB.f[side].name, move, target->name,
++             stat, delta, (int)stage);
++}
++
++// Speed with its stat stage applied (APPLY_STAT_MOD / gStatStageRatios, pokemon.c:3100, :1868).
++static u32 EffectiveSpeed(const struct Fighter *f)
++{
++    u8 st = f->bm.statStages[STAT_SPEED];
++    return (u32)f->bm.speed * gStatStageRatios[st][0] / gStatStageRatios[st][1];
++}
++
+ // ---- Attack pipeline ------------------------------------------------------------------
+ 
+ static struct Attack *NewAttack(void)
+@@ -420,6 +474,14 @@ static void StartAttack(u8 side, const struct Chip *chip)
+     if (me->bm.pp[chip->slot] > 0)
+         me->bm.pp[chip->slot]--;
+ 
++    if (chip->shape == SHAPE_STATUS)
++    {
++        ApplyStatusMove(side, chip->move);
++        me->lastShape = SHAPE_STATUS;
++        me->lockout = CHIP_LOCKOUT;
++        return;
++    }
++
+     if (chip->shape == SHAPE_BARRIER)
+     {
+         // Gen 3 Protect rule (Cmd_setprotectlike, battle_script_commands.c:6523-6555): the counter
+@@ -597,7 +659,7 @@ static void Finish(void)
+ 
+ static u16 EnemyAttackInterval(void)
+ {
+-    u16 spd = sB.f[SIDE_ENEMY].bm.speed;
++    u32 spd = EffectiveSpeed(&sB.f[SIDE_ENEMY]);
+     if (spd > 100)
+         spd = 100;
+     return 150 - spd / 2 + (Random() % 40); // TUNE: faster Pokémon attack more often
+@@ -729,6 +791,18 @@ static bool8 PickEnemyChip(struct Chip *out)
+             continue;
+         if (shape == SHAPE_BARRIER && e->barrier)
+             continue; // already shielded
++        if (shape == SHAPE_STATUS)
++        {
++            u8 stat; s8 delta; bool8 self;
++            const struct Fighter *t;
++            Pkbn_GetStatChange(e->bm.moves[i], &stat, &delta, &self);
++            t = self ? e : &sB.f[SIDE_PLAYER];
++            if (stat == STAT_ACC || stat == STAT_EVASION)
++                continue; // no effect on the grid yet
++            if ((delta > 0 && t->bm.statStages[stat] >= DEFAULT_STAT_STAGE + 2)
++             || (delta < 0 && t->bm.statStages[stat] <= DEFAULT_STAT_STAGE - 2))
++                continue; // TUNE: AI stops stacking after +/-2
++        }
+         options[n].move = e->bm.moves[i];
+         options[n].slot = i;
+         options[n].shape = shape;
+@@ -757,7 +831,7 @@ static void UpdateEnemy(void)
+             return;
+         // Line up: same row as the player for row attacks; sword users step to the front
+         // column; bombers stand GRENADE_RANGE columns from the player when they can.
+-        if (chip.shape != SHAPE_BARRIER && chip.shape != SHAPE_LOCKON)
++        if (chip.shape != SHAPE_BARRIER && chip.shape != SHAPE_LOCKON && chip.shape != SHAPE_STATUS)
+             e->y = p->y;
+         if (chip.shape == SHAPE_LONGSWORD)
+             e->x = PLAYER_COLS;
+@@ -781,14 +855,24 @@ static void Tick(struct Fighter *f)
+     if (f->lockout) f->lockout--;
+     if (f->iframes) f->iframes--;
+     if (f->hurtFlash) f->hurtFlash--;
++    if (f->statusFlash) f->statusFlash--;
+ }
+ 
+ static void UpdateFight(void)
+ {
+     s32 r, c;
+ 
+-    if (sB.gauge < CUSTOM_FRAMES)
+-        sB.gauge++;
++    // Custom gauge fills faster/slower with the player's Speed stage (stage 6 = 1x).
++    {
++        u8 st = sB.f[SIDE_PLAYER].bm.statStages[STAT_SPEED];
++        sB.gaugeSub += 10 * gStatStageRatios[st][0] / gStatStageRatios[st][1];
++        while (sB.gaugeSub >= 10)
++        {
++            sB.gaugeSub -= 10;
++            if (sB.gauge < CUSTOM_FRAMES)
++                sB.gauge++;
++        }
++    }
+     if (sB.busterCd)
+         sB.busterCd--;
+     Tick(&sB.f[SIDE_PLAYER]);
+@@ -899,6 +983,7 @@ void PkbnGrid_GetDebug(struct PkbnGridDebug *d)
+ #define COL_BARRIER   PKBN_RGB(8, 31, 31)
+ #define COL_CROSS     PKBN_RGB(31, 4, 4)
+ #define COL_BOMB      PKBN_RGB(10, 10, 10)
++#define COL_STATUS    PKBN_RGB(24, 8, 28)
+ 
+ static void PanelOrigin(s32 c, s32 r, s32 *x, s32 *y)
+ {
+@@ -921,8 +1006,21 @@ static void DrawFighterHud(u16 *fb, s32 x, const struct Fighter *f)
+     DrawHpBar(fb, x, 11, 80, f);
+     snprintf(line, sizeof(line), "%u/%u", f->bm.hp, f->bm.maxHP);
+     Pkbn_DrawText(fb, x, 18, line, COL_TEXT, 1);
+-    if (f->barrier)
+-        Pkbn_DrawText(fb, x + 44, 18, "BARRIER", COL_BARRIER, 1);
++    {
++        static const char *const sShort[NUM_BATTLE_STATS] = { "", "A", "D", "S", "SA", "SD", "AC", "EV" };
++        s32 tx = x + 26, st;
++        for (st = STAT_ATK; st < NUM_BATTLE_STATS; st++)
++        {
++            s32 d = (s32)f->bm.statStages[st] - DEFAULT_STAT_STAGE;
++            if (d != 0)
++            {
++                snprintf(line, sizeof(line), "%s%+d", sShort[st], (int)d);
++                tx = Pkbn_DrawText(fb, tx, 18, line, d > 0 ? COL_GAUGE : COL_HP_LOW, 1) + 3;
++            }
++        }
++        if (f->barrier)
++            Pkbn_DrawText(fb, tx, 18, "BAR", COL_BARRIER, 1);
++    }
+ }
+ 
+ static void DrawGrid(u16 *fb)
+@@ -972,7 +1070,7 @@ static void DrawFighter(u16 *fb, u8 side)
+ {
+     const struct Fighter *f = &sB.f[side];
+     s32 x, y;
+-    u16 tint = f->hurtFlash ? COL_TEXT : 0;
++    u16 tint = f->hurtFlash ? COL_TEXT : (f->statusFlash && (sB.frame & 2)) ? COL_STATUS : 0;
+ 
+     PanelOrigin(f->x, f->y, &x, &y);
+     if (f->barrier)
+diff --git a/src/pkbn/move_shapes.c b/src/pkbn/move_shapes.c
+index 3695ccf..54eaa2c 100644
+--- a/src/pkbn/move_shapes.c
++++ b/src/pkbn/move_shapes.c
+@@ -5,6 +5,7 @@
+ #include "pokemon.h"
+ #include "constants/battle_move_effects.h"
+ #include "constants/moves.h"
++#include "constants/pokemon.h"
+ #include "pkbn/move_shapes.h"
+ 
+ // Moves that read as something thrown/lobbed -> Grenade. Curated by us (Gen 3 has no
+@@ -34,7 +35,12 @@ u8 Pkbn_ShapeForMove(u16 move)
+     if (m->effect == EFFECT_PROTECT)
+         return SHAPE_BARRIER;
+     if (m->power == 0)
+-        return SHAPE_NONE;
++    {
++        u8 stat; s8 delta; bool8 self;
++        if (Pkbn_GetStatChange(move, &stat, &delta, &self))
++            return SHAPE_STATUS;
++        return SHAPE_NONE; // other status moves (sleep, poison, ...) not on the grid yet
++    }
+     // "Never misses" moves (EFFECT_ALWAYS_HIT: Swift, Faint Attack, Shadow Punch, Aerial Ace,
+     // Magical Leaf, Shock Wave) -> Lock-on. Takes priority over contact.
+     if (m->effect == EFFECT_ALWAYS_HIT)
+@@ -58,6 +64,27 @@ const char *Pkbn_ShapeLabel(u8 shape)
+     case SHAPE_GRENADE:   return "BOMB";
+     case SHAPE_LOCKON:    return "LOCK-ON";
+     case SHAPE_BARRIER:   return "BARRIER";
++    case SHAPE_STATUS:    return "STATUS";
+     }
+     return "";
+ }
++
++// Gen 3 stat-stage effect ids are laid out in stat order (constants/battle_move_effects.h):
++// EFFECT_ATTACK_UP(10)..EFFECT_EVASION_UP(16), EFFECT_ATTACK_DOWN(18)..EFFECT_EVASION_DOWN(24),
++// EFFECT_ATTACK_UP_2(50)..EFFECT_EVASION_UP_2(56), EFFECT_ATTACK_DOWN_2(58)..EFFECT_EVASION_DOWN_2(64);
++// stats STAT_ATK(1)..STAT_EVASION(7) (constants/pokemon.h).
++bool8 Pkbn_GetStatChange(u16 move, u8 *stat, s8 *delta, bool8 *onSelf)
++{
++    u8 e = gBattleMoves[move].effect;
++    if (gBattleMoves[move].power != 0)
++        return FALSE;
++    if (e >= EFFECT_ATTACK_UP && e <= EFFECT_EVASION_UP)
++        { *stat = STAT_ATK + (e - EFFECT_ATTACK_UP); *delta = 1; *onSelf = TRUE; return TRUE; }
++    if (e >= EFFECT_ATTACK_DOWN && e <= EFFECT_EVASION_DOWN)
++        { *stat = STAT_ATK + (e - EFFECT_ATTACK_DOWN); *delta = -1; *onSelf = FALSE; return TRUE; }
++    if (e >= EFFECT_ATTACK_UP_2 && e <= EFFECT_EVASION_UP_2)
++        { *stat = STAT_ATK + (e - EFFECT_ATTACK_UP_2); *delta = 2; *onSelf = TRUE; return TRUE; }
++    if (e >= EFFECT_ATTACK_DOWN_2 && e <= EFFECT_EVASION_DOWN_2)
++        { *stat = STAT_ATK + (e - EFFECT_ATTACK_DOWN_2); *delta = -2; *onSelf = FALSE; return TRUE; }
++    return FALSE;
++}
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index ce620ce..e6d4744 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -91,7 +91,7 @@ static void Autopilot(void)
+             pressed = L_BUTTON;
+         else if (d.playerThreatened)
+             held = (d.py > 0) ? DPAD_UP : DPAD_DOWN;
+-        else if (d.queueCount > 0 && (d.nextShape == SHAPE_BARRIER || d.nextShape == SHAPE_LOCKON) && !d.playerLocked)
++        else if (d.queueCount > 0 && (d.nextShape == SHAPE_BARRIER || d.nextShape == SHAPE_LOCKON || d.nextShape == SHAPE_STATUS) && !d.playerLocked)
+             pressed = A_BUTTON; // position doesn't matter
+         else if (d.py != d.ey)
+             held = (d.py < d.ey) ? DPAD_DOWN : DPAD_UP;
+-- 
+2.43.0
+
