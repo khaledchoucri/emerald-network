@@ -18,6 +18,7 @@ need git  "sudo apt install git"
 need make "sudo apt install build-essential"
 need gcc  "sudo apt install build-essential"
 need pkg-config "sudo apt install pkg-config"
+need python3 "sudo apt install python3"
 pkg-config --exists libpng || { echo "Missing libpng. sudo apt install libpng-dev"; exit 1; }
 case "$TARGET" in
   linux)   pkg-config --exists sdl2 || { echo "Missing SDL2. sudo apt install libsdl2-dev"; exit 1; } ;;
@@ -45,7 +46,12 @@ for p in "$PROJECT_DIR"/poc/patches/*.patch; do
   git -c user.name=pkbn -c user.email=pkbn@localhost am -q "$p"
 done
 
-# 3. Build
+# 3. BN6 battle effect sprites: extracted from upstream/bn6f into the host on every build.
+#    They are never committed (CLAUDE.md rule 6); include/pkbn/bn6_gfx_data.h is gitignored by our patches.
+echo "==> Extracting BN6 effect sprites from upstream/bn6f"
+python3 "$PROJECT_DIR/tools/gen_bn6_gfx.py" "$PROJECT_DIR/upstream/bn6f" "$HOST_DIR/include/pkbn/bn6_gfx_data.h"
+
+# 4. Build
 if [ "$TARGET" = linux ]; then
   echo "==> Building Linux binary (-j$JOBS)"
   make linux -j"$JOBS"
