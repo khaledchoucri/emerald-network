@@ -1,6 +1,7 @@
 """Curated chip-code lanes for every Gen 3 move (source of truth).
 
-Format per move:  "Lr Lr ... [*]"  where L = lane letter, r = role:
+Format per move:  "Lr Lr ... [*]"  where L = lane letter, r = role. Token order is copy order:
+copy k of a chip gets the k-th token (wrapping), so put * first to make a single-copy move a wildcard.
   s = setup   (prepares the lane's plan: weather, stat drops/boosts, status, trapping, aiming)
   p = payoff  (cashes in the plan: the hit you want to land after the setup)
   x = link    (neither; keeps a chain going / bridges two lanes)
@@ -258,7 +259,8 @@ MOVES = {
  'HIDDEN_POWER': '*',
  'CROSS_CHOP':   'Kp',
  'TWISTER':      'Wp Rx *',      # review: W R * (leaves the old Dragon lane)
- 'RAIN_DANCE':   'Rs Cs Ds',     # a Dance (review: D = all Dance moves); exception: PA STORM CALLER
+ 'RAIN_DANCE':   '* Rs Cs Ds',   # a Dance (review: D = all Dance moves). Its ONE copy (5 PP) is * so it can open
+                                 # both TSUNAMI (R) and STORM CALLER (C); letter order = copy order
  'SUNNY_DAY':    'Ss',
  'CRUNCH':       'Np Lp',
  'PSYCH_UP':     'Us *',

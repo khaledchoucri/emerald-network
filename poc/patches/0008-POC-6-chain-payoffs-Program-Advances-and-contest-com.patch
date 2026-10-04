@@ -1,0 +1,1094 @@
+From 390fc223f8722dfac090bf74b25f422e21b8d401 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Sun, 4 Oct 2026 21:16:24 +0300
+Subject: [PATCH] POC-6: chain payoffs - Program Advances and contest-combo
+ rewards
+
+- 19 Program Advances: three recipe chips, consecutive and in order in one Custom selection,
+  become one new move when the Custom closes (recipes: tools/lanes_curated.py; how each plays:
+  tools/attacks_curated.py PA_EFFECTS -> move_table.c). The payoff chip's Pokemon performs it
+  (benched ones switch in); each recipe chip spends its PP.
+- New kind SWEEP (Mega Solar Beam): the enemy area is marked, then swept row by row.
+- PA extras: forced crits, 100% status, drain / party heal, cracked or poison panels left behind.
+- Contest combos (Emerald AreMovesContestCombo) between consecutive chips of one chain pay off:
+  x1.5 damage, side effect always happens, and the follow-up's type changes the target's panel
+  (cracked / poison / grass / ice / holy). PKBN_COMBO=dmg,effect,panel selects the rewards.
+- BN6 ice panel: non-Water Pokemon slide.
+- Self-test helpers: PKBN_NO_SHUFFLE, PKBN_TEST_PICKS.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/folder.h        |   2 +
+ include/pkbn/grid_internal.h |  23 ++++
+ include/pkbn/move_table.h    |  27 +++++
+ src/pkbn/folder.c            |   7 ++
+ src/pkbn/grid_battle.c       | 179 ++++++++++++++++++++++++++++++--
+ src/pkbn/grid_draw.c         |  22 +++-
+ src/pkbn/grid_field.c        |  23 ++++
+ src/pkbn/grid_moves.c        | 196 +++++++++++++++++++++++++++++++----
+ src/pkbn/move_table.c        |  28 ++++-
+ src/pkbn/selftest.c          |  37 +++++++
+ 10 files changed, 517 insertions(+), 27 deletions(-)
+
+diff --git a/include/pkbn/folder.h b/include/pkbn/folder.h
+index cc16981..9b582cc 100644
+--- a/include/pkbn/folder.h
++++ b/include/pkbn/folder.h
+@@ -44,6 +44,8 @@ struct Folder
+ void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party, u8 partyCount);
+ bool8 PkbnFolder_Draw(struct Folder *folder, u8 *outIdx);
+ void PkbnFolder_Discard(struct Folder *folder, u8 idx);
++// Self-tests: make the draw order the folder order (no shuffle).
++void PkbnFolder_OrderPile(struct Folder *folder);
+ bool8 PkbnFolder_MoveIsChip(u16 move);
+ char PkbnFolder_LetterChar(u8 letter);
+ 
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 4a8db2d..be4523a 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -12,6 +12,7 @@
+ 
+ #ifdef PORTABLE
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ #endif
+ #include "global.h"
+@@ -66,6 +67,7 @@ enum
+     PANEL_POISON,   // 4: drains HP while you stand on it (object_panel_setPoison, sub_801A186)
+     PANEL_HOLY,     // 5: halves damage taken on it (object_calculateFinalDamage1, object.s:4811)
+     PANEL_GRASS,    // 6: heals Wood-element objects (sub_801A186) -> here: Grass types
++    PANEL_ICE,      // 7: non-Aqua objects keep sliding (asm00_2.s:16535) -> here: non-Water types
+ };
+ 
+ struct Fighter
+@@ -114,6 +116,7 @@ struct Fighter
+     u32 lastHitFrame;
+     u16 lastPhysDamage;
+     u8 typeOverride;     // Conversion
++    s8 slideDx, slideDy; // sliding on ice
+     u16 icon[2][32 * 32];
+     char name[POKEMON_NAME_LENGTH + 1];
+ };
+@@ -149,6 +152,9 @@ struct Attack
+     u8 bounces;
+     bool8 hitDone;           // single-hit projectiles stop after a hit
+     bool8 hitAnything;
++    u8 pa;                   // Program Advance index + 1 (0 = a normal move)
++    bool8 combo;             // follow-up of an Emerald contest combo (chain payoff)
++    bool8 paLanded;          // PAF_HITONCE: already hit
+     u16 powerOverride;
+     u8 typeOverride;
+     u8 cells[GRID_ROWS][GRID_COLS];  // panels threatened right now (telegraph / impact)
+@@ -205,8 +211,23 @@ struct GridBattle
+     u16 msgTimer;
+     char banner[40];
+     u8 outcome;
++    // chain payoffs
++    u16 chainPrev;             // last move used from this Custom's chain (contest combos)
++    bool8 nextCombo;           // the next Moves_Use is a combo follow-up
++    u8 comboMask;              // COMBO_* rewards switched on (PKBN_COMBO)
++    struct { u8 pa; u8 chips[3]; } paQueue[2];
++    u8 paCount;
++    char paPreview[32];
++    u8 tsPA;                   // time-stop bench entry for a Program Advance (index + 1)
++    char flashText[48];        // "COMBO!" / "PROGRAM ADVANCE!" call-out
++    u16 flashTimer;
+ };
+ 
++#define QUEUE_PA_BASE 0xC0     // queue entries QUEUE_PA_BASE + k = sB.paQueue[k]
++#define COMBO_DMG    (1 << 0)  // follow-up does x1.5
++#define COMBO_EFFECT (1 << 1)  // follow-up's side effect always happens
++#define COMBO_PANEL  (1 << 2)  // follow-up changes the target's panel by type
++
+ enum { INVULN_NONE, INVULN_AIR, INVULN_UNDERGROUND, INVULN_UNDERWATER };
+ enum { PH_CHARGE, PH_WAIT, PH_TRAVEL, PH_GAP, PH_UNDERGROUND }; // struct Attack phases
+ 
+@@ -233,6 +254,8 @@ void Moves_ApplyBuster(u8 side);
+ s32 Moves_EffectiveSpeed(const struct Fighter *f);
+ u8 Moves_KindOf(u16 move);
+ bool8 Moves_IsPositionFree(u8 kind);
++void Moves_UsePA(u8 side, u8 paIndex, const struct BattlePokemon *user, const char *userName, u8 userSlot);
++void Moves_ComboPanel(u8 type, s8 x, s8 y);
+ 
+ // grid_field.c
+ void Field_Init(void);
+diff --git a/include/pkbn/move_table.h b/include/pkbn/move_table.h
+index c334a15..c958965 100644
+--- a/include/pkbn/move_table.h
++++ b/include/pkbn/move_table.h
+@@ -28,6 +28,7 @@ enum
+     GK_AIRHOCKEY, // A puck that flies diagonally and bounces off the walls. [AirHocky (0x26) "Bounce the puck off walls"]
+     GK_BALL, // A slow ball down your row. Low-accuracy moves fly slower, so they are easy to dodge. [Thunder (0x1F) "Pralyzing electric attack!" (slow ball); review: low accuracy = slow projectile]
+     GK_LOCKON, // Locks onto the target, then a hit that can't be dodged. [MachGun1 (0x29) "Fire 9sts at row w/ clst enmy"]
++    GK_SWEEP, // Program Advance only: a beam sweeps the enemy area row by row. [design (Mega Solar Beam)]
+     GK_BARRIER, // Absorbs the next hit (Gen 3 Protect odds). [Barrier (0x15/4) "Nullifies 10 HP of damage"]
+     GK_STATS, // Stat stages; always lands, ignores Barrier and dodging. [design rule (POC-3)]
+     GK_STATUS, // A status effect that always lands wherever the target stands. [review note on Thunder Wave]
+@@ -70,6 +71,32 @@ struct PkbnMoveInfo
+ };
+ 
+ extern const struct PkbnMoveInfo gPkbnMoveInfo[];
++
++// Program Advances (tools/lanes_curated.py PROGRAM_ADVANCES + tools/attacks_curated.py PA_EFFECTS)
++#define PKBN_PA_COUNT 19
++#define PA_CONFUSE       0xFFFFFFFF // pseudo-status: confusion
++#define PAF_CRIT         (1 << 0)
++#define PAF_PARTYHEAL    (1 << 1)
++#define PAF_HITONCE      (1 << 2)
++#define PAF_NOFAINT      (1 << 3)
++#define PAF_SPEEDDOWN    (1 << 4)
++#define PAF_ACCDOWN      (1 << 5)
++#define PAF_FAST         (1 << 6)
++#define PAF_PANEL_CRACK  (1 << 7)
++#define PAF_PANEL_POISON (1 << 8)
++struct PkbnProgramAdvance
++{
++    const char *name;
++    u16 recipe[3];   // in order, consecutive in one Custom selection
++    u8 kind;         // GK_*
++    u8 type;
++    u16 power;
++    u8 rows, hits;
++    u16 flags;       // PAF_*
++    u32 status;      // STATUS1_* (or PA_CONFUSE) applied on hit, 100%
++    u8 drain;        // % of damage healed
++};
++extern const struct PkbnProgramAdvance gPkbnProgramAdvances[];
+ extern const char *const gPkbnKindNames[];
+ 
+ #endif // GUARD_PKBN_MOVE_TABLE_H
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index 797edd4..9d10bcb 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -110,6 +110,13 @@ bool8 PkbnFolder_Draw(struct Folder *folder, u8 *outIdx)
+     return TRUE;
+ }
+ 
++void PkbnFolder_OrderPile(struct Folder *folder)
++{
++    s32 i;
++    for (i = 0; i < folder->pileCount; i++)
++        folder->pile[i] = folder->pileCount - 1 - i; // drawn from the end
++}
++
+ void PkbnFolder_Discard(struct Folder *folder, u8 idx)
+ {
+     if (folder->discardCount < FOLDER_MAX)
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 756dfff..ff58ca0 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -20,6 +20,7 @@
+ #include "random.h"
+ #include "sound.h"
+ #include "data.h"
++#include "contest_effect.h"
+ #include "constants/abilities.h"
+ #include "constants/battle_move_effects.h"
+ #include "constants/moves.h"
+@@ -42,6 +43,13 @@ void SetMsg(const char *text, u16 frames)
+     sB.msgTimer = frames;
+ }
+ 
++static void Flash(const char *text, u16 frames)
++{
++    strncpy(sB.flashText, text, sizeof(sB.flashText) - 1);
++    sB.flashText[sizeof(sB.flashText) - 1] = '\0';
++    sB.flashTimer = frames;
++}
++
+ bool8 InGrid(s32 c, s32 r)
+ {
+     return c >= 0 && c < GRID_COLS && r >= 0 && r < GRID_ROWS;
+@@ -226,6 +234,9 @@ void BeginAssist(void)
+     BeginTimeStop(TS_ASSIST, i, FALSE);
+ }
+ 
++static void ChainUse(u16 move, u8 slot);
++static void SpendPAChips(u8 k);
++
+ static void EndTimeStop(void)
+ {
+     sB.state = ST_FIGHT;
+@@ -247,9 +258,17 @@ static void EndTimeStop(void)
+         struct Fighter *p = &sB.f[SIDE_PLAYER];
+         DoSwitch(sB.tsTarget, FALSE);
+         p->iframes = 0;
++        if (sB.tsPA)
++        {
++            SpendPAChips(sB.tsSlot);
++            sB.chainPrev = gPkbnProgramAdvances[sB.tsPA - 1].recipe[2];
++            Moves_UsePA(SIDE_PLAYER, sB.tsPA - 1, &p->bm, p->name, sB.active);
++            sB.tsPA = 0;
++            break;
++        }
+         if (p->bm.pp[sB.tsSlot] > 0)
+             p->bm.pp[sB.tsSlot]--;
+-        Moves_Use(SIDE_PLAYER, sB.tsMove, sB.tsSlot, &p->bm, p->name, sB.active);
++        ChainUse(sB.tsMove, sB.tsSlot);
+         break;
+     }
+     }
+@@ -309,9 +328,11 @@ static void OpenCustom(void)
+     s32 i;
+     // Chips still queued from last turn are lost (BN).
+     for (i = 0; i < sB.queueCount; i++)
+-        if (sB.queue[i] != FOLDER_QUEUE_WILD)
+-            PkbnFolder_Discard(&sB.folder, sB.queue[i]);
++        if (sB.queue[i] < QUEUE_PA_BASE)
++            PkbnFolder_Discard(&sB.folder, sB.queue[i]); // (PA chips were discarded when the PA formed)
+     sB.queueCount = 0;
++    sB.paCount = 0;
++    sB.chainPrev = MOVE_NONE; // a chain lives inside one Custom
+     // Wish (review): heals whoever is in when the next Custom opens.
+     for (i = 0; i < 2; i++)
+         if (sB.wishHeal[i])
+@@ -361,6 +382,15 @@ static void Begin(void)
+     for (i = 0; i < sB.partyCount; i++)
+         partyData[i] = sB.party[i].bm;
+     PkbnFolder_Build(&sB.folder, partyData, sB.partyCount);
++    if (getenv("PKBN_NO_SHUFFLE") != NULL)
++        PkbnFolder_OrderPile(&sB.folder); // self-tests: draw in folder order
++    // Chain payoffs that are on (review round 1 kept these three). PKBN_COMBO=dmg,effect,panel or none.
++    sB.comboMask = COMBO_DMG | COMBO_EFFECT | COMBO_PANEL;
++    if (getenv("PKBN_COMBO") != NULL)
++    {
++        const char *c = getenv("PKBN_COMBO");
++        sB.comboMask = (strstr(c, "dmg") ? COMBO_DMG : 0) | (strstr(c, "effect") ? COMBO_EFFECT : 0) | (strstr(c, "panel") ? COMBO_PANEL : 0);
++    }
+     PKBN_LOG("folder: %u chips from %u Pokemon (environment %u)", sB.folder.count, sB.partyCount, gBattleEnvironment);
+     for (i = 0; i < sB.folder.count; i++)
+     {
+@@ -460,6 +490,67 @@ bool8 PkbnGrid_HandSelectable(u8 pos)
+                                 pos < sB.handCount ? sB.hand[pos] : FOLDER_QUEUE_WILD, sB.active, alive, party);
+ }
+ 
++// ---- Program Advances ---------------------------------------------------------------------
++// Three chips whose moves are a recipe, consecutive and in order in one Custom selection, become
++// one brand-new move (design 03/04; recipes in tools/lanes_curated.py). BN6 forms a PA the same way
++// at the Custom screen; its recipe table isn't decoded in bn6f yet, so the trigger rule is ours.
++static s8 FindPA(const u8 *q, u8 n, u8 *at)
++{
++    s32 i, p;
++    for (i = 0; i + 2 < n; i++)
++    {
++        if (q[i] >= QUEUE_PA_BASE || q[i + 1] >= QUEUE_PA_BASE || q[i + 2] >= QUEUE_PA_BASE)
++            continue;
++        for (p = 0; p < PKBN_PA_COUNT; p++)
++        {
++            const u16 *r = gPkbnProgramAdvances[p].recipe;
++            if (sB.folder.chips[q[i]].move == r[0] && sB.folder.chips[q[i + 1]].move == r[1]
++             && sB.folder.chips[q[i + 2]].move == r[2])
++            {
++                *at = i;
++                return p;
++            }
++        }
++    }
++    return -1;
++}
++
++static void UpdatePAPreview(void)
++{
++    u8 at;
++    s8 p = FindPA(sB.queue, sB.queueCount, &at);
++    if (p >= 0)
++        snprintf(sB.paPreview, sizeof(sB.paPreview), "%s", gPkbnProgramAdvances[p].name);
++    else
++        sB.paPreview[0] = '\0';
++}
++
++static void FormProgramAdvances(void)
++{
++    u8 at;
++    s8 p;
++    while (sB.paCount < ARRAY_COUNT(sB.paQueue) && (p = FindPA(sB.queue, sB.queueCount, &at)) >= 0)
++    {
++        s32 i;
++        u8 k = sB.paCount++;
++        char line[40];
++        sB.paQueue[k].pa = p;
++        for (i = 0; i < 3; i++)
++        {
++            sB.paQueue[k].chips[i] = sB.queue[at + i];
++            PkbnFolder_Discard(&sB.folder, sB.queue[at + i]);
++        }
++        sB.queue[at] = QUEUE_PA_BASE + k;
++        for (i = at + 1; i + 2 < sB.queueCount; i++)
++            sB.queue[i] = sB.queue[i + 2];
++        sB.queueCount -= 2;
++        snprintf(line, sizeof(line), "PROGRAM ADVANCE! %s", gPkbnProgramAdvances[p].name);
++        Flash(line, 120);
++        PlaySE(SE_EXP_MAX);
++        PKBN_LOG("Program Advance formed: %s", gPkbnProgramAdvances[p].name);
++    }
++}
++
+ static void UpdateCustom(void)
+ {
+     u16 keys = gMain.newKeys;
+@@ -490,6 +581,7 @@ static void UpdateCustom(void)
+                 sB.queue[sB.queueCount++] = FOLDER_QUEUE_WILD;
+             }
+             PlaySE(SE_SELECT);
++            UpdatePAPreview();
+         }
+         else
+         {
+@@ -505,6 +597,7 @@ static void UpdateCustom(void)
+         for (i = 0; i < sB.handCount; i++)
+             if (sB.hand[i] == last)
+                 sB.picked[i] = FALSE;
++        UpdatePAPreview();
+     }
+     if (keys & (START_BUTTON | R_BUTTON))
+     {
+@@ -518,6 +611,8 @@ static void UpdateCustom(void)
+         for (i = 0; i < HAND_SIZE; i++)
+             sB.picked[i] = FALSE;
+         sB.wildPicked = FALSE;
++        FormProgramAdvances();
++        sB.paPreview[0] = '\0';
+         sB.f[SIDE_PLAYER].recharge = FALSE; // recharged
+         sB.gauge = 0;
+         sB.state = ST_FIGHT;
+@@ -545,6 +640,52 @@ static bool8 TryTeleportEscape(u8 side, u16 move)
+     return TRUE;
+ }
+ 
++// Use a move from this Custom's chain. A contest combo with the previous chip pays off (design 03 §4).
++static void ChainUse(u16 move, u8 slot)
++{
++    struct Fighter *p = &sB.f[SIDE_PLAYER];
++    if (sB.chainPrev != MOVE_NONE && AreMovesContestCombo(sB.chainPrev, move))
++    {
++        char a[16], b[16], line[40];
++        Pkbn_GameStringToAscii(a, gMoveNames[sB.chainPrev], sizeof(a));
++        Pkbn_GameStringToAscii(b, gMoveNames[move], sizeof(b));
++        snprintf(line, sizeof(line), "COMBO! %s>%s", a, b);
++        Flash(line, 90);
++        PlaySE(SE_SUCCESS);
++        sB.nextCombo = TRUE; // read by Moves_Use
++        PKBN_LOG("contest combo: %s -> %s (rewards 0x%x)", a, b, sB.comboMask);
++    }
++    sB.chainPrev = move;
++    if (!TryTeleportEscape(SIDE_PLAYER, move))
++        Moves_Use(SIDE_PLAYER, move, slot, &p->bm, p->name, sB.active);
++    sB.nextCombo = FALSE;
++}
++
++static bool8 PAChipsHavePP(u8 k)
++{
++    s32 i;
++    for (i = 0; i < 3; i++)
++    {
++        const struct FolderChip *c = &sB.folder.chips[sB.paQueue[k].chips[i]];
++        const struct BattlePokemon *b = (c->owner == sB.active) ? &sB.f[SIDE_PLAYER].bm : &sB.party[c->owner].bm;
++        if (b->pp[c->slot] == 0)
++            return FALSE;
++    }
++    return TRUE;
++}
++
++static void SpendPAChips(u8 k)
++{
++    s32 i;
++    for (i = 0; i < 3; i++)
++    {
++        const struct FolderChip *c = &sB.folder.chips[sB.paQueue[k].chips[i]];
++        struct BattlePokemon *b = (c->owner == sB.active) ? &sB.f[SIDE_PLAYER].bm : &sB.party[c->owner].bm;
++        if (b->pp[c->slot])
++            b->pp[c->slot]--;
++    }
++}
++
+ static void UseNextChip(void)
+ {
+     u8 idx = sB.queue[0];
+@@ -561,6 +702,28 @@ static void UseNextChip(void)
+         OpenPicker(PICK_WILD);
+         return;
+     }
++    if (idx >= QUEUE_PA_BASE)
++    {
++        u8 k = idx - QUEUE_PA_BASE;
++        u8 owner = sB.folder.chips[sB.paQueue[k].chips[2]].owner; // the payoff chip's Pokémon performs it
++        if (!PartyAlive(owner) || !PAChipsHavePP(k))
++        {
++            SetMsg("THE PROGRAM ADVANCE FIZZLED", 50);
++            PlaySE(SE_FAILURE);
++            return;
++        }
++        if (owner != sB.active)
++        {
++            sB.tsPA = sB.paQueue[k].pa + 1;
++            sB.tsSlot = k;
++            BeginTimeStop(TS_BENCH, owner, FALSE);
++            return;
++        }
++        SpendPAChips(k);
++        sB.chainPrev = gPkbnProgramAdvances[sB.paQueue[k].pa].recipe[2];
++        Moves_UsePA(SIDE_PLAYER, sB.paQueue[k].pa, &p->bm, p->name, sB.active);
++        return;
++    }
+     PkbnFolder_Discard(&sB.folder, idx);
+     ch = &sB.folder.chips[idx];
+ 
+@@ -575,6 +738,7 @@ static void UseNextChip(void)
+         }
+         sB.tsMove = ch->move;
+         sB.tsSlot = ch->slot;
++        sB.tsPA = 0;
+         BeginTimeStop(TS_BENCH, ch->owner, FALSE);
+         return;
+     }
+@@ -594,8 +758,7 @@ static void UseNextChip(void)
+         BeginAssist();
+         break;
+     default:
+-        if (!TryTeleportEscape(SIDE_PLAYER, ch->move))
+-            Moves_Use(SIDE_PLAYER, ch->move, ch->slot, &p->bm, p->name, sB.active);
++        ChainUse(ch->move, ch->slot);
+         break;
+     }
+ }
+@@ -658,7 +821,7 @@ static void UpdatePlayer(void)
+     if (BusyOrDisabled(SIDE_PLAYER))
+         return;
+ 
+-    if (p->moveCd == 0 && !p->hold)
++    if (p->moveCd == 0 && !p->hold && !p->slideDx && !p->slideDy)
+     {
+         s8 dx = 0, dy = 0;
+         if (held & DPAD_UP)         dy = -1;
+@@ -938,6 +1101,8 @@ void CB2_PkbnGridBattle(void)
+     sB.frame++;
+     if (sB.msgTimer)
+         sB.msgTimer--;
++    if (sB.flashTimer && sB.state != ST_CUSTOM)
++        sB.flashTimer--;
+ 
+     switch (sB.state)
+     {
+@@ -988,6 +1153,8 @@ void PkbnGrid_GetDebug(struct PkbnGridDebug *d)
+     {
+         if (sB.queue[0] == FOLDER_QUEUE_WILD)
+             d->nextKind = GK_BATON; // position-independent
++        else if (sB.queue[0] >= QUEUE_PA_BASE)
++            d->nextKind = gPkbnProgramAdvances[sB.paQueue[sB.queue[0] - QUEUE_PA_BASE].pa].kind;
+         else
+         {
+             const struct FolderChip *ch = &sB.folder.chips[sB.queue[0]];
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index ae88280..a560ac0 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -33,6 +33,8 @@
+ #define COL_BALL      PKBN_RGB(31, 24, 31)
+ #define COL_WAVE      PKBN_RGB(20, 28, 31)
+ #define COL_GROUND    PKBN_RGB(24, 16, 6)
++#define COL_ICE       PKBN_RGB(22, 30, 31)
++#define COL_PA        PKBN_RGB(31, 12, 20)
+ 
+ static void PanelOrigin(s32 c, s32 r, s32 *x, s32 *y)
+ {
+@@ -121,6 +123,7 @@ static u16 PanelColor(s32 c, s32 r)
+     case PANEL_HOLY:   return COL_HOLY;
+     case PANEL_GRASS:  return COL_GRASS;
+     case PANEL_BROKEN: return COL_HOLE;
++    case PANEL_ICE:    return COL_ICE;
+     }
+     return c < PLAYER_COLS ? COL_PANEL_P : COL_PANEL_E;
+ }
+@@ -142,7 +145,8 @@ static void DrawGrid(u16 *fb)
+             for (c = 0; c < GRID_COLS; c++)
+                 if (a->cells[r][c])
+                 {
+-                    if (a->side == SIDE_ENEMY || a->kind == GK_FIREHIT || a->kind == GK_GOLEMHIT || a->kind == GK_METEORS)
++                    if (a->side == SIDE_ENEMY || a->kind == GK_FIREHIT || a->kind == GK_GOLEMHIT || a->kind == GK_METEORS
++                     || a->kind == GK_SWEEP || a->kind == GK_FIELD)
+                         warn[r][c] = 1; // warnings show for both sides' "appears on the target" kinds
+                     else
+                         shadow[r][c] = 1;
+@@ -322,6 +326,11 @@ static void DrawBottomHud(u16 *fb)
+     {
+         if (sB.queue[0] == FOLDER_QUEUE_WILD)
+             snprintf(line, sizeof(line), "SWITCH>ANY  *");
++        else if (sB.queue[0] >= QUEUE_PA_BASE)
++        {
++            const struct PkbnProgramAdvance *pa = &gPkbnProgramAdvances[sB.paQueue[sB.queue[0] - QUEUE_PA_BASE].pa];
++            snprintf(line, sizeof(line), "PA: %s  %s %u", pa->name, gPkbnKindNames[pa->kind], pa->power);
++        }
+         else
+         {
+             const struct FolderChip *ch = &sB.folder.chips[sB.queue[0]];
+@@ -393,6 +402,11 @@ static void DrawCustomScreen(u16 *fb)
+         }
+         Pkbn_DrawText(fb, 228 - Pkbn_TextWidth(code, 1), y, code, ok || picked ? COL_CODE : COL_DIM, 1);
+     }
++    if (sB.paPreview[0] && (sB.frame & 8))
++    {
++        snprintf(line, sizeof(line), "PROGRAM ADVANCE: %s!", sB.paPreview);
++        Pkbn_DrawText(fb, 10, 110, line, COL_PA, 1);
++    }
+     Pkbn_DrawText(fb, 10, 118, "A:ADD  B:UNDO  SAME LETTER OR SAME MOVE", COL_DIM, 1);
+     Pkbn_DrawText(fb, 10, 126, "GREEN = BENCHED, SWITCHES IN TO USE IT", COL_HP, 1);
+     Pkbn_DrawText(fb, 10, 134, "START:FIGHT", COL_GAUGE_FULL, 1);
+@@ -472,6 +486,12 @@ void Draw_Overlay(u16 *fb)
+         bw = Pkbn_TextWidth(sB.msg, 1);
+         Pkbn_DrawText(fb, (DISPLAY_WIDTH - bw) / 2, 48, sB.msg, COL_GAUGE_FULL, 1);
+     }
++    if (sB.flashTimer && sB.state != ST_CUSTOM && sB.state != ST_TIMESTOP)
++    {
++        bw = Pkbn_TextWidth(sB.flashText, 1);
++        Pkbn_FillRect(fb, (DISPLAY_WIDTH - bw) / 2 - 3, 38, bw + 6, 9, COL_BOX);
++        Pkbn_DrawText(fb, (DISPLAY_WIDTH - bw) / 2, 40, sB.flashText, (sB.frame & 4) ? COL_PA : COL_TEXT, 1);
++    }
+     if (sB.state == ST_INTRO || sB.state == ST_END)
+     {
+         bw = Pkbn_TextWidth(sB.banner, 2);
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index 27e0b76..f2ca18a 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -55,6 +55,7 @@ void Field_SetPanel(s8 x, s8 y, u8 type)
+     case PANEL_POISON:
+     case PANEL_HOLY:
+     case PANEL_GRASS:
++    case PANEL_ICE:
+         sB.panelTimer[y][x] = PANEL_EFFECT_FRAMES;
+         break;
+     default:
+@@ -81,6 +82,17 @@ void Field_Step(u8 side, s8 nx, s8 ny)
+         Field_SetPanel(f->x, f->y, PANEL_BROKEN);
+         PlaySE(SE_BREAKABLE_DOOR);
+     }
++    // BN6 ice panel: anything that isn't Aqua keeps sliding the way it came (asm00_2.s:16535);
++    // here Water types don't slide.
++    if (sB.panel[ny][nx] == PANEL_ICE && !HasType(f, TYPE_WATER) && (nx != f->x || ny != f->y))
++    {
++        f->slideDx = nx - f->x;
++        f->slideDy = ny - f->y;
++    }
++    else
++    {
++        f->slideDx = f->slideDy = 0;
++    }
+     f->x = nx;
+     f->y = ny;
+ }
+@@ -290,6 +302,7 @@ void Field_ResetFighterConditions(struct Fighter *f)
+     f->bideFrames = f->bideDamage = 0;
+     f->lastPhysDamage = 0;
+     f->typeOverride = 0;
++    f->slideDx = f->slideDy = 0;
+ }
+ 
+ // ---- Per-frame -------------------------------------------------------------------------------
+@@ -316,6 +329,16 @@ void Field_Update(void)
+         TickFighterTimers(f);
+         if (f->bm.hp == 0)
+             continue;
++        if ((f->slideDx || f->slideDy) && f->moveCd == 0)
++        {
++            if (!f->hold && Field_CanStand(s, f->x + f->slideDx, f->y + f->slideDy))
++            {
++                Field_Step(s, f->x + f->slideDx, f->y + f->slideDy);
++                f->moveCd = MOVE_COOLDOWN;
++            }
++            else
++                f->slideDx = f->slideDy = 0;
++        }
+         // BN6 poison panel: 1 damage every 7 frames while standing on it (sub_801A186).
+         // Pokémon HP is far lower than a Navi's, so one "damage" here is maxHP/128 (TUNE).
+         if (sB.panel[f->y][f->x] == PANEL_POISON && !f->invuln
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 3196fdc..04acf77 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -97,7 +97,7 @@ bool8 Moves_IsPositionFree(u8 kind)
+     {
+     case GK_FIREHIT: case GK_GOLEMHIT: case GK_METEORS: case GK_DIG: case GK_FIELD: case GK_LOCKON:
+     case GK_BARRIER: case GK_STATS: case GK_STATUS: case GK_PANEL: case GK_SELF: case GK_WEATHER:
+-    case GK_BATON: case GK_ASSIST: case GK_CALL: case GK_NOTHING: case GK_NONE: case GK_AIRHOCKEY:
++    case GK_BATON: case GK_ASSIST: case GK_CALL: case GK_NOTHING: case GK_NONE: case GK_AIRHOCKEY: case GK_SWEEP:
+         return TRUE;
+     }
+     return FALSE;
+@@ -119,6 +119,17 @@ static bool8 FighterHasType(const struct Fighter *f, u8 type)
+     return f->bm.types[0] == type || f->bm.types[1] == type;
+ }
+ 
++// A Program Advance is a brand-new move: none of its recipe moves' Gen 3 effects apply.
++static u8 EffectOf(const struct Attack *a)
++{
++    return a->pa ? EFFECT_HIT : gBattleMoves[a->move].effect;
++}
++
++static const struct PkbnProgramAdvance *PAOf(const struct Attack *a)
++{
++    return a->pa ? &gPkbnProgramAdvances[a->pa - 1] : NULL;
++}
++
+ s32 Moves_EffectiveSpeed(const struct Fighter *f)
+ {
+     u8 st = f->bm.statStages[STAT_SPEED];
+@@ -273,7 +284,7 @@ static void PowerAndType(struct Attack *a, u8 defSide, u16 *power, u8 *type)
+     if (a->typeOverride)
+         *type = a->typeOverride - 1;
+ 
+-    switch (m->effect)
++    switch (EffectOf(a))
+     {
+     case EFFECT_FLAIL:
+     {
+@@ -395,7 +406,7 @@ static s32 CalcHitDamage(struct Attack *a, u8 defSide, u16 *eff, bool8 *crit)
+     PowerAndType(a, defSide, &power, &type);
+ 
+     // fixed-damage moves still respect type immunity (Gen 3 typecalc2)
+-    switch (m->effect)
++    switch (EffectOf(a))
+     {
+     case EFFECT_LEVEL_DAMAGE:
+     case EFFECT_DRAGON_RAGE:
+@@ -466,13 +477,14 @@ static s32 CalcHitDamage(struct Attack *a, u8 defSide, u16 *eff, bool8 *crit)
+ 
+     // Cmd_critcalc
+     {
++        u8 e = EffectOf(a);
+         u16 c = 2 * (a->info.flags & 0x80 ? 1 : 0) // focus energy captured at launch (bit 7)
+-              + (m->effect == EFFECT_HIGH_CRITICAL) + (m->effect == EFFECT_SKY_ATTACK)
+-              + (m->effect == EFFECT_BLAZE_KICK) + (m->effect == EFFECT_POISON_TAIL);
++              + (e == EFFECT_HIGH_CRITICAL) + (e == EFFECT_SKY_ATTACK)
++              + (e == EFFECT_BLAZE_KICK) + (e == EFFECT_POISON_TAIL);
+         if (c >= ARRAY_COUNT(sCritChance))
+             c = ARRAY_COUNT(sCritChance) - 1;
+         gCritMultiplier = (def.ability != ABILITY_BATTLE_ARMOR && def.ability != ABILITY_SHELL_ARMOR
+-                           && !(Random() % sCritChance[c])) ? 2 : 1;
++                           && ((a->pa && (PAOf(a)->flags & PAF_CRIT)) || !(Random() % sCritChance[c]))) ? 2 : 1;
+         *crit = gCritMultiplier == 2;
+     }
+ 
+@@ -524,6 +536,10 @@ static s32 CalcHitDamage(struct Attack *a, u8 defSide, u16 *eff, bool8 *crit)
+         if (dmg == 0)
+             dmg = 1;
+     }
++    // Chain payoff: an Emerald contest combo doubles appeal (contest.c:4489, comboAppealBonus);
++    // in battle we give half that: x1.5 (TUNE).
++    if (a->combo && (sB.comboMask & COMBO_DMG))
++        dmg = dmg * 15 / 10;
+     return dmg;
+ }
+ 
+@@ -545,9 +561,24 @@ static void SecondaryEffect(struct Attack *a, u8 defSide)
+     const struct BattleMove *m = &gBattleMoves[a->move];
+     struct Fighter *def = &sB.f[defSide];
+     u8 atkSide = defSide ^ 1;
+-    bool8 roll = m->secondaryEffectChance && (Random() % 100) < m->secondaryEffectChance;
++    // Chain payoff: a combo follow-up's side effect always happens (secondaryEffectChance -> 100%).
++    bool8 roll = m->secondaryEffectChance && ((a->combo && (sB.comboMask & COMBO_EFFECT)) || (Random() % 100) < m->secondaryEffectChance);
+     bool8 onTarget = def->bm.ability != ABILITY_SHIELD_DUST;
+ 
++    if (a->pa)
++    {
++        const struct PkbnProgramAdvance *pa = PAOf(a);
++        if (pa->status == PA_CONFUSE)
++            Field_TryConfuse(defSide, atkSide, a->move, FALSE);
++        else if (pa->status)
++            Field_TryStatus(defSide, atkSide, a->move, pa->status, FALSE);
++        if (pa->flags & PAF_SPEEDDOWN)
++            Field_ApplyStatStage(defSide, STAT_SPEED, -1, TRUE);
++        if (pa->flags & PAF_ACCDOWN)
++            Field_ApplyStatStage(defSide, STAT_ACC, -1, TRUE);
++        return;
++    }
++
+     switch (m->effect)
+     {
+     case EFFECT_BURN_HIT: case EFFECT_BLAZE_KICK: case EFFECT_THAW_HIT:
+@@ -677,8 +708,11 @@ static void ApplyHit(struct Attack *a, bool8 last)
+         }
+     }
+ 
++    if (a->pa && (PAOf(a)->flags & PAF_HITONCE) && a->paLanded)
++        return;
+     dmg = CalcHitDamage(a, defSide, &eff, &crit);
+     a->hitAnything = TRUE;
++    a->paLanded = TRUE;
+     if (dmg < 0)
+     {
+         SayFighter(def, "WASN'T AFFECTED!", 50);
+@@ -740,10 +774,26 @@ static void ApplyHit(struct Attack *a, bool8 last)
+              a->move, def->name, (int)dmg, eff, crit ? ", crit" : "", def->bm.hp, def->bm.maxHP);
+ 
+     // drain (Absorb family, Dream Eater): half the damage (Gen 3)
+-    if ((m->effect == EFFECT_ABSORB || m->effect == EFFECT_DREAM_EATER) && me)
++    if ((EffectOf(a) == EFFECT_ABSORB || EffectOf(a) == EFFECT_DREAM_EATER) && me)
+         Heal(me, dmg / 2 ? dmg / 2 : 1);
++    if (a->pa)
++    {
++        const struct PkbnProgramAdvance *pa = PAOf(a);
++        if (pa->drain && me)
++            Heal(me, dmg * pa->drain / 100 ? dmg * pa->drain / 100 : 1);
++        if ((pa->flags & PAF_PARTYHEAL) && a->side == SIDE_PLAYER)
++        {
++            s32 i, h = dmg / 2 ? dmg / 2 : 1;
++            for (i = 0; i < sB.partyCount; i++)
++                if (i != sB.active && sB.party[i].bm.hp)
++                    sB.party[i].bm.hp = (sB.party[i].bm.hp + h > sB.party[i].bm.maxHP) ? sB.party[i].bm.maxHP : sB.party[i].bm.hp + h;
++            SetMsg("THE WHOLE PARTY WAS HEALED!", 50);
++        }
++    }
++    if (a->combo && (sB.comboMask & COMBO_PANEL))
++        Moves_ComboPanel(a->typeOverride ? a->typeOverride - 1 : m->type, def->x, def->y);
+     // recoil (Gen 3: 1/4, Double-Edge family 1/3); Rock Head ignores it
+-    if (me && me->bm.ability != ABILITY_ROCK_HEAD)
++    if (me && !a->pa && me->bm.ability != ABILITY_ROCK_HEAD)
+     {
+         if (m->effect == EFFECT_RECOIL)
+             Moves_DamageFighter(a->side, dmg / 4 ? dmg / 4 : 1, "IS HIT WITH RECOIL!");
+@@ -954,31 +1004,44 @@ static void NextMeteor(struct Attack *a)
+     a->ty = y;
+     memset(a->cells, 0, sizeof(a->cells));
+     Mark(a->cells, x, y);
+-    a->timer = ScaleByAccuracy(METEOR_WARN, a->side, &a->user);
++    a->timer = ScaleByAccuracy(a->pa ? METEOR_WARN * 2 / 3 : METEOR_WARN, a->side, &a->user); // TUNE: a PA storm falls faster
++}
++
++// Mega Solar Beam: the beam sweeps the enemy area one row at a time (top, middle, bottom).
++static void NextSweepRow(struct Attack *a)
++{
++    // Rows not yet swept stay marked, so the only escape is into a row the beam has already passed.
++    s32 c, r;
++    memset(a->cells, 0, sizeof(a->cells));
++    for (r = a->hitIndex; r < GRID_ROWS; r++)
++        for (c = 0; c < GRID_COLS; c++)
++            if (a->side == SIDE_PLAYER ? c >= PLAYER_COLS : c < PLAYER_COLS)
++                a->cells[r][c] = 1;
++    a->timer = a->hitIndex == 0 ? 24 : 8; // TUNE: first warning, then the sweep
+ }
+ 
+ static void Finish(struct Attack *a)
+ {
+     struct Fighter *me = LiveUser(a);
+-    const struct BattleMove *m = &gBattleMoves[a->move];
++    u8 effect = EffectOf(a);
+     // Jump Kick / Hi Jump Kick crash if they hit nothing (Gen 3: half the damage they would have done)
+-    if (m->effect == EFFECT_RECOIL_IF_MISS && !a->hitAnything && me)
++    if (effect == EFFECT_RECOIL_IF_MISS && !a->hitAnything && me)
+     {
+         u16 eff; bool8 crit;
+         s32 d = CalcHitDamage(a, a->side ^ 1, &eff, &crit) / 2;
+         Moves_DamageFighter(a->side, d ? d : 1, "KEPT GOING AND CRASHED!");
+     }
+     // Thrash / Outrage / Petal Dance: confused afterwards (Gen 3 rampage end)
+-    if (m->effect == EFFECT_RAMPAGE && me)
++    if (effect == EFFECT_RAMPAGE && me)
+         Field_TryConfuse(a->side, a->side, a->move, FALSE);
+-    if (me && (m->effect == EFFECT_OVERHEAT))
++    if (me && (effect == EFFECT_OVERHEAT))
+         Field_ApplyStatStage(a->side, STAT_SPATK, -2, FALSE);
+-    if (me && m->effect == EFFECT_SUPERPOWER)
++    if (me && effect == EFFECT_SUPERPOWER)
+     {
+         Field_ApplyStatStage(a->side, STAT_ATK, -1, FALSE);
+         Field_ApplyStatStage(a->side, STAT_DEF, -1, FALSE);
+     }
+-    if (me && a->move == MOVE_FLY)
++    if (me && a->move == MOVE_FLY && !a->pa)
+         me->lockout = FLY_RECOVERY;
+     a->active = FALSE;
+ }
+@@ -1019,7 +1082,7 @@ static void Launch(struct Attack *a)
+         a->timer = FireHitWarn(a);
+         break;
+     case GK_METEORS:
+-        a->hitsLeft = 3; // TUNE: three rocks
++        a->hitsLeft = a->pa ? PAOf(a)->hits : 3; // TUNE: three rocks
+         NextMeteor(a);
+         break;
+     case GK_DIG:
+@@ -1035,7 +1098,11 @@ static void Launch(struct Attack *a)
+         break;
+     case GK_FIELD:
+         EnemyAreaCells(a->side, a->cells);
+-        a->timer = FIELD_WARN;
++        a->timer = (a->pa && (PAOf(a)->flags & PAF_FAST)) ? FIELD_WARN / 2 : FIELD_WARN;
++        break;
++    case GK_SWEEP:
++        a->hitsLeft = GRID_ROWS;
++        NextSweepRow(a);
+         break;
+     case GK_BOMB:
+         a->tx = a->ox + Facing(a->side) * GRENADE_RANGE;
+@@ -1151,6 +1218,9 @@ static void UpdateTravel(struct Attack *a)
+         memset(a->cells, 0, sizeof(a->cells));
+         for (r = three ? 0 : a->py; r <= (three ? GRID_ROWS - 1 : a->py); r++)
+         {
++            if (a->pa && (PAOf(a)->flags & PAF_PANEL_CRACK) && sB.panel[r][a->px] == PANEL_NORMAL
++             && (a->side == SIDE_PLAYER ? a->px >= PLAYER_COLS : a->px < PLAYER_COLS))
++                Field_SetPanel(a->px, r, PANEL_CRACKED);
+             Mark(a->cells, a->px, r);
+             FlashPanel(a->px, r, 2);
+             if (!a->hitDone && ProjectileHits(a, a->px, r))
+@@ -1192,7 +1262,7 @@ static void Impact(struct Attack *a)
+     case GK_FIELD:
+         StrikeCells(a, a->cells, TRUE);
+         FlashCells(a->cells, 12);
+-        if (a->kind == GK_FIELD)
++        if (a->kind == GK_FIELD && !(a->pa && (PAOf(a)->flags & PAF_NOFAINT)))
+         {
+             if (LiveUser(a))
+                 Moves_DamageFighter(a->side, me->bm.hp, "FAINTED FROM THE BLAST!"); // Gen 3: the user faints
+@@ -1203,7 +1273,21 @@ static void Impact(struct Attack *a)
+         StrikeCells(a, a->cells, a->hitsLeft <= 1);
+         FlashCells(a->cells, 10);
+         PlaySE(SE_M_ROCK_THROW);
++        if (a->pa && (PAOf(a)->flags & PAF_PANEL_POISON) && sB.panel[a->ty][a->tx] != PANEL_BROKEN)
++            Field_SetPanel(a->tx, a->ty, PANEL_POISON);
+         break;
++    case GK_SWEEP:
++    {
++        u8 row[GRID_ROWS][GRID_COLS];
++        s32 c;
++        memset(row, 0, sizeof(row));
++        for (c = 0; c < GRID_COLS; c++)
++            row[a->hitIndex][c] = a->cells[a->hitIndex][c];
++        StrikeCells(a, row, a->hitsLeft <= 1);
++        FlashCells(row, 10);
++        PlaySE(SE_M_HYPER_BEAM);
++        break;
++    }
+     case GK_BOMB:
+         StrikeCells(a, a->cells, a->hitsLeft <= 1);
+         FlashCells(a->cells, 12);
+@@ -1278,6 +1362,11 @@ static void UpdateAttack(struct Attack *a)
+             NextMeteor(a);
+             return;
+         }
++        if (a->kind == GK_SWEEP)
++        {
++            NextSweepRow(a);
++            return;
++        }
+         if (a->kind == GK_BOMB)
+         {
+             // next bomb of a volley, thrown from where the user stands now
+@@ -1968,9 +2057,14 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+     u8 kind = info->kind;
+     char line[40];
+ 
++    bool8 combo = sB.nextCombo;
+     (void)slot;
++    sB.nextCombo = FALSE;
+     if (move == MOVE_NONE || move >= MOVES_COUNT)
+         return;
++    // Chain payoff on a move that doesn't hit: the panel reward lands on the foe's panel.
++    if (combo && (sB.comboMask & COMBO_PANEL) && info->kind >= GK_BARRIER)
++        Moves_ComboPanel(m->type, foe->x, foe->y);
+ 
+     // Sleep Talk / Snore are the only moves a sleeping Pokémon can use (Gen 3).
+     if ((me->bm.status1 & STATUS1_SLEEP) && (m->effect == EFFECT_SLEEP_TALK || m->effect == EFFECT_SNORE))
+@@ -2135,6 +2229,7 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+     a->move = move;
+     a->info = *info;
+     a->kind = kind;
++    a->combo = combo;
+     a->user = *user;
+     a->userSlot = userSlot;
+     strncpy(a->userName, userName, sizeof(a->userName) - 1);
+@@ -2187,4 +2282,67 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+     UpdateAttack(a); // launches now (PH_CHARGE with timer 0)
+ }
+ 
++
++// ---- Chain payoffs -----------------------------------------------------------------------------
++
++// Combo panel reward: the follow-up's type changes the panel it lands on, using the BN6 panel types.
++void Moves_ComboPanel(u8 type, s8 x, s8 y)
++{
++    u8 panel;
++    if (!InGrid(x, y) || sB.panel[y][x] == PANEL_BROKEN)
++        return;
++    switch (type)
++    {
++    case TYPE_GROUND: case TYPE_ROCK: case TYPE_FIGHTING: panel = PANEL_CRACKED; break; // quakes and blows crack it
++    case TYPE_POISON: case TYPE_BUG:                      panel = PANEL_POISON; break;
++    case TYPE_GRASS:                                      panel = PANEL_GRASS; break;
++    case TYPE_ICE: case TYPE_WATER:                       panel = PANEL_ICE; break;    // BN6 ice panel: you slide
++    case TYPE_PSYCHIC: case TYPE_NORMAL:                 panel = PANEL_HOLY; break;
++    default: return; // Fire, Electric, Flying, Dark, Ghost, Dragon, Steel: no panel of their own in BN6
++    }
++    Field_SetPanel(x, y, panel);
++    FlashPanel(x, y, 10);
++    PKBN_LOG("combo panel %u at (%d,%d)", panel, x, y);
++}
++
++// A Program Advance: a brand-new move made from three chips (tools/attacks_curated.py PA_EFFECTS).
++void Moves_UsePA(u8 side, u8 paIndex, const struct BattlePokemon *user, const char *userName, u8 userSlot)
++{
++    const struct PkbnProgramAdvance *pa = &gPkbnProgramAdvances[paIndex];
++    struct Fighter *me = &sB.f[side];
++    struct Attack *a;
++
++    sB.nextCombo = FALSE;
++    if (!Field_CanAct(side, TRUE))
++    {
++        me->lockout = CHIP_LOCKOUT;
++        return;
++    }
++    PKBN_LOG("%s unleashes PROGRAM ADVANCE %s (%s, type %u, power %u)", userName, pa->name, gPkbnKindNames[pa->kind],
++             pa->type, pa->power);
++    a = NewAttack();
++    if (a == NULL)
++        return;
++    a->side = side;
++    a->move = pa->recipe[2];
++    a->info = gPkbnMoveInfo[a->move];
++    a->info.rows = pa->rows;
++    a->info.hits = pa->hits;
++    a->info.windup = 0;          // e.g. Mega Solar Beam: no charge
++    a->info.flags = (pa->flags & PAF_FAST) ? GF_FAST : 0;
++    a->kind = pa->kind;
++    a->pa = paIndex + 1;
++    a->powerOverride = pa->power;
++    a->typeOverride = pa->type + 1;
++    a->user = *user;
++    a->userSlot = userSlot;
++    strncpy(a->userName, userName, sizeof(a->userName) - 1);
++    me->lockout = CHIP_LOCKOUT;
++    me->lastMove = a->move;
++    me->lastKind = a->kind;
++    a->phase = PH_CHARGE;
++    a->timer = 0;
++    UpdateAttack(a);
++}
++
+ #endif // PORTABLE
+diff --git a/src/pkbn/move_table.c b/src/pkbn/move_table.c
+index 56f9308..7f5ff59 100644
+--- a/src/pkbn/move_table.c
++++ b/src/pkbn/move_table.c
+@@ -1,7 +1,9 @@
+ // GENERATED by tools/gen_move_table.py from tools/attacks_curated.py and tools/lanes_curated.py.
+ // Do not edit by hand: change the curated files and regenerate.
+ #include "global.h"
++#include "constants/battle.h"
+ #include "constants/moves.h"
++#include "constants/pokemon.h"
+ #include "pkbn/move_table.h"
+ 
+ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+@@ -245,7 +247,7 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_HIDDEN_POWER] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE_WILD} },
+     [MOVE_CROSS_CHOP] = { GK_WIDESWORD, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('K')} },
+     [MOVE_TWISTER] = { GK_TORNADO, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('W'), LANE('R'), LANE_WILD} },
+-    [MOVE_RAIN_DANCE] = { GK_WEATHER, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('R'), LANE('C'), LANE('D')} },
++    [MOVE_RAIN_DANCE] = { GK_WEATHER, BLAST_PLUS, 1, 0, 1, 0, 4, {LANE_WILD, LANE('R'), LANE('C'), LANE('D')} },
+     [MOVE_SUNNY_DAY] = { GK_WEATHER, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('S')} },
+     [MOVE_CRUNCH] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('N'), LANE('L')} },
+     [MOVE_MIRROR_COAT] = { GK_NONE, BLAST_PLUS, 1, 0, 1, 0, 0, {0} },  // removed (review)
+@@ -388,6 +390,7 @@ const char *const gPkbnKindNames[GK_COUNT] =
+     [GK_AIRHOCKEY] = "AIRHOCKEY",
+     [GK_BALL] = "BALL",
+     [GK_LOCKON] = "LOCKON",
++    [GK_SWEEP] = "SWEEP",
+     [GK_BARRIER] = "BARRIER",
+     [GK_STATS] = "STATS",
+     [GK_STATUS] = "STATUS",
+@@ -400,3 +403,26 @@ const char *const gPkbnKindNames[GK_COUNT] =
+     [GK_NOTHING] = "NOTHING",
+     [GK_NONE] = "NONE",
+ };
++
++const struct PkbnProgramAdvance gPkbnProgramAdvances[PKBN_PA_COUNT] =
++{
++    { "MEGA SOLAR BEAM", {MOVE_SUNNY_DAY, MOVE_GROWTH, MOVE_SOLAR_BEAM}, GK_SWEEP, TYPE_GRASS, 180, 1, 1, 0, 0, 0 }, // GRASS 180, no charge; beam sweeps the whole enemy area row by row
++    { "STORM CALLER", {MOVE_RAIN_DANCE, MOVE_CHARGE, MOVE_THUNDER}, GK_FIELD, TYPE_ELECTRIC, 150, 1, 1, PAF_NOFAINT | PAF_FAST, 0, 0 }, // ELECTRIC 150; a bolt on every enemy panel, never misses
++    { "TSUNAMI", {MOVE_RAIN_DANCE, MOVE_SURF, MOVE_HYDRO_PUMP}, GK_WAVE, TYPE_WATER, 200, 3, 1, 0, 0, 0 }, // WATER 200; a wave rolls across all three rows
++    { "PERMAFROST", {MOVE_HAIL, MOVE_ICY_WIND, MOVE_BLIZZARD}, GK_LOCKON, TYPE_ICE, 160, 1, 1, PAF_SPEEDDOWN, STATUS1_FREEZE, 0 }, // ICE 160; freezes the target in place (BN freeze) + slows
++    { "EARTH RENDER", {MOVE_SANDSTORM, MOVE_MAGNITUDE, MOVE_EARTHQUAKE}, GK_SHOCKWAVE, TYPE_GROUND, 180, 3, 1, PAF_PANEL_CRACK, 0, 0 }, // GROUND 180; cracks every enemy panel
++    { "DREAM DEVOURER", {MOVE_HYPNOSIS, MOVE_NIGHTMARE, MOVE_DREAM_EATER}, GK_LOCKON, TYPE_PSYCHIC, 160, 1, 1, PAF_PARTYHEAL, 0, 50 }, // PSYCHIC 160 drain; heals the whole party
++    { "VENOM STORM", {MOVE_TOXIC, MOVE_ACID, MOVE_SLUDGE_BOMB}, GK_METEORS, TYPE_POISON, 140, 1, 5, PAF_HITONCE | PAF_PANEL_POISON, 0, 0 }, // POISON 140; leaves poison panels
++    { "DRAGON RUSH", {MOVE_DRAGON_DANCE, MOVE_DRAGON_CLAW, MOVE_OUTRAGE}, GK_DASH, TYPE_DRAGON, 200, 1, 1, 0, 0, 0 }, // DRAGON 200 dash through the row; no confusion after
++    { "THOUSAND FISTS", {MOVE_MACH_PUNCH, MOVE_COMET_PUNCH, MOVE_DYNAMIC_PUNCH}, GK_LINE3, TYPE_FIGHTING, 30, 1, 6, PAF_CRIT, 0, 0 }, // FIGHTING 6 x 30, guaranteed crits
++    { "STAMPEDE", {MOVE_HARDEN, MOVE_TACKLE, MOVE_TAKE_DOWN}, GK_DASH, TYPE_NORMAL, 120, 1, 1, 0, 0, 0 }, // NORMAL 120 charge down the row, no recoil (contest: Harden starts Tackle / Take Down)
++    { "MUDSLIDE", {MOVE_MUD_SPORT, MOVE_MUD_SLAP, MOVE_WATER_GUN}, GK_WAVE, TYPE_GROUND, 90, 3, 1, PAF_ACCDOWN, 0, 0 }, // GROUND/WATER 90; muddies the enemy area (accuracy down) (early game)
++    { "ROLLING THUNDER", {MOVE_DEFENSE_CURL, MOVE_HARDEN, MOVE_ROLLOUT}, GK_AIRHOCKEY, TYPE_ROCK, 40, 1, 5, 0, 0, 0 }, // ROCK 5 rolling hits that bounce between rows
++    { "Z-HYDRO", {MOVE_WATER_GUN, MOVE_BUBBLE_BEAM, MOVE_HYDRO_PUMP}, GK_CANNON, TYPE_WATER, 240, 1, 1, 0, 0, 0 }, // WATER 240 cannon
++    { "Z-FLARE", {MOVE_EMBER, MOVE_FLAMETHROWER, MOVE_FIRE_BLAST}, GK_CANNON, TYPE_FIRE, 240, 1, 1, 0, STATUS1_BURN, 0 }, // FIRE 240 + burn
++    { "Z-VOLT", {MOVE_THUNDER_SHOCK, MOVE_THUNDERBOLT, MOVE_THUNDER}, GK_CANNON, TYPE_ELECTRIC, 240, 1, 1, 0, STATUS1_PARALYSIS, 0 }, // ELECTRIC 240 + paralysis
++    { "Z-FROST", {MOVE_POWDER_SNOW, MOVE_ICE_BEAM, MOVE_BLIZZARD}, GK_CANNON, TYPE_ICE, 240, 1, 1, 0, STATUS1_FREEZE, 0 }, // ICE 240 + freeze
++    { "Z-PSI", {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC}, GK_CANNON, TYPE_PSYCHIC, 240, 1, 1, 0, PA_CONFUSE, 0 }, // PSYCHIC 240 + confusion
++    { "Z-DRAIN", {MOVE_ABSORB, MOVE_MEGA_DRAIN, MOVE_GIGA_DRAIN}, GK_CANNON, TYPE_GRASS, 200, 1, 1, 0, 0, 100 }, // GRASS 200, heals 100% of damage
++    { "Z-SLUDGE", {MOVE_POISON_STING, MOVE_SLUDGE, MOVE_SLUDGE_BOMB}, GK_CANNON, TYPE_POISON, 200, 1, 1, 0, STATUS1_TOXIC_POISON, 0 }, // POISON 200 + bad poison
++};
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index 2a9f987..e80a91c 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -72,6 +72,9 @@ static void CB2_SelfTestDone(void)
+     exit(gBattleOutcome == 0 ? 1 : 0);
+ }
+ 
++static u8 sPicks[8], sPickIdx, sPicksLeft;
++static bool8 sPicksDone;
++
+ static void Autopilot(void)
+ {
+     struct PkbnGridDebug d;
+@@ -84,6 +87,30 @@ static void Autopilot(void)
+     switch (d.state)
+     {
+     case PKBN_GRID_CUSTOM:
++        // PKBN_TEST_PICKS="0,2,4": on the first Custom, queue these hand positions in this order.
++        if (sPicksLeft > 0)
++        {
++            if (d.cursor != sPicks[sPickIdx])
++                pressed = DPAD_DOWN;
++            else if (d.cursorSelectable)
++            {
++                pressed = A_BUTTON;
++                if (edge) { sPickIdx++; sPicksLeft--; if (sPicksLeft == 0) sPicksDone = TRUE; }
++            }
++            else
++            {
++                printf("[pkbn-selftest] pick %u not selectable\n", sPicks[sPickIdx]);
++                sPicksLeft = 0;
++                sPicksDone = TRUE;
++            }
++            break;
++        }
++        if (sPicksDone)
++        {
++            pressed = START_BUTTON;
++            if (edge) sPicksDone = FALSE;
++            break;
++        }
+         if (d.cursorSelectable && !d.cursorIsWild)
+             pressed = A_BUTTON;
+         else if (d.anySelectable)
+@@ -190,6 +217,16 @@ void Pkbn_SelfTestMaybeStart(void)
+             CreateTestMon(&gPlayerParty[i], members[i], SPECIES_TORCHIC, 7);
+         CreateTestMon(&gEnemyParty[0], enemyPart, SPECIES_ZIGZAGOON, 4);
+     }
++    if (getenv("PKBN_TEST_PICKS") != NULL)
++    {
++        const char *t = getenv("PKBN_TEST_PICKS");
++        while (*t && sPicksLeft < 8)
++        {
++            sPicks[sPicksLeft++] = (u8)atoi(t);
++            while (*t && *t != ',') t++;
++            if (*t == ',') t++;
++        }
++    }
+     gBattleTypeFlags = 0;
+     gMain.savedCallback = CB2_SelfTestDone;
+     SetMainCallback2(CB2_SelfTestBattle);
+-- 
+2.43.0
+

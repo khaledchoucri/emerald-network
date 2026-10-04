@@ -34,10 +34,10 @@
 | Z | ZZZ | 21 | 17 / 3 / 1 | 6 | Sing -> Snore -> Dream Eater |
 
 ## Letters per move (BN6 named chips for comparison: 0:17, 1:90, 2:20, 3:118, 4:110; `*` on 152/355)
-- ours: 0 letters: 17, 1 letters: 88, 2 letters: 206, 3 letters: 6, 4 letters: 1 ; `*` allowed on 95/318
+- ours: 0 letters: 17, 1 letters: 88, 2 letters: 206, 3 letters: 6, 4 letters: 1 ; `*` allowed on 96/318
 - pure wildcards (copy / variable moves): Mimic, Metronome, Mirror Move, Transform, Splash, Conversion, Sketch, Conversion 2, Swagger, Attract, Hidden Power, Flatter, Nature Power, Role Play, Assist, Skill Swap, Camouflage
 
-## Emerald contest combos that can be chained under these lanes: 174 of 234
+## Emerald contest combos that can be chained under these lanes: 175 of 234
 
 ## Program Advances (exact 3-move order in one chain)
 | PA | Recipe | Shared letter | New move |

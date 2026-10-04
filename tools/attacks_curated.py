@@ -47,6 +47,7 @@ KINDS = {
  'AIRHOCKEY': ('A puck that flies diagonally and bounces off the walls.', 'AirHocky (0x26) "Bounce the puck off walls"'),
  'BALL':      ('A slow ball down your row. Low-accuracy moves fly slower, so they are easy to dodge.', 'Thunder (0x1F) "Pralyzing electric attack!" (slow ball); review: low accuracy = slow projectile'),
  'LOCKON':    ('Locks onto the target, then a hit that can\'t be dodged.', 'MachGun1 (0x29) "Fire 9sts at row w/ clst enmy"'),
+ 'SWEEP':     ('Program Advance only: a beam sweeps the enemy area row by row.', 'design (Mega Solar Beam)'),
  # ---- no damage ---------------------------------------------------------------------------------------
  'BARRIER':   ('Absorbs the next hit (Gen 3 Protect odds).', 'Barrier (0x15/4) "Nullifies 10 HP of damage"'),
  'STATS':     ('Stat stages; always lands, ignores Barrier and dodging.', 'design rule (POC-3)'),
@@ -417,4 +418,30 @@ ATTACKS = {
  'WATER_PULSE':   'WAVE',
  'DOOM_DESIRE':   'DELAYED',                  # review (Future Sight family)
  'PSYCHO_BOOST':  'CANNON',
+}
+
+
+# Program Advances (recipes: lanes_curated.PROGRAM_ADVANCES). How each new move plays on the grid.
+# Modifiers: type=T power=N rows=3 hits=N crit status=BRN|PAR|FRZ|CONF|TOX drain=50|100 partyheal
+#            panels=crack|poison hitonce nofaint speeddown accdown fast
+PA_EFFECTS = {
+ 'MEGA SOLAR BEAM': 'SWEEP type=GRASS power=180',                       # sweeps the enemy area row by row, no charge
+ 'STORM CALLER':    'FIELD type=ELECTRIC power=150 nofaint fast',       # a bolt on every enemy panel
+ 'TSUNAMI':         'WAVE type=WATER power=200 rows=3',                 # a wave across all three rows
+ 'PERMAFROST':      'LOCKON type=ICE power=160 status=FRZ speeddown',   # freezes the target in place + slows
+ 'EARTH RENDER':    'SHOCKWAVE type=GROUND power=180 rows=3 panels=crack', # cracks every enemy panel it rolls over
+ 'DREAM DEVOURER':  'LOCKON type=PSYCHIC power=160 drain=50 partyheal', # drain that heals the whole party
+ 'VENOM STORM':     'METEORS type=POISON power=140 hits=5 hitonce panels=poison', # poison rain: each drop leaves a poison panel
+ 'DRAGON RUSH':     'DASH type=DRAGON power=200',                       # no confusion after
+ 'THOUSAND FISTS':  'LINE3 type=FIGHTING power=30 hits=6 crit',         # 6 x 30, guaranteed crits
+ 'STAMPEDE':        'DASH type=NORMAL power=120',                       # no recoil
+ 'MUDSLIDE':        'WAVE type=GROUND power=90 rows=3 accdown',         # muddies the enemy (accuracy down)
+ 'ROLLING THUNDER': 'AIRHOCKEY type=ROCK power=40 hits=5',              # 5 rolling hits bouncing between rows
+ 'Z-HYDRO':         'CANNON type=WATER power=240',
+ 'Z-FLARE':         'CANNON type=FIRE power=240 status=BRN',
+ 'Z-VOLT':          'CANNON type=ELECTRIC power=240 status=PAR',
+ 'Z-FROST':         'CANNON type=ICE power=240 status=FRZ',
+ 'Z-PSI':           'CANNON type=PSYCHIC power=240 status=CONF',
+ 'Z-DRAIN':         'CANNON type=GRASS power=200 drain=100',
+ 'Z-SLUDGE':        'CANNON type=POISON power=200 status=TOX',
 }
