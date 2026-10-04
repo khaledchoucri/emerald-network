@@ -1,6 +1,6 @@
 # Design 01 — Chip folder & switching (Option 2: Switch chips in the folder)
 
-Status: **brainstorm / proposal** (2026-10-04). Decisions needed are marked **DECIDE**.
+Status: **decided & built as POC-4** (2026-10-04) — see the Decisions section at the end. Open: dead-draw fix.
 Grounding: BN6 facts cite `upstream/bn6f` @ d57c196; Emerald facts cite `upstream/pokeemerald-pc_port` @ 1165825.
 
 ## 0. What the source games actually do (verified)
@@ -84,3 +84,22 @@ chip in a queue (proposal: yes).
 3. Faint → pick next. Dead chips.
 4. Baton / Assist variants.
 5. Folder viewer (read-only) on the start menu; editor later (needed for code option A).
+
+## Decisions (Khaled, 2026-10-04)
+- Codes are move types. **Exactly one wildcard Switch** in the folder: any target, but nothing may be
+  queued after it.
+- **One Switch chip per party Pokémon**, with two or more code options so it can sit in the middle of a
+  same-code chain (attack with Pokémon 1 → switch → attack with Pokémon 2).
+- Move copies by max PP.
+- Include Switch, Baton and Assist; with the lean budget, Baton/Assist only exist as the actual moves
+  (a Pokémon must know Baton Pass / Assist).
+
+## Open after POC-4: dead draws (see poc/POC-4.md findings)
+Options to choose from:
+| Option | Idea |
+|---|---|
+| A. Split hand | each hand = 3 chips from the active Pokémon's moves + 2 from the shared pool (bench moves + switches) |
+| B. Guaranteed switch | each hand contains at least one Switch chip (or the wildcard) if any are left |
+| C. BN "ADD" | discard the whole hand to draw +1 next turn (BN mechanic) — player-driven fix |
+| D. Bench chips are switch-and-use | playing a bench Pokémon's move first switches it in (no Switch chip needed) — strongest, but makes Switch chips less special |
+| E. Bigger hand | Custom +1/+2 (BN NaviCust Custom1/2, cap 8) as progression |

@@ -1,0 +1,1790 @@
+From 1dc3b84f36f671aa8c54c59f1cd1bdd8dc25d4c6 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Sun, 4 Oct 2026 17:35:01 +0300
+Subject: [PATCH] POC-4: chip folder from the party, BN hand/selection rule,
+ Switch/wildcard/Baton/Assist chips, faint replacement, shared EXP
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ include/pkbn/battle_stub.h |   4 +-
+ include/pkbn/folder.h      |  53 +++
+ include/pkbn/grid_battle.h |   4 +-
+ include/pkbn/move_shapes.h |   2 +
+ src/pkbn/battle_stub.c     |  60 +--
+ src/pkbn/folder.c          | 223 +++++++++++
+ src/pkbn/grid_battle.c     | 752 ++++++++++++++++++++++++++++++-------
+ src/pkbn/move_shapes.c     |   6 +
+ src/pkbn/selftest.c        |  89 +++--
+ 9 files changed, 997 insertions(+), 196 deletions(-)
+ create mode 100644 include/pkbn/folder.h
+ create mode 100644 src/pkbn/folder.c
+
+diff --git a/include/pkbn/battle_stub.h b/include/pkbn/battle_stub.h
+index 0a0b625..be837e8 100644
+--- a/include/pkbn/battle_stub.h
++++ b/include/pkbn/battle_stub.h
+@@ -16,6 +16,8 @@ void CB2_PkbnBattleStub(void);
+ 
+ // Contract entry/exit shared by modules (mirrors battle_main.c behaviour).
+ void PkbnContract_Enter(void);
+-void PkbnContract_Exit(u8 outcome);
++// participants: bitmask of party slots that battled and are still standing; they share the EXP
++// like Gen 3 (Cmd_getexp divides by the number of sent-in Pokémon). 0 = lead only.
++void PkbnContract_Exit(u8 outcome, u8 participants);
+ 
+ #endif // GUARD_PKBN_BATTLE_STUB_H
+diff --git a/include/pkbn/folder.h b/include/pkbn/folder.h
+new file mode 100644
+index 0000000..abff4a5
+--- /dev/null
++++ b/include/pkbn/folder.h
+@@ -0,0 +1,53 @@
++#ifndef GUARD_PKBN_FOLDER_H
++#define GUARD_PKBN_FOLDER_H
++
++// Chip folder built from the party (docs/design/01-folder-and-switching.md, decisions of 2026-10-04):
++//  - 30 chips max (BN6 folder size). Move chips: copies by the move's max PP (>=30 -> 3, >=15 -> 2, else 1).
++//  - One Switch chip per party Pokémon, carrying 2+ codes taken from that Pokémon's move types.
++//  - One wildcard Switch: any target, matches any code, but nothing can be queued after it.
++//  - Codes are move types (bit per type). A selection is legal if all chips share a code.
++//  - Hand of 5 (BN). Used chips go to a discard pile that is reshuffled when the draw pile is empty
++//    (our change: BN never reshuffles, but early-game folders are tiny).
++
++#include "pkbn/move_shapes.h"
++
++#define FOLDER_MAX 30
++#define HAND_SIZE 5
++#define PKBN_PARTY_MAX 6
++#define CODE_ALL 0xFFFFFFFF
++
++enum { FCHIP_MOVE, FCHIP_SWITCH, FCHIP_WILD };
++
++struct FolderChip
++{
++    u8 kind;
++    u8 owner;   // FCHIP_MOVE: party slot that knows the move
++    u8 slot;    // FCHIP_MOVE: move slot
++    u8 shape;   // FCHIP_MOVE: Pkbn_ShapeForMove
++    u16 move;   // FCHIP_MOVE
++    u8 target;  // FCHIP_SWITCH: party slot to bring in
++    u32 codes;  // bit per type (1 << TYPE_x); CODE_ALL for the wildcard
++};
++
++struct Folder
++{
++    struct FolderChip chips[FOLDER_MAX];
++    u8 count;
++    u8 pile[FOLDER_MAX];
++    u8 pileCount;
++    u8 discard[FOLDER_MAX];
++    u8 discardCount;
++};
++
++// party[i].species == 0 for empty slots.
++void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party, u8 partyCount);
++// Draws one chip index; reshuffles the discard pile when needed. FALSE if nothing left.
++bool8 PkbnFolder_Draw(struct Folder *folder, u8 *outIdx);
++void PkbnFolder_Discard(struct Folder *folder, u8 idx);
++
++// Can `cand` be appended to the queue? `active` = party slot active before the queue runs,
++// `alive[i]` = party slot i can battle, `pp[i][m]` = remaining PP.
++bool8 PkbnFolder_CanAppend(const struct Folder *folder, const u8 *queue, u8 queueCount, u8 cand,
++                           u8 active, const bool8 *alive, const struct BattlePokemon *party);
++
++#endif // GUARD_PKBN_FOLDER_H
+diff --git a/include/pkbn/grid_battle.h b/include/pkbn/grid_battle.h
+index 06a097a..c78f9b9 100644
+--- a/include/pkbn/grid_battle.h
++++ b/include/pkbn/grid_battle.h
+@@ -5,7 +5,7 @@
+ // Design notes: poc/POC-1.md. PC (PORTABLE) builds only.
+ void CB2_PkbnGridBattle(void);
+ 
+-enum { PKBN_GRID_INTRO, PKBN_GRID_CUSTOM, PKBN_GRID_FIGHT, PKBN_GRID_END };
++enum { PKBN_GRID_INTRO, PKBN_GRID_CUSTOM, PKBN_GRID_FIGHT, PKBN_GRID_END, PKBN_GRID_PICK, PKBN_GRID_TIMESTOP };
+ 
+ struct PkbnGridDebug
+ {
+@@ -18,6 +18,8 @@ struct PkbnGridDebug
+     bool8 gaugeFull;
+     u8 handCount, cursor, pickedCount;
+     bool8 cursorPicked;
++    bool8 cursorSelectable;
++    bool8 anySelectable;
+     bool8 playerLocked;
+ };
+ void PkbnGrid_GetDebug(struct PkbnGridDebug *d);
+diff --git a/include/pkbn/move_shapes.h b/include/pkbn/move_shapes.h
+index 4ee1500..e716c8b 100644
+--- a/include/pkbn/move_shapes.h
++++ b/include/pkbn/move_shapes.h
+@@ -12,6 +12,8 @@ enum
+     SHAPE_LOCKON,    // BN6 MachGun family 0x29 idea: lock onto the target, then a hit it can't dodge
+     SHAPE_BARRIER,   // BN6 Barrier (family 0x15 sub 4, param 1): absorbs the next hit
+     SHAPE_STATUS,    // pure status move (stat stages): always lands, ignores position, Barrier and i-frames
++    SHAPE_BATON,     // Baton Pass (EFFECT_BATON_PASS): switch to a chosen Pokémon, keeping stat stages; ends the chain
++    SHAPE_ASSIST,    // Assist (EFFECT_ASSIST): a random benched Pokémon pops in and uses one of its moves
+     SHAPE_COUNT
+ };
+ 
+diff --git a/src/pkbn/battle_stub.c b/src/pkbn/battle_stub.c
+index 6326c4e..0e29acc 100644
+--- a/src/pkbn/battle_stub.c
++++ b/src/pkbn/battle_stub.c
+@@ -79,36 +79,52 @@ static s32 GetLeadMonIndex(void)
+     return -1;
+ }
+ 
+-// Wild-battle EXP: expYield * level / 7, minimum 1
+-// (Cmd_getexp, battle_script_commands.c:3309-3325). No Exp. Share / traded boost yet.
+-static void GiveWinRewards(void)
++// Wild-battle EXP: expYield * level / 7, divided between the participants that are still standing,
++// minimum 1 each (Cmd_getexp, battle_script_commands.c:3309-3325: calculatedExp / viaSentIn).
++// Each participant also gains EVs (MonGainEVs, :3420). No Exp. Share / traded boost yet.
++static void GiveExpTo(s32 slot, u32 share, u16 enemySpecies)
+ {
+-    u16 enemySpecies = GetMonData(&gEnemyParty[0], MON_DATA_SPECIES);
+-    u8 enemyLevel = GetMonData(&gEnemyParty[0], MON_DATA_LEVEL);
+-    s32 lead = GetLeadMonIndex();
+-    struct Pokemon *mon;
+-    u32 exp, gained, oldLevel, newLevel;
++    struct Pokemon *mon = &gPlayerParty[slot];
++    u32 exp, oldLevel, newLevel;
+ 
+-    if (lead < 0)
+-        return;
+-    mon = &gPlayerParty[lead];
+     oldLevel = GetMonData(mon, MON_DATA_LEVEL);
+     if (oldLevel >= MAX_LEVEL)
+         return; // battle_script_commands.c:3351 skips max-level mons
+-
+-    gained = gSpeciesInfo[enemySpecies].expYield * enemyLevel / 7;
+-    if (gained == 0)
+-        gained = 1;
+-    exp = GetMonData(mon, MON_DATA_EXP) + gained;
++    exp = GetMonData(mon, MON_DATA_EXP) + share;
+     SetMonData(mon, MON_DATA_EXP, &exp);
+-    MonGainEVs(mon, enemySpecies);            // battle_script_commands.c:3420
++    MonGainEVs(mon, enemySpecies);
+     CalculateMonStats(mon);                   // re-derives level from EXP (pokemon.c:2840-2843)
+     newLevel = GetMonData(mon, MON_DATA_LEVEL);
+-
+-    PKBN_LOG("lead slot %d gained %u exp (Lv %u -> %u)", (int)lead, (unsigned)gained,
++    PKBN_LOG("slot %d gained %u exp (Lv %u -> %u)", (int)slot, (unsigned)share,
+              (unsigned)oldLevel, (unsigned)newLevel);
+ }
+ 
++static void GiveWinRewards(u8 participants)
++{
++    u16 enemySpecies = GetMonData(&gEnemyParty[0], MON_DATA_SPECIES);
++    u8 enemyLevel = GetMonData(&gEnemyParty[0], MON_DATA_LEVEL);
++    u32 gained, share, count = 0;
++    s32 i;
++
++    if (participants == 0)
++    {
++        s32 lead = GetLeadMonIndex();
++        if (lead < 0)
++            return;
++        participants = 1 << lead;
++    }
++    for (i = 0; i < PARTY_SIZE; i++)
++        if (participants & (1 << i))
++            count++;
++    gained = gSpeciesInfo[enemySpecies].expYield * enemyLevel / 7;
++    share = gained / count;
++    if (share == 0)
++        share = 1;
++    for (i = 0; i < PARTY_SIZE; i++)
++        if (participants & (1 << i))
++            GiveExpTo(i, share, enemySpecies);
++}
++
+ void PkbnContract_Enter(void)
+ {
+     u16 species = GetMonData(&gEnemyParty[0], MON_DATA_SPECIES);
+@@ -126,11 +142,11 @@ void PkbnContract_Enter(void)
+              (unsigned)GetMonData(&gEnemyParty[0], MON_DATA_LEVEL), (unsigned)gBattleTypeFlags);
+ }
+ 
+-void PkbnContract_Exit(u8 outcome)
++void PkbnContract_Exit(u8 outcome, u8 participants)
+ {
+     gBattleOutcome = outcome;
+     if (outcome == B_OUTCOME_WON)
+-        GiveWinRewards();
++        GiveWinRewards(participants);
+ 
+     // Exit side of the contract (ReturnFromBattleToOverworld, battle_main.c:5228-5259)
+     gSpecialVar_Result = gBattleOutcome;
+@@ -149,5 +165,5 @@ void CB2_PkbnBattleStub(void)
+     if (++sFrames < STUB_BATTLE_FRAMES)
+         return;
+     sFrames = 0;
+-    PkbnContract_Exit(B_OUTCOME_WON);
++    PkbnContract_Exit(B_OUTCOME_WON, 0);
+ }
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+new file mode 100644
+index 0000000..771ea2c
+--- /dev/null
++++ b/src/pkbn/folder.c
+@@ -0,0 +1,223 @@
++// Chip folder: build, draw, selection rule. See include/pkbn/folder.h.
++#include "global.h"
++#include "battle.h"
++#include "pokemon.h"
++#include "random.h"
++#include "constants/pokemon.h"
++#include "constants/moves.h"
++#include "constants/species.h"
++#include "pkbn/folder.h"
++
++static u8 CopiesForPP(u8 maxPP)
++{
++    if (maxPP >= 30) return 3; // TUNE (agreed rule)
++    if (maxPP >= 15) return 2;
++    return 1;
++}
++
++static bool8 MoveGoesInFolder(u16 move)
++{
++    u8 shape = Pkbn_ShapeForMove(move);
++    return shape != SHAPE_NONE; // unsupported status moves stay out until they work on the grid
++}
++
++static u32 MoveTypesOf(const struct BattlePokemon *mon)
++{
++    u32 m = 0;
++    s32 i;
++    for (i = 0; i < MAX_MON_MOVES; i++)
++        if (mon->moves[i] != MOVE_NONE && MoveGoesInFolder(mon->moves[i]))
++            m |= 1u << gBattleMoves[mon->moves[i]].type;
++    return m;
++}
++
++static u32 CountBits(u32 v)
++{
++    u32 n = 0;
++    while (v) { n += v & 1; v >>= 1; }
++    return n;
++}
++
++static void Shuffle(u8 *arr, u8 n)
++{
++    s32 i;
++    for (i = n - 1; i > 0; i--)
++    {
++        s32 j = Random() % (i + 1);
++        u8 t = arr[i]; arr[i] = arr[j]; arr[j] = t;
++    }
++}
++
++void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party, u8 partyCount)
++{
++    u8 copies[PKBN_PARTY_MAX][MAX_MON_MOVES];
++    u32 typeCount[NUMBER_OF_MON_TYPES];
++    s32 p, m, members = 0, total = 0, utility;
++
++    memset(folder, 0, sizeof(*folder));
++    memset(copies, 0, sizeof(copies));
++    memset(typeCount, 0, sizeof(typeCount));
++
++    for (p = 0; p < partyCount; p++)
++    {
++        if (party[p].species == SPECIES_NONE)
++            continue;
++        members++;
++        for (m = 0; m < MAX_MON_MOVES; m++)
++        {
++            u16 move = party[p].moves[m];
++            if (move == MOVE_NONE || !MoveGoesInFolder(move))
++                continue;
++            copies[p][m] = CopiesForPP(gBattleMoves[move].pp);
++            total += copies[p][m];
++            typeCount[gBattleMoves[move].type] += copies[p][m];
++        }
++    }
++
++    // Switching chips only make sense with 2+ Pokémon: one per member + one wildcard.
++    utility = (members >= 2) ? members + 1 : 0;
++
++    // Trim move copies (largest stacks first) until everything fits in 30.
++    while (total + utility > FOLDER_MAX)
++    {
++        s32 bp = -1, bm = -1;
++        for (p = 0; p < partyCount; p++)
++            for (m = 0; m < MAX_MON_MOVES; m++)
++                if (copies[p][m] > 1 && (bp < 0 || copies[p][m] > copies[bp][bm]))
++                    bp = p, bm = m;
++        if (bp < 0)
++            break; // every move down to 1 copy; accept
++        copies[bp][bm]--;
++        total--;
++    }
++
++    for (p = 0; p < partyCount; p++)
++        for (m = 0; m < MAX_MON_MOVES; m++)
++        {
++            u8 c;
++            for (c = 0; c < copies[p][m] && folder->count < FOLDER_MAX; c++)
++            {
++                struct FolderChip *ch = &folder->chips[folder->count++];
++                ch->kind = FCHIP_MOVE;
++                ch->owner = p;
++                ch->slot = m;
++                ch->move = party[p].moves[m];
++                ch->shape = Pkbn_ShapeForMove(ch->move);
++                ch->codes = 1u << gBattleMoves[ch->move].type;
++            }
++        }
++
++    if (utility)
++    {
++        for (p = 0; p < partyCount && folder->count < FOLDER_MAX; p++)
++        {
++            struct FolderChip *ch;
++            u32 codes;
++            if (party[p].species == SPECIES_NONE)
++                continue;
++            // Switch -> p carries the types of p's own moves; top up to 2 codes with the most
++            // common other type in the folder so it can always link to something.
++            codes = MoveTypesOf(&party[p]);
++            while (CountBits(codes) < 2)
++            {
++                s32 t, best = -1;
++                for (t = 0; t < NUMBER_OF_MON_TYPES; t++)
++                    if (!(codes & (1u << t)) && typeCount[t] && (best < 0 || typeCount[t] > typeCount[best]))
++                        best = t;
++                if (best < 0)
++                    best = (codes & (1u << TYPE_NORMAL)) ? TYPE_FIGHTING : TYPE_NORMAL;
++                codes |= 1u << best;
++            }
++            ch = &folder->chips[folder->count++];
++            ch->kind = FCHIP_SWITCH;
++            ch->target = p;
++            ch->codes = codes;
++        }
++        if (folder->count < FOLDER_MAX)
++        {
++            struct FolderChip *ch = &folder->chips[folder->count++];
++            ch->kind = FCHIP_WILD;
++            ch->codes = CODE_ALL;
++        }
++    }
++
++    for (p = 0; p < folder->count; p++)
++        folder->pile[p] = p;
++    folder->pileCount = folder->count;
++    Shuffle(folder->pile, folder->pileCount);
++}
++
++bool8 PkbnFolder_Draw(struct Folder *folder, u8 *outIdx)
++{
++    if (folder->pileCount == 0)
++    {
++        if (folder->discardCount == 0)
++            return FALSE;
++        memcpy(folder->pile, folder->discard, folder->discardCount);
++        folder->pileCount = folder->discardCount;
++        folder->discardCount = 0;
++        Shuffle(folder->pile, folder->pileCount);
++    }
++    *outIdx = folder->pile[--folder->pileCount];
++    return TRUE;
++}
++
++void PkbnFolder_Discard(struct Folder *folder, u8 idx)
++{
++    if (folder->discardCount < FOLDER_MAX)
++        folder->discard[folder->discardCount++] = idx;
++}
++
++static bool8 EndsChain(const struct FolderChip *ch)
++{
++    return ch->kind == FCHIP_WILD || (ch->kind == FCHIP_MOVE && ch->shape == SHAPE_BATON);
++}
++
++bool8 PkbnFolder_CanAppend(const struct Folder *folder, const u8 *queue, u8 queueCount, u8 cand,
++                           u8 active, const bool8 *alive, const struct BattlePokemon *party)
++{
++    const struct FolderChip *c = &folder->chips[cand];
++    u32 common = CODE_ALL;
++    u8 projected = active;
++    s32 i;
++
++    for (i = 0; i < queueCount; i++)
++    {
++        const struct FolderChip *q = &folder->chips[queue[i]];
++        if (queue[i] == cand)
++            return FALSE;       // already queued
++        if (EndsChain(q))
++            return FALSE;       // nothing may follow a wildcard / Baton
++        common &= q->codes;
++        if (q->kind == FCHIP_SWITCH)
++            projected = q->target;
++    }
++    if ((common & c->codes) == 0)
++        return FALSE;           // BN rule: all chips in one Custom share a code
++
++    switch (c->kind)
++    {
++    case FCHIP_MOVE:
++    {
++        s32 queuedUses = 0;
++        for (i = 0; i < queueCount; i++)
++        {
++            const struct FolderChip *q = &folder->chips[queue[i]];
++            if (q->kind == FCHIP_MOVE && q->owner == c->owner && q->slot == c->slot)
++                queuedUses++;
++        }
++        return c->owner == projected && alive[c->owner] && party[c->owner].pp[c->slot] > queuedUses;
++    }
++    case FCHIP_SWITCH:
++        return c->target != projected && alive[c->target];
++    case FCHIP_WILD:
++    {
++        // needs at least one other Pokémon able to come in
++        for (i = 0; i < PKBN_PARTY_MAX; i++)
++            if (i != projected && alive[i])
++                return TRUE;
++        return FALSE;
++    }
++    }
++    return FALSE;
++}
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 87656c7..0d972c9 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -1,18 +1,20 @@
+ // Real-time 6x3 grid battle (Battle Network style) driven by real Emerald data.
+ //
+-// Grounding (see research/02, research/03, poc/POC-1.md, poc/POC-2.md):
++// Grounding (see research/02, research/03, poc/POC-1..4.md, docs/design/01-folder-and-switching.md):
+ //  - Entry/exit: PkbnContract_Enter/Exit mirror the Emerald battle contract.
+ //  - Damage: Emerald's own CalculateBaseDamage (pokemon.c:3106) followed by the same STAB,
+ //    type-chart and random steps as Cmd_typecalc (battle_script_commands.c:1355) and
+ //    ApplyRandomDmgMultiplier (:1639).
+-//  - Move -> shape rules: src/pkbn/move_shapes.c (BN6 chip families, research/03 §2).
++//  - Move -> shape rules: src/pkbn/move_shapes.c. Folder rules: src/pkbn/folder.c.
+ //  - Buster damage = 1, as BN6's MegaBuster chip (ChipDataArr index 0, attack_power 1).
+ //  - Barrier only stops moves Protect would stop (FLAG_PROTECT_AFFECTED), plus the Buster.
++//  - Switching out resets stat stages except via Baton Pass (SwitchInClearSetData, battle_main.c:3152).
++//  - EXP is split between participating Pokémon that are still standing (Cmd_getexp, viaSentIn).
+ //  - Everything marked TUNE is our own design value, not taken from either game.
+ //
+-// Attacks run through one pipeline: StartAttack -> wind-up (telegraph / flight / lock-on)
+-// -> ImpactAttack. Player Cannon/Sword/Spreader have no wind-up (instant, like BN chips);
+-// enemy ones are telegraphed so they can be dodged.
++// Attacks: StartAttack -> wind-up (telegraph / flight / lock-on) -> ImpactAttack. Each attack keeps
++// a snapshot of its user's battle data, so a bomb thrown before a switch still uses the thrower's stats.
++// Time-stop (switch / assist / target picker) freezes the gauge, the enemy and all attacks, as BN does.
+ //
+ // PC (PORTABLE) builds only: drawing goes through gPkbnFrameOverlay (src/platform/sdl2.c).
+ 
+@@ -34,6 +36,7 @@
+ #include "constants/moves.h"
+ #include "constants/songs.h"
+ #include "pkbn/battle_stub.h"
++#include "pkbn/folder.h"
+ #include "pkbn/grid_battle.h"
+ #include "pkbn/move_shapes.h"
+ #include "pkbn/render.h"
+@@ -59,6 +62,7 @@
+ #define CHIP_LOCKOUT         24   // TUNE: frames the attacker is busy after using a move
+ #define THROW_LOCKOUT        21   // BN6 bomb routine ends the thrower's attack at frame 0x15 (asm31.s, sub_80EB644)
+ #define HIT_IFRAMES          45   // TUNE: invincibility after taking a move hit
++#define SWITCH_IFRAMES       30   // TUNE: grace period for a Pokémon that just came in
+ #define ENEMY_STEP_MIN       40   // TUNE
+ #define ENEMY_STEP_RAND      50   // TUNE
+ #define ENEMY_TELEGRAPH      36   // TUNE: frames the threatened panels flash before an enemy move lands
+@@ -66,11 +70,13 @@
+ #define GRENADE_FLIGHT       30   // TUNE: frames in the air
+ #define LOCKON_FRAMES        40   // TUNE: crosshair tracking time before the shot
+ #define LONGSWORD_REACH      2    // BN6 LongSwrd: 2 panels ahead
+-#define MAX_HAND             4
++#define TIMESTOP_FRAMES      48   // TUNE: switch / assist "Navi chip" pause
+ #define MAX_ATTACKS          6
+ 
+-enum { ST_INTRO, ST_CUSTOM, ST_FIGHT, ST_END };
++enum { ST_INTRO, ST_CUSTOM, ST_FIGHT, ST_END, ST_PICK, ST_TIMESTOP };
+ enum { SIDE_PLAYER, SIDE_ENEMY };
++enum { PICK_WILD, PICK_BATON, PICK_FAINT };
++enum { TS_SWITCH, TS_ASSIST };
+ 
+ struct Fighter
+ {
+@@ -88,6 +94,14 @@ struct Fighter
+     char name[POKEMON_NAME_LENGTH + 1];
+ };
+ 
++struct PartyMember
++{
++    struct BattlePokemon bm;
++    u16 icon[2][32 * 32];
++    char name[POKEMON_NAME_LENGTH + 1];
++    bool8 participated;
++};
++
+ struct Chip
+ {
+     u16 move;
+@@ -101,6 +115,8 @@ struct Attack
+     bool8 active;
+     u8 side;
+     struct Chip chip;
++    struct BattlePokemon user;          // snapshot of the attacker's battle data at launch
++    char userName[POKEMON_NAME_LENGTH + 1];
+     u16 timer;          // frames until impact
+     u16 duration;       // total wind-up, for drawing arcs
+     s8 ox, oy;          // where it was launched from
+@@ -114,16 +130,31 @@ struct GridBattle
+     u16 timer;
+     u32 frame;
+     struct Fighter f[2];
+-    u16 gauge;
+-    u16 gaugeSub;
+-    struct Chip hand[MAX_HAND];
++    // player party / folder
++    struct PartyMember party[PKBN_PARTY_MAX];
++    u8 partyCount;
++    u8 active;                 // party slot shown as f[SIDE_PLAYER]
++    struct Folder folder;
++    u8 hand[HAND_SIZE];        // folder chip indices
+     u8 handCount;
++    bool8 picked[HAND_SIZE];
+     u8 cursor;
+-    bool8 picked[MAX_HAND];
+-    struct Chip queue[MAX_HAND];
++    u8 queue[HAND_SIZE];       // folder chip indices, in use order
+     u8 queueCount;
++    u16 gauge;
++    u16 gaugeSub;
+     u16 busterCd;
+     struct Attack attacks[MAX_ATTACKS];
++    // picker (wildcard / Baton / faint)
++    u8 pickPurpose;
++    u8 pickOptions[PKBN_PARTY_MAX];
++    u8 pickCount;
++    u8 pickCursor;
++    // time-stop
++    u8 tsKind;
++    u8 tsTarget;
++    bool8 tsKeepStages;
++    struct Chip tsAssistChip;
+     // enemy AI
+     u16 aiStepTimer;
+     u16 aiAttackTimer;
+@@ -189,28 +220,30 @@ static void MonToBattleMon(struct Pokemon *mon, struct BattlePokemon *bm)
+     bm->status1 = GetMonData(mon, MON_DATA_STATUS);
+ }
+ 
+-// Emerald damage pipeline. Returns damage; *eff = type multiplier x10 (10 = neutral).
+-static s32 CalcMoveDamage(u8 atkSide, u16 move, u16 *eff)
++// Emerald damage pipeline for `atk` (attacker data, possibly a snapshot) hitting side defSide.
++// Returns damage; *eff = type multiplier x10 (10 = neutral).
++static s32 CalcMoveDamage(const struct BattlePokemon *atkData, u8 defSide, u16 move, u16 *eff)
+ {
+-    struct BattlePokemon *atk = &sB.f[atkSide].bm;
+-    struct BattlePokemon *def = &sB.f[atkSide ^ 1].bm;
++    struct BattlePokemon atk = *atkData;
++    struct BattlePokemon *def = &sB.f[defSide].bm;
++    u8 atkSide = defSide ^ 1;
+     u8 type = gBattleMoves[move].type;
+     s32 dmg, i;
+     u16 mult = TYPE_MUL_NORMAL;
+ 
+     // Globals CalculateBaseDamage / AbilityBattleEffects read.
+-    gBattleMons[0] = sB.f[SIDE_PLAYER].bm;
+-    gBattleMons[1] = sB.f[SIDE_ENEMY].bm;
++    gBattleMons[atkSide] = atk;
++    gBattleMons[defSide] = *def;
+     gBattlersCount = 2;
+     gBattleWeather = 0;
+     gCurrentMove = move;
+     gCritMultiplier = 1;
+     gBattleScripting.dmgMultiplier = 1;
+ 
+-    dmg = CalculateBaseDamage(atk, def, move, 0, 0, 0, atkSide, atkSide ^ 1);
++    dmg = CalculateBaseDamage(&atk, def, move, 0, 0, 0, atkSide, defSide);
+ 
+     // STAB (Cmd_typecalc)
+-    if (atk->types[0] == type || atk->types[1] == type)
++    if (atk.types[0] == type || atk.types[1] == type)
+         dmg = dmg * 15 / 10;
+ 
+     // Levitate vs Ground (Cmd_typecalc)
+@@ -304,8 +337,8 @@ static void BlastCells(s8 cx, s8 cy, u8 cells[GRID_ROWS][GRID_COLS])
+             cells[cy + sOffsets[i][1]][cx + sOffsets[i][0]] = 1;
+ }
+ 
+-// One hit on the opponent of atkSide. move == MOVE_NONE means Buster (fixedDamage).
+-static void ApplyHit(u8 atkSide, u16 move, s32 fixedDamage)
++// One hit on the opponent of atkSide. user == NULL means Buster (fixedDamage).
++static void ApplyHit(u8 atkSide, const struct BattlePokemon *user, const char *userName, u16 move, s32 fixedDamage)
+ {
+     struct Fighter *def = &sB.f[atkSide ^ 1];
+     s32 dmg;
+@@ -325,7 +358,7 @@ static void ApplyHit(u8 atkSide, u16 move, s32 fixedDamage)
+         return;
+     }
+ 
+-    dmg = (move != MOVE_NONE) ? CalcMoveDamage(atkSide, move, &eff) : fixedDamage;
++    dmg = (move != MOVE_NONE) ? CalcMoveDamage(user, atkSide ^ 1, move, &eff) : fixedDamage;
+     if (dmg > def->bm.hp)
+         dmg = def->bm.hp;
+     def->bm.hp -= dmg;
+@@ -343,7 +376,7 @@ static void ApplyHit(u8 atkSide, u16 move, s32 fixedDamage)
+             SetMsg("NOT VERY EFFECTIVE", 50);
+         PlaySE(eff > TYPE_MUL_NORMAL ? SE_SUPER_EFFECTIVE : eff < TYPE_MUL_NORMAL ? SE_NOT_EFFECTIVE : SE_EFFECTIVE);
+         PKBN_LOG("%s's move %u hit %s: %d dmg (x%u/10) -> %u/%u HP",
+-                 sB.f[atkSide].name, move, def->name, (int)dmg, eff, def->bm.hp, def->bm.maxHP);
++                 userName, move, def->name, (int)dmg, eff, def->bm.hp, def->bm.maxHP);
+     }
+ }
+ 
+@@ -366,7 +399,7 @@ static const char *const sStatNames[NUM_BATTLE_STATS] =
+ 
+ // Pure status moves never miss and ignore position, Barrier and i-frames (design rule; in Gen 3
+ // Protect would block Growl etc.). Stage limits MIN_STAT_STAGE..MAX_STAT_STAGE as in Gen 3.
+-static void ApplyStatusMove(u8 side, u16 move)
++static void ApplyStatusMove(u8 side, const char *userName, u16 move)
+ {
+     u8 stat;
+     s8 delta;
+@@ -396,7 +429,7 @@ static void ApplyStatusMove(u8 side, u16 move)
+              (stat == STAT_ACC || stat == STAT_EVASION) ? " (NO GRID EFFECT)" : "!");
+     SetMsg(text, 60);
+     PlaySE(delta > 0 ? SE_EXP_MAX : SE_BOO);
+-    PKBN_LOG("%s used move %u: %s's stat %u %+d -> stage %d", sB.f[side].name, move, target->name,
++    PKBN_LOG("%s used move %u: %s's stat %u %+d -> stage %d", userName, move, target->name,
+              stat, delta, (int)stage);
+ }
+ 
+@@ -441,42 +474,41 @@ static void ImpactAttack(struct Attack *a)
+     case SHAPE_CANNON:
+     case SHAPE_LONGSWORD:
+     case SHAPE_SPREADER:
+-        // Telegraphed direct shapes strike the panels shown in the telegraph.
++        // Telegraphed direct shapes strike from the launch panel.
+         memset(a->cells, 0, sizeof(a->cells));
+-        DirectShapeCells(a->side, a->chip.shape, me->x, me->y, a->cells);
++        DirectShapeCells(a->side, a->chip.shape, a->ox, a->oy, a->cells);
+         if (a->cells[opp->y][opp->x])
+-            ApplyHit(a->side, a->chip.move, 0);
++            ApplyHit(a->side, &a->user, a->userName, a->chip.move, 0);
+         FlashCells(a->cells, 10);
+         break;
+     case SHAPE_GRENADE:
+         if (a->cells[opp->y][opp->x])
+-            ApplyHit(a->side, a->chip.move, 0);
++            ApplyHit(a->side, &a->user, a->userName, a->chip.move, 0);
+         FlashCells(a->cells, 12);
+-        PKBN_LOG("%s's bomb landed on (%d,%d)", me->name, a->tx, a->ty);
++        PKBN_LOG("%s's bomb landed on (%d,%d)", a->userName, a->tx, a->ty);
+         break;
+     case SHAPE_LOCKON:
+         // Can't be dodged: hits wherever the target is now (barrier / i-frames still apply).
+         memset(a->cells, 0, sizeof(a->cells));
+         a->cells[opp->y][opp->x] = 1;
+-        ApplyHit(a->side, a->chip.move, 0);
++        ApplyHit(a->side, &a->user, a->userName, a->chip.move, 0);
+         FlashCells(a->cells, 10);
+         break;
+     }
++    (void)me;
+     a->active = FALSE;
+ }
+ 
+-static void StartAttack(u8 side, const struct Chip *chip)
++// Launch a move. `user` is whose stats/moves are used (the active Pokémon, or an Assist caller).
++static void StartAttackAs(u8 side, const struct Chip *chip, const struct BattlePokemon *user, const char *userName)
+ {
+     struct Fighter *me = &sB.f[side];
+     struct Fighter *opp = &sB.f[side ^ 1];
+     struct Attack *a;
+ 
+-    if (me->bm.pp[chip->slot] > 0)
+-        me->bm.pp[chip->slot]--;
+-
+     if (chip->shape == SHAPE_STATUS)
+     {
+-        ApplyStatusMove(side, chip->move);
++        ApplyStatusMove(side, userName, chip->move);
+         me->lastShape = SHAPE_STATUS;
+         me->lockout = CHIP_LOCKOUT;
+         return;
+@@ -515,6 +547,8 @@ static void StartAttack(u8 side, const struct Chip *chip)
+         return;
+     a->side = side;
+     a->chip = *chip;
++    a->user = *user;
++    strncpy(a->userName, userName, sizeof(a->userName) - 1);
+     a->ox = me->x;
+     a->oy = me->y;
+     me->lockout = CHIP_LOCKOUT;
+@@ -545,6 +579,14 @@ static void StartAttack(u8 side, const struct Chip *chip)
+         ImpactAttack(a);
+ }
+ 
++static void StartAttack(u8 side, const struct Chip *chip)
++{
++    struct Fighter *me = &sB.f[side];
++    if (me->bm.pp[chip->slot] > 0)
++        me->bm.pp[chip->slot]--;
++    StartAttackAs(side, chip, &me->bm, me->name);
++}
++
+ static void UpdateAttacks(void)
+ {
+     s32 i;
+@@ -564,55 +606,214 @@ static void UpdateAttacks(void)
+     }
+ }
+ 
+-// ---- Setup / teardown -----------------------------------------------------------------
++// ---- Party / switching ----------------------------------------------------------------
+ 
+-static void LoadFighter(u8 side, struct Pokemon *mon)
++static bool8 PartyAlive(u8 slot)
+ {
+-    struct Fighter *f = &sB.f[side];
+-    MonToBattleMon(mon, &f->bm);
+-    Pkbn_GameStringToAscii(f->name, gSpeciesNames[f->bm.species], sizeof(f->name));
+-    Pkbn_DecodeMonIcon(f->icon[0], f->bm.species, f->bm.personality, 0);
+-    Pkbn_DecodeMonIcon(f->icon[1], f->bm.species, f->bm.personality, 1);
++    if (slot >= sB.partyCount || sB.party[slot].bm.species == SPECIES_NONE)
++        return FALSE;
++    if (slot == sB.active)
++        return sB.f[SIDE_PLAYER].bm.hp > 0;
++    return sB.party[slot].bm.hp > 0;
+ }
+ 
+-static s32 LeadIndex(void)
++static void AliveTable(bool8 *alive)
+ {
+     s32 i;
+-    for (i = 0; i < PARTY_SIZE; i++)
+-        if (GetMonData(&gPlayerParty[i], MON_DATA_SPECIES) != SPECIES_NONE
+-         && !GetMonData(&gPlayerParty[i], MON_DATA_IS_EGG)
+-         && GetMonData(&gPlayerParty[i], MON_DATA_HP) != 0)
+-            return i;
+-    return 0;
++    for (i = 0; i < PKBN_PARTY_MAX; i++)
++        alive[i] = PartyAlive(i);
+ }
+ 
+-static s32 sLead;
++// Store the active fighter's battle data back into its party entry.
++static void SyncActiveToParty(void)
++{
++    sB.party[sB.active].bm = sB.f[SIDE_PLAYER].bm;
++}
+ 
+-static void BuildHand(void)
++static void LoadActiveFromParty(u8 slot)
+ {
+-    s32 i;
+     struct Fighter *p = &sB.f[SIDE_PLAYER];
+-    sB.handCount = 0;
+-    sB.cursor = 0;
+-    for (i = 0; i < MAX_MON_MOVES; i++)
++    p->bm = sB.party[slot].bm;
++    memcpy(p->icon, sB.party[slot].icon, sizeof(p->icon));
++    memcpy(p->name, sB.party[slot].name, sizeof(p->name));
++    p->barrier = FALSE;
++    p->protectUses = 0;
++    p->lastShape = SHAPE_NONE;
++    sB.active = slot;
++    sB.party[slot].participated = TRUE;
++}
++
++// Swap the active Pokémon (called at the end of the switch time-stop).
++static void DoSwitch(u8 target, bool8 keepStages)
++{
++    s8 carried[NUM_BATTLE_STATS];
++    s32 i;
++
++    memcpy(carried, sB.f[SIDE_PLAYER].bm.statStages, sizeof(carried));
++    // Gen 3: switching out clears the user's stat stages unless it was Baton Pass
++    // (SwitchInClearSetData, battle_main.c:3152).
++    for (i = 0; i < NUM_BATTLE_STATS; i++)
++        sB.f[SIDE_PLAYER].bm.statStages[i] = DEFAULT_STAT_STAGE;
++    SyncActiveToParty();
++    LoadActiveFromParty(target);
++    if (keepStages)
++        memcpy(sB.f[SIDE_PLAYER].bm.statStages, carried, sizeof(carried));
++    sB.f[SIDE_PLAYER].iframes = SWITCH_IFRAMES;
++    sB.f[SIDE_PLAYER].lockout = 0;
++    PKBN_LOG("switched in %s%s", sB.f[SIDE_PLAYER].name, keepStages ? " (Baton Pass: stages kept)" : "");
++}
++
++static void BeginTimeStop(u8 kind, u8 target, bool8 keepStages)
++{
++    sB.tsKind = kind;
++    sB.tsTarget = target;
++    sB.tsKeepStages = keepStages;
++    sB.state = ST_TIMESTOP;
++    sB.timer = TIMESTOP_FRAMES;
++    PlaySE(SE_PIN);
++}
++
++static void OpenPicker(u8 purpose)
++{
++    s32 i;
++    sB.pickCount = 0;
++    for (i = 0; i < sB.partyCount; i++)
++        if (i != sB.active && PartyAlive(i))
++            sB.pickOptions[sB.pickCount++] = i;
++    if (sB.pickCount == 0)
++    {
++        SetMsg("NO ONE CAN COME IN", 50);
++        return;
++    }
++    sB.pickPurpose = purpose;
++    sB.pickCursor = 0;
++    sB.state = ST_PICK;
++    PlaySE(SE_SELECT);
++}
++
++// Gen 3 Assist calls a random move from another party member; only Assist's own PP is spent.
++// Here: a random benched Pokémon pops in during a time-stop and uses one of its grid-usable moves.
++static void BeginAssist(void)
++{
++    u8 who[PKBN_PARTY_MAX];
++    s32 n = 0, i, m;
++    for (i = 0; i < sB.partyCount; i++)
++    {
++        if (i == sB.active || !PartyAlive(i))
++            continue;
++        for (m = 0; m < MAX_MON_MOVES; m++)
++        {
++            u8 sh = Pkbn_ShapeForMove(sB.party[i].bm.moves[m]);
++            if (sh != SHAPE_NONE && sh != SHAPE_BARRIER && sh != SHAPE_BATON && sh != SHAPE_ASSIST)
++            {
++                who[n++] = i;
++                break;
++            }
++        }
++    }
++    if (n == 0)
++    {
++        SetMsg("BUT IT FAILED!", 50);
++        PlaySE(SE_FAILURE);
++        return;
++    }
++    i = who[Random() % n];
+     {
+-        u8 shape = Pkbn_ShapeForMove(p->bm.moves[i]);
+-        if (shape != SHAPE_NONE && p->bm.pp[i] > 0)
++        struct Chip options[MAX_MON_MOVES];
++        s32 k = 0;
++        for (m = 0; m < MAX_MON_MOVES; m++)
+         {
+-            sB.hand[sB.handCount].move = p->bm.moves[i];
+-            sB.hand[sB.handCount].slot = i;
+-            sB.hand[sB.handCount].shape = shape;
+-            sB.picked[sB.handCount] = FALSE;
+-            sB.handCount++;
++            u16 mv = sB.party[i].bm.moves[m];
++            u8 sh = Pkbn_ShapeForMove(mv);
++            if (sh != SHAPE_NONE && sh != SHAPE_BARRIER && sh != SHAPE_BATON && sh != SHAPE_ASSIST)
++            {
++                options[k].move = mv;
++                options[k].slot = m;
++                options[k].shape = sh;
++                k++;
++            }
+         }
++        sB.tsAssistChip = options[Random() % k];
+     }
+-    sB.queueCount = 0;
++    BeginTimeStop(TS_ASSIST, i, FALSE);
++}
++
++static void EndTimeStop(void)
++{
++    sB.state = ST_FIGHT;
++    if (sB.tsKind == TS_SWITCH)
++    {
++        DoSwitch(sB.tsTarget, sB.tsKeepStages);
++    }
++    else
++    {
++        struct PartyMember *pm = &sB.party[sB.tsTarget];
++        PKBN_LOG("ASSIST: %s uses move %u", pm->name, sB.tsAssistChip.move);
++        StartAttackAs(SIDE_PLAYER, &sB.tsAssistChip, &pm->bm, pm->name);
++    }
++}
++
++// ---- Setup / teardown -----------------------------------------------------------------
++
++static void LoadPartyMember(u8 slot, struct Pokemon *mon)
++{
++    struct PartyMember *pm = &sB.party[slot];
++    MonToBattleMon(mon, &pm->bm);
++    Pkbn_GameStringToAscii(pm->name, gSpeciesNames[pm->bm.species], sizeof(pm->name));
++    Pkbn_DecodeMonIcon(pm->icon[0], pm->bm.species, pm->bm.personality, 0);
++    Pkbn_DecodeMonIcon(pm->icon[1], pm->bm.species, pm->bm.personality, 1);
++}
++
++static void LoadEnemy(struct Pokemon *mon)
++{
++    struct Fighter *f = &sB.f[SIDE_ENEMY];
++    MonToBattleMon(mon, &f->bm);
++    Pkbn_GameStringToAscii(f->name, gSpeciesNames[f->bm.species], sizeof(f->name));
++    Pkbn_DecodeMonIcon(f->icon[0], f->bm.species, f->bm.personality, 0);
++    Pkbn_DecodeMonIcon(f->icon[1], f->bm.species, f->bm.personality, 1);
+ }
+ 
+ static void Overlay(u16 *fb);
+ 
++// BN keeps unselected chips in the hand and tops it up from the folder.
++static void RefillHand(void)
++{
++    u8 keep[HAND_SIZE];
++    s32 i, n = 0;
++    for (i = 0; i < sB.handCount; i++)
++        if (!sB.picked[i])
++            keep[n++] = sB.hand[i];
++    memcpy(sB.hand, keep, n);
++    sB.handCount = n;
++    while (sB.handCount < HAND_SIZE)
++    {
++        u8 idx;
++        if (!PkbnFolder_Draw(&sB.folder, &idx))
++            break;
++        sB.hand[sB.handCount++] = idx;
++    }
++    for (i = 0; i < HAND_SIZE; i++)
++        sB.picked[i] = FALSE;
++    sB.cursor = 0;
++}
++
++static void OpenCustom(void)
++{
++    s32 i;
++    // Chips still queued from last turn are lost (BN).
++    for (i = 0; i < sB.queueCount; i++)
++        PkbnFolder_Discard(&sB.folder, sB.queue[i]);
++    sB.queueCount = 0;
++    RefillHand();
++    sB.state = ST_CUSTOM;
++}
++
+ static void Begin(void)
+ {
++    s32 i;
++    struct BattlePokemon partyData[PKBN_PARTY_MAX];
++    s32 lead = -1;
++
+     memset(&sB, 0, sizeof(sB));
+ 
+     PkbnContract_Enter();
+@@ -621,9 +822,24 @@ static void Begin(void)
+     MoveSaveBlocks_ResetHeap();
+     AllocateBattleResources();
+ 
+-    sLead = LeadIndex();
+-    LoadFighter(SIDE_PLAYER, &gPlayerParty[sLead]);
+-    LoadFighter(SIDE_ENEMY, &gEnemyParty[0]);
++    for (i = 0; i < PARTY_SIZE; i++)
++    {
++        if (GetMonData(&gPlayerParty[i], MON_DATA_SPECIES) == SPECIES_NONE)
++            break;
++        sB.partyCount = i + 1;
++        if (GetMonData(&gPlayerParty[i], MON_DATA_IS_EGG))
++            continue; // eggs keep their slot but never battle (species stays 0)
++        LoadPartyMember(i, &gPlayerParty[i]);
++        if (lead < 0 && sB.party[i].bm.hp > 0)
++            lead = i;
++    }
++    for (i = 0; i < sB.partyCount; i++)
++        partyData[i] = sB.party[i].bm;
++    PkbnFolder_Build(&sB.folder, partyData, sB.partyCount);
++    PKBN_LOG("folder: %u chips from %u Pokemon", sB.folder.count, sB.partyCount);
++
++    LoadActiveFromParty(lead < 0 ? 0 : lead);
++    LoadEnemy(&gEnemyParty[0]);
+     sB.f[SIDE_PLAYER].x = 1;
+     sB.f[SIDE_PLAYER].y = 1;
+     sB.f[SIDE_ENEMY].x = 4;
+@@ -639,22 +855,30 @@ static void Begin(void)
+ 
+ static void Finish(void)
+ {
+-    struct Fighter *p = &sB.f[SIDE_PLAYER];
+-    u32 hp = p->bm.hp;
+-    s32 i;
++    s32 i, m;
++    u8 participants = 0;
+ 
+-    // Write-back required by the contract (research/02 §4): HP and PP into the party.
+-    SetMonData(&gPlayerParty[sLead], MON_DATA_HP, &hp);
+-    for (i = 0; i < MAX_MON_MOVES; i++)
++    SyncActiveToParty();
++    // Write-back required by the contract (research/02 §4): HP and PP for every party member.
++    for (i = 0; i < sB.partyCount; i++)
+     {
+-        u8 pp = p->bm.pp[i];
+-        SetMonData(&gPlayerParty[sLead], MON_DATA_PP1 + i, &pp);
++        u32 hp = sB.party[i].bm.hp;
++        if (sB.party[i].bm.species == SPECIES_NONE)
++            continue;
++        SetMonData(&gPlayerParty[i], MON_DATA_HP, &hp);
++        for (m = 0; m < MAX_MON_MOVES; m++)
++        {
++            u8 pp = sB.party[i].bm.pp[m];
++            SetMonData(&gPlayerParty[i], MON_DATA_PP1 + m, &pp);
++        }
++        if (sB.party[i].participated && sB.party[i].bm.hp > 0)
++            participants |= 1 << i;
+     }
+ 
+     gPkbnFrameOverlay = NULL;
+     sActive = FALSE;
+     FreeBattleResources();
+-    PkbnContract_Exit(sB.outcome);
++    PkbnContract_Exit(sB.outcome, participants);
+ }
+ 
+ static u16 EnemyAttackInterval(void)
+@@ -682,45 +906,161 @@ static void EndBattle(u8 outcome, const char *text)
+         PlaySE(SE_FLEE);
+ }
+ 
++static bool8 HandChipSelectable(u8 handPos)
++{
++    bool8 alive[PKBN_PARTY_MAX];
++    struct BattlePokemon party[PKBN_PARTY_MAX];
++    s32 i;
++    if (handPos >= sB.handCount || sB.picked[handPos])
++        return FALSE;
++    SyncActiveToParty();
++    AliveTable(alive);
++    for (i = 0; i < PKBN_PARTY_MAX; i++)
++        party[i] = sB.party[i].bm;
++    return PkbnFolder_CanAppend(&sB.folder, sB.queue, sB.queueCount, sB.hand[handPos], sB.active, alive, party);
++}
++
+ static void UpdateCustom(void)
+ {
+     u16 keys = gMain.newKeys;
+ 
+     if (sB.handCount > 0)
+     {
+-        if (keys & DPAD_LEFT)
++        if (keys & DPAD_UP)
+         {
+             sB.cursor = (sB.cursor + sB.handCount - 1) % sB.handCount;
+             PlaySE(SE_SELECT);
+         }
+-        if (keys & DPAD_RIGHT)
++        if (keys & DPAD_DOWN)
+         {
+             sB.cursor = (sB.cursor + 1) % sB.handCount;
+             PlaySE(SE_SELECT);
+         }
+-        if ((keys & A_BUTTON) && !sB.picked[sB.cursor])
++        if (keys & A_BUTTON)
+         {
+-            sB.picked[sB.cursor] = TRUE;
+-            sB.queue[sB.queueCount++] = sB.hand[sB.cursor];
+-            PlaySE(SE_SELECT);
++            if (HandChipSelectable(sB.cursor))
++            {
++                sB.picked[sB.cursor] = TRUE;
++                sB.queue[sB.queueCount++] = sB.hand[sB.cursor];
++                PlaySE(SE_SELECT);
++            }
++            else
++            {
++                PlaySE(SE_FAILURE);
++            }
+         }
+         if ((keys & B_BUTTON) && sB.queueCount > 0)
+         {
+             s32 i;
+             sB.queueCount--;
+             for (i = 0; i < sB.handCount; i++)
+-                if (sB.hand[i].slot == sB.queue[sB.queueCount].slot)
++                if (sB.hand[i] == sB.queue[sB.queueCount])
+                     sB.picked[i] = FALSE;
+         }
+     }
+     if (keys & (START_BUTTON | R_BUTTON))
+     {
++        // Selected chips leave the hand (they're in the queue); unselected ones stay for next turn.
++        u8 keep[HAND_SIZE];
++        s32 i, n = 0;
++        for (i = 0; i < sB.handCount; i++)
++            if (!sB.picked[i])
++                keep[n++] = sB.hand[i];
++        memcpy(sB.hand, keep, n);
++        sB.handCount = n;
++        for (i = 0; i < HAND_SIZE; i++)
++            sB.picked[i] = FALSE;
+         sB.gauge = 0;
+         sB.state = ST_FIGHT;
+         PlaySE(SE_PIN);
+     }
+ }
+ 
++// Use the chip at the front of the queue.
++static void UseNextChip(void)
++{
++    u8 idx = sB.queue[0];
++    const struct FolderChip *ch = &sB.folder.chips[idx];
++    s32 i;
++
++    for (i = 1; i < sB.queueCount; i++)
++        sB.queue[i - 1] = sB.queue[i];
++    sB.queueCount--;
++    PkbnFolder_Discard(&sB.folder, idx);
++
++    switch (ch->kind)
++    {
++    case FCHIP_MOVE:
++    {
++        struct Fighter *p = &sB.f[SIDE_PLAYER];
++        struct Chip chip;
++        if (ch->owner != sB.active || p->bm.pp[ch->slot] == 0)
++        {
++            SetMsg("CAN'T USE THAT NOW", 40);
++            PlaySE(SE_FAILURE);
++            return;
++        }
++        chip.move = ch->move;
++        chip.slot = ch->slot;
++        chip.shape = ch->shape;
++        if (ch->shape == SHAPE_BATON)
++        {
++            p->bm.pp[ch->slot]--;
++            OpenPicker(PICK_BATON);
++        }
++        else if (ch->shape == SHAPE_ASSIST)
++        {
++            p->bm.pp[ch->slot]--;
++            BeginAssist();
++        }
++        else
++        {
++            StartAttack(SIDE_PLAYER, &chip);
++        }
++        break;
++    }
++    case FCHIP_SWITCH:
++        if (ch->target == sB.active || !PartyAlive(ch->target))
++        {
++            SetMsg("CAN'T SWITCH THERE", 40);
++            PlaySE(SE_FAILURE);
++            return;
++        }
++        BeginTimeStop(TS_SWITCH, ch->target, FALSE);
++        break;
++    case FCHIP_WILD:
++        OpenPicker(PICK_WILD);
++        break;
++    }
++}
++
++static void UpdatePicker(void)
++{
++    u16 keys = gMain.newKeys;
++    if (keys & DPAD_UP)
++        sB.pickCursor = (sB.pickCursor + sB.pickCount - 1) % sB.pickCount;
++    if (keys & DPAD_DOWN)
++        sB.pickCursor = (sB.pickCursor + 1) % sB.pickCount;
++    if (keys & A_BUTTON)
++    {
++        u8 target = sB.pickOptions[sB.pickCursor];
++        if (sB.pickPurpose == PICK_FAINT)
++        {
++            // fainted Pokémon is replaced immediately (no animation needed)
++            DoSwitch(target, FALSE);
++            sB.state = ST_FIGHT;
++        }
++        else
++        {
++            BeginTimeStop(TS_SWITCH, target, sB.pickPurpose == PICK_BATON);
++        }
++    }
++    else if ((keys & B_BUTTON) && sB.pickPurpose != PICK_FAINT)
++    {
++        sB.state = ST_FIGHT; // cancelled: the chip is spent
++    }
++}
++
+ static void UpdatePlayer(void)
+ {
+     struct Fighter *p = &sB.f[SIDE_PLAYER];
+@@ -734,8 +1074,7 @@ static void UpdatePlayer(void)
+     }
+     if ((keys & (L_BUTTON | R_BUTTON)) && sB.gauge >= CUSTOM_FRAMES)
+     {
+-        BuildHand();
+-        sB.state = ST_CUSTOM;
++        OpenCustom();
+         PlaySE(SE_SELECT);
+         return;
+     }
+@@ -759,12 +1098,7 @@ static void UpdatePlayer(void)
+ 
+     if ((keys & A_BUTTON) && sB.queueCount > 0)
+     {
+-        struct Chip chip = sB.queue[0];
+-        s32 i;
+-        for (i = 1; i < sB.queueCount; i++)
+-            sB.queue[i - 1] = sB.queue[i];
+-        sB.queueCount--;
+-        StartAttack(SIDE_PLAYER, &chip);
++        UseNextChip();
+     }
+     else if ((held & B_BUTTON) && sB.busterCd == 0)
+     {
+@@ -773,7 +1107,7 @@ static void UpdatePlayer(void)
+         memset(cells, 0, sizeof(cells));
+         DirectShapeCells(SIDE_PLAYER, SHAPE_CANNON, p->x, p->y, cells);
+         if (cells[e->y][e->x])
+-            ApplyHit(SIDE_PLAYER, MOVE_NONE, BUSTER_DAMAGE);
++            ApplyHit(SIDE_PLAYER, NULL, p->name, MOVE_NONE, BUSTER_DAMAGE);
+         sB.busterCd = BUSTER_COOLDOWN;
+         FlashCells(cells, 3);
+     }
+@@ -789,6 +1123,8 @@ static bool8 PickEnemyChip(struct Chip *out)
+         u8 shape = Pkbn_ShapeForMove(e->bm.moves[i]);
+         if (shape == SHAPE_NONE || e->bm.pp[i] == 0)
+             continue;
++        if (shape == SHAPE_BATON || shape == SHAPE_ASSIST)
++            continue; // a lone wild Pokémon has no one to pass to / call
+         if (shape == SHAPE_BARRIER && e->barrier)
+             continue; // already shielded
+         if (shape == SHAPE_STATUS)
+@@ -896,9 +1232,23 @@ static void UpdateFight(void)
+     }
+     else if (sB.f[SIDE_PLAYER].bm.hp == 0)
+     {
+-        char text[40];
+-        snprintf(text, sizeof(text), "%s FAINTED!", sB.f[SIDE_PLAYER].name);
+-        EndBattle(B_OUTCOME_LOST, text);
++        bool8 alive[PKBN_PARTY_MAX];
++        s32 i, others = 0;
++        AliveTable(alive);
++        for (i = 0; i < PKBN_PARTY_MAX; i++)
++            others += alive[i];
++        PKBN_LOG("%s fainted (%d others can fight)", sB.f[SIDE_PLAYER].name, (int)others);
++        if (others > 0)
++        {
++            SetMsg("CHOOSE THE NEXT POKEMON", 60);
++            OpenPicker(PICK_FAINT);
++        }
++        else
++        {
++            char text[40];
++            snprintf(text, sizeof(text), "%s FAINTED!", sB.f[SIDE_PLAYER].name);
++            EndBattle(B_OUTCOME_LOST, text);
++        }
+     }
+ }
+ 
+@@ -915,10 +1265,7 @@ void CB2_PkbnGridBattle(void)
+     {
+     case ST_INTRO:
+         if (--sB.timer == 0)
+-        {
+-            BuildHand();
+-            sB.state = ST_CUSTOM; // BN opens the Custom screen at battle start
+-        }
++            OpenCustom(); // BN opens the Custom screen at battle start
+         break;
+     case ST_CUSTOM:
+         UpdateCustom();
+@@ -926,6 +1273,13 @@ void CB2_PkbnGridBattle(void)
+     case ST_FIGHT:
+         UpdateFight();
+         break;
++    case ST_PICK:
++        UpdatePicker();
++        break;
++    case ST_TIMESTOP:
++        if (--sB.timer == 0)
++            EndTimeStop();
++        break;
+     case ST_END:
+         if (--sB.timer == 0)
+             Finish();
+@@ -939,13 +1293,13 @@ void PkbnGrid_GetDebug(struct PkbnGridDebug *d)
+ {
+     s32 i;
+     const struct Fighter *p = &sB.f[SIDE_PLAYER];
++    memset(d, 0, sizeof(*d));
+     d->state = sB.state;
+     d->frame = sB.frame;
+     d->px = p->x;
+     d->py = p->y;
+     d->ex = sB.f[SIDE_ENEMY].x;
+     d->ey = sB.f[SIDE_ENEMY].y;
+-    d->playerThreatened = FALSE;
+     for (i = 0; i < MAX_ATTACKS; i++)
+     {
+         const struct Attack *a = &sB.attacks[i];
+@@ -953,11 +1307,21 @@ void PkbnGrid_GetDebug(struct PkbnGridDebug *d)
+             d->playerThreatened = TRUE;
+     }
+     d->queueCount = sB.queueCount;
+-    d->nextShape = sB.queueCount ? sB.queue[0].shape : 0;
++    if (sB.queueCount)
++    {
++        const struct FolderChip *ch = &sB.folder.chips[sB.queue[0]];
++        d->nextShape = ch->kind == FCHIP_MOVE ? ch->shape : SHAPE_BATON; // switches: position-independent
++    }
+     d->gaugeFull = sB.gauge >= CUSTOM_FRAMES;
+     d->handCount = sB.handCount;
+     d->cursor = sB.cursor;
+     d->cursorPicked = sB.handCount ? sB.picked[sB.cursor] : TRUE;
++    d->cursorSelectable = (sB.state == ST_CUSTOM) ? HandChipSelectable(sB.cursor) : FALSE;
++    d->anySelectable = FALSE;
++    if (sB.state == ST_CUSTOM)
++        for (i = 0; i < sB.handCount; i++)
++            if (HandChipSelectable(i))
++                d->anySelectable = TRUE;
+     d->pickedCount = 0;
+     for (i = 0; i < sB.handCount; i++)
+         d->pickedCount += sB.picked[i];
+@@ -984,6 +1348,7 @@ void PkbnGrid_GetDebug(struct PkbnGridDebug *d)
+ #define COL_CROSS     PKBN_RGB(31, 4, 4)
+ #define COL_BOMB      PKBN_RGB(10, 10, 10)
+ #define COL_STATUS    PKBN_RGB(24, 8, 28)
++#define COL_CODE      PKBN_RGB(31, 20, 8)
+ 
+ static void PanelOrigin(s32 c, s32 r, s32 *x, s32 *y)
+ {
+@@ -991,11 +1356,11 @@ static void PanelOrigin(s32 c, s32 r, s32 *x, s32 *y)
+     *y = GRID_Y + r * PANEL_H;
+ }
+ 
+-static void DrawHpBar(u16 *fb, s32 x, s32 y, s32 w, const struct Fighter *f)
++static void DrawHpBar(u16 *fb, s32 x, s32 y, s32 w, u16 hp, u16 maxHP)
+ {
+-    s32 fill = f->bm.maxHP ? (w - 2) * f->bm.hp / f->bm.maxHP : 0;
++    s32 fill = maxHP ? (w - 2) * hp / maxHP : 0;
+     Pkbn_FrameRect(fb, x, y, w, 5, COL_EDGE);
+-    Pkbn_FillRect(fb, x + 1, y + 1, fill, 3, (f->bm.hp * 4 <= f->bm.maxHP) ? COL_HP_LOW : COL_HP);
++    Pkbn_FillRect(fb, x + 1, y + 1, fill, 3, (hp * 4 <= maxHP) ? COL_HP_LOW : COL_HP);
+ }
+ 
+ static void DrawFighterHud(u16 *fb, s32 x, const struct Fighter *f)
+@@ -1003,7 +1368,7 @@ static void DrawFighterHud(u16 *fb, s32 x, const struct Fighter *f)
+     char line[32];
+     snprintf(line, sizeof(line), "%s L%u", f->name, f->bm.level);
+     Pkbn_DrawText(fb, x, 4, line, COL_TEXT, 1);
+-    DrawHpBar(fb, x, 11, 80, f);
++    DrawHpBar(fb, x, 11, 80, f->bm.hp, f->bm.maxHP);
+     snprintf(line, sizeof(line), "%u/%u", f->bm.hp, f->bm.maxHP);
+     Pkbn_DrawText(fb, x, 18, line, COL_TEXT, 1);
+     {
+@@ -1023,6 +1388,17 @@ static void DrawFighterHud(u16 *fb, s32 x, const struct Fighter *f)
+     }
+ }
+ 
++// Little party strip under the player HUD: one pip per Pokémon (active = bright).
++static void DrawPartyPips(u16 *fb)
++{
++    s32 i;
++    for (i = 0; i < sB.partyCount; i++)
++    {
++        u16 col = !PartyAlive(i) ? COL_HP_LOW : (i == sB.active) ? COL_TEXT : COL_DIM;
++        Pkbn_FillRect(fb, 4 + i * 7, 26, 5, 5, col);
++    }
++}
++
+ static void DrawGrid(u16 *fb)
+ {
+     s32 r, c, i;
+@@ -1077,7 +1453,7 @@ static void DrawFighter(u16 *fb, u8 side)
+         Pkbn_FrameRect(fb, x + 2, y - 14, PANEL_W - 4, PANEL_H + 12, (sB.frame & 8) ? COL_BARRIER : COL_TEXT);
+     if (f->iframes && (sB.frame & 2))
+         return;
+-    if (f->bm.hp == 0 && sB.state == ST_END)
++    if (f->bm.hp == 0 && (sB.state == ST_END || sB.state == ST_PICK))
+         return; // fainted
+     // Emerald icons face left: flip the player's so it faces the enemy.
+     Pkbn_BlitIcon(fb, f->icon[(sB.frame / 16) & 1], x + (PANEL_W - 32) / 2, y + PANEL_H - 34,
+@@ -1120,22 +1496,56 @@ static void DrawAttacksOverlay(u16 *fb)
+     }
+ }
+ 
+-static void DrawChipLabel(u16 *fb, s32 x, s32 y, const struct Chip *chip, const struct Fighter *f, u16 color)
++// Code letters: the 3-letter type name (gTypeNames), "*" for the wildcard.
++static void CodeLabel(char *dst, u32 size, u32 codes)
++{
++    s32 t, n = 0;
++    dst[0] = '\0';
++    if (codes == CODE_ALL)
++    {
++        snprintf(dst, size, "*");
++        return;
++    }
++    for (t = 0; t < NUMBER_OF_MON_TYPES; t++)
++    {
++        if (codes & (1u << t))
++        {
++            char name[TYPE_NAME_LENGTH + 1];
++            u32 len = strlen(dst);
++            Pkbn_GameStringToAscii(name, gTypeNames[t], sizeof(name));
++            name[3] = '\0';
++            snprintf(dst + len, size - len, "%s%s", n ? "/" : "", name);
++            n++;
++        }
++    }
++}
++
++static void ChipText(char *line, u32 size, const struct FolderChip *ch)
+ {
+-    char name[MOVE_NAME_LENGTH + 1];
+-    char line[48];
+-    Pkbn_GameStringToAscii(name, gMoveNames[chip->move], sizeof(name));
+-    if (gBattleMoves[chip->move].power)
+-        snprintf(line, sizeof(line), "%s %s P%u PP%u", name, Pkbn_ShapeLabel(chip->shape),
+-                 gBattleMoves[chip->move].power, f->bm.pp[chip->slot]);
++    char code[32];
++    CodeLabel(code, sizeof(code), ch->codes);
++    if (ch->kind == FCHIP_MOVE)
++    {
++        char name[MOVE_NAME_LENGTH + 1];
++        const struct BattlePokemon *owner = (ch->owner == sB.active) ? &sB.f[SIDE_PLAYER].bm : &sB.party[ch->owner].bm;
++        Pkbn_GameStringToAscii(name, gMoveNames[ch->move], sizeof(name));
++        snprintf(line, size, "%-12s %-10s %-7s PP%u", name, sB.party[ch->owner].name, Pkbn_ShapeLabel(ch->shape),
++                 owner->pp[ch->slot]);
++    }
++    else if (ch->kind == FCHIP_SWITCH)
++    {
++        snprintf(line, size, "SWITCH>%s", sB.party[ch->target].name);
++    }
+     else
+-        snprintf(line, sizeof(line), "%s %s PP%u", name, Pkbn_ShapeLabel(chip->shape), f->bm.pp[chip->slot]);
+-    Pkbn_DrawText(fb, x, y, line, color, 1);
++    {
++        snprintf(line, size, "SWITCH>ANY  (ENDS CHAIN)");
++    }
+ }
+ 
+ static void DrawBottomHud(u16 *fb)
+ {
+     s32 gw = 120;
++    char line[64];
+     u16 gc = sB.gauge >= CUSTOM_FRAMES ? COL_GAUGE_FULL : COL_GAUGE;
+     Pkbn_DrawText(fb, 60, 28, "CUSTOM", COL_DIM, 1);
+     Pkbn_FrameRect(fb, 86, 28, gw, 5, COL_EDGE);
+@@ -1145,12 +1555,14 @@ static void DrawBottomHud(u16 *fb)
+ 
+     if (sB.queueCount > 0)
+     {
+-        char more[16];
++        ChipText(line, sizeof(line), &sB.folder.chips[sB.queue[0]]);
+         Pkbn_DrawText(fb, 4, 136, "A:", COL_DIM, 1);
+-        DrawChipLabel(fb, 14, 136, &sB.queue[0], &sB.f[SIDE_PLAYER], COL_TEXT);
+-        snprintf(more, sizeof(more), "+%u QUEUED", sB.queueCount - 1);
++        Pkbn_DrawText(fb, 14, 136, line, COL_TEXT, 1);
+         if (sB.queueCount > 1)
+-            Pkbn_DrawText(fb, 4, 144, more, COL_DIM, 1);
++        {
++            snprintf(line, sizeof(line), "+%u QUEUED", sB.queueCount - 1);
++            Pkbn_DrawText(fb, 4, 144, line, COL_DIM, 1);
++        }
+     }
+     Pkbn_DrawText(fb, 4, 152, "B:BUSTER  ARROWS:MOVE  SELECT:RUN", COL_DIM, 1);
+ }
+@@ -1158,27 +1570,92 @@ static void DrawBottomHud(u16 *fb)
+ static void DrawCustomScreen(u16 *fb)
+ {
+     s32 i;
+-    Pkbn_FillRect(fb, 8, 40, 224, 100, COL_BOX);
+-    Pkbn_FrameRect(fb, 8, 40, 224, 100, COL_EDGE);
+-    Pkbn_DrawText(fb, 16, 46, "CUSTOM", COL_GAUGE_FULL, 2);
++    char line[64];
++    Pkbn_FillRect(fb, 4, 38, 232, 104, COL_BOX);
++    Pkbn_FrameRect(fb, 4, 38, 232, 104, COL_EDGE);
++    Pkbn_DrawText(fb, 10, 43, "CUSTOM", COL_GAUGE_FULL, 2);
++    snprintf(line, sizeof(line), "FOLDER %u  USED %u", sB.folder.pileCount, sB.folder.discardCount);
++    Pkbn_DrawText(fb, 70, 46, line, COL_DIM, 1);
+     if (sB.handCount == 0)
+-        Pkbn_DrawText(fb, 16, 66, "NO USABLE MOVES WITH PP - BUSTER ONLY", COL_TEXT, 1);
++        Pkbn_DrawText(fb, 10, 64, "NO CHIPS LEFT - BUSTER ONLY", COL_TEXT, 1);
+     for (i = 0; i < sB.handCount; i++)
+     {
+-        s32 y = 64 + i * 10;
+-        u16 color = sB.picked[i] ? COL_DIM : COL_TEXT;
++        const struct FolderChip *ch = &sB.folder.chips[sB.hand[i]];
++        s32 y = 60 + i * 11;
++        bool8 ok = HandChipSelectable(i);
++        u16 color = sB.picked[i] ? COL_GAUGE : ok ? COL_TEXT : COL_DIM;
++        char code[32];
+         if (i == sB.cursor)
+-            Pkbn_DrawText(fb, 16, y, ">", COL_GAUGE_FULL, 1);
+-        DrawChipLabel(fb, 24, y, &sB.hand[i], &sB.f[SIDE_PLAYER], color);
++            Pkbn_DrawText(fb, 8, y, ">", COL_GAUGE_FULL, 1);
++        if (sB.picked[i])
++        {
++            s32 q;
++            for (q = 0; q < sB.queueCount; q++)
++                if (sB.queue[q] == sB.hand[i])
++                {
++                    snprintf(code, sizeof(code), "%d", (int)q + 1);
++                    Pkbn_DrawText(fb, 8, y, code, COL_GAUGE_FULL, 1);
++                }
++        }
++        ChipText(line, sizeof(line), ch);
++        Pkbn_DrawText(fb, 14, y, line, color, 1);
++        CodeLabel(code, sizeof(code), ch->codes);
++        Pkbn_DrawText(fb, 232 - Pkbn_TextWidth(code, 1), y, code, ok || sB.picked[i] ? COL_CODE : COL_DIM, 1);
+     }
+-    for (i = 0; i < sB.queueCount; i++)
++    Pkbn_DrawText(fb, 10, 118, "UP/DOWN:PICK  A:ADD  B:UNDO   SAME CODE TO CHAIN", COL_DIM, 1);
++    Pkbn_DrawText(fb, 10, 128, "START:FIGHT", COL_GAUGE_FULL, 1);
++}
++
++static void DrawPicker(u16 *fb)
++{
++    s32 i;
++    const char *title = sB.pickPurpose == PICK_FAINT ? "CHOOSE NEXT" : sB.pickPurpose == PICK_BATON ? "BATON PASS TO" : "SWITCH TO";
++    Pkbn_FillRect(fb, 40, 40, 160, 20 + sB.pickCount * 14, COL_BOX);
++    Pkbn_FrameRect(fb, 40, 40, 160, 20 + sB.pickCount * 14, COL_EDGE);
++    Pkbn_DrawText(fb, 46, 45, title, COL_GAUGE_FULL, 1);
++    for (i = 0; i < sB.pickCount; i++)
++    {
++        const struct PartyMember *pm = &sB.party[sB.pickOptions[i]];
++        char line[32];
++        s32 y = 56 + i * 14;
++        if (i == sB.pickCursor)
++            Pkbn_DrawText(fb, 46, y + 2, ">", COL_GAUGE_FULL, 1);
++        snprintf(line, sizeof(line), "%s L%u", pm->name, pm->bm.level);
++        Pkbn_DrawText(fb, 54, y, line, COL_TEXT, 1);
++        DrawHpBar(fb, 54, y + 7, 60, pm->bm.hp, pm->bm.maxHP);
++        snprintf(line, sizeof(line), "%u/%u", pm->bm.hp, pm->bm.maxHP);
++        Pkbn_DrawText(fb, 120, y + 6, line, COL_TEXT, 1);
++    }
++}
++
++// Dim the whole frame (BN time-stop look).
++static void DimFrame(u16 *fb)
++{
++    s32 i;
++    for (i = 0; i < DISPLAY_WIDTH * DISPLAY_HEIGHT; i++)
+     {
+-        char n[4];
+-        snprintf(n, sizeof(n), "%d", (int)i + 1);
+-        Pkbn_DrawText(fb, 200 + i * 8, 48, n, COL_GAUGE_FULL, 1);
++        u16 c = fb[i];
++        u16 r = (c & 31) >> 2, g = ((c >> 5) & 31) >> 2, b = ((c >> 10) & 31) >> 2;
++        fb[i] = PKBN_RGB(r, g, b);
+     }
+-    Pkbn_DrawText(fb, 16, 118, "LEFT/RIGHT:PICK  A:ADD  B:UNDO", COL_DIM, 1);
+-    Pkbn_DrawText(fb, 16, 128, "START:FIGHT", COL_GAUGE_FULL, 1);
++}
++
++static void DrawTimeStop(u16 *fb)
++{
++    const struct PartyMember *pm = &sB.party[sB.tsTarget];
++    s32 x, y, t = TIMESTOP_FRAMES - sB.timer;
++    char line[40];
++    DimFrame(fb);
++    PanelOrigin(sB.f[SIDE_PLAYER].x, sB.f[SIDE_PLAYER].y, &x, &y);
++    // incoming Pokémon drops in from above, flashing
++    y = y + PANEL_H - 34 - (TIMESTOP_FRAMES / 2 > t ? (TIMESTOP_FRAMES / 2 - t) * 2 : 0);
++    Pkbn_BlitIcon(fb, pm->icon[(sB.frame / 8) & 1], x + (PANEL_W - 32) / 2, y, TRUE, (t & 4) ? COL_TEXT : 0);
++    if (sB.tsKind == TS_SWITCH)
++        snprintf(line, sizeof(line), "GO! %s!", pm->name);
++    else
++        snprintf(line, sizeof(line), "ASSIST: %s!", pm->name);
++    Pkbn_FillRect(fb, 0, 42, DISPLAY_WIDTH, 18, COL_BOX);
++    Pkbn_DrawText(fb, (DISPLAY_WIDTH - Pkbn_TextWidth(line, 2)) / 2, 46, line, COL_TEXT, 2);
+ }
+ 
+ static void Overlay(u16 *fb)
+@@ -1187,15 +1664,20 @@ static void Overlay(u16 *fb)
+     Pkbn_FillRect(fb, 0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, COL_BG);
+     DrawFighterHud(fb, 4, &sB.f[SIDE_PLAYER]);
+     DrawFighterHud(fb, 156, &sB.f[SIDE_ENEMY]);
++    DrawPartyPips(fb);
+     DrawGrid(fb);
+     DrawFighter(fb, SIDE_PLAYER);
+     DrawFighter(fb, SIDE_ENEMY);
+     DrawAttacksOverlay(fb);
+     DrawBottomHud(fb);
+ 
++    if (sB.state == ST_TIMESTOP)
++        DrawTimeStop(fb);
+     if (sB.state == ST_CUSTOM)
+         DrawCustomScreen(fb);
+-    if (sB.msgTimer)
++    if (sB.state == ST_PICK)
++        DrawPicker(fb);
++    if (sB.msgTimer && sB.state != ST_TIMESTOP)
+     {
+         bw = Pkbn_TextWidth(sB.msg, 1);
+         Pkbn_DrawText(fb, (DISPLAY_WIDTH - bw) / 2, 48, sB.msg, COL_GAUGE_FULL, 1);
+diff --git a/src/pkbn/move_shapes.c b/src/pkbn/move_shapes.c
+index 54eaa2c..4a2bb16 100644
+--- a/src/pkbn/move_shapes.c
++++ b/src/pkbn/move_shapes.c
+@@ -34,6 +34,10 @@ u8 Pkbn_ShapeForMove(u16 move)
+     // Protect / Detect (EFFECT_PROTECT) -> Barrier
+     if (m->effect == EFFECT_PROTECT)
+         return SHAPE_BARRIER;
++    if (m->effect == EFFECT_BATON_PASS)
++        return SHAPE_BATON;
++    if (m->effect == EFFECT_ASSIST)
++        return SHAPE_ASSIST;
+     if (m->power == 0)
+     {
+         u8 stat; s8 delta; bool8 self;
+@@ -65,6 +69,8 @@ const char *Pkbn_ShapeLabel(u8 shape)
+     case SHAPE_LOCKON:    return "LOCK-ON";
+     case SHAPE_BARRIER:   return "BARRIER";
+     case SHAPE_STATUS:    return "STATUS";
++    case SHAPE_BATON:     return "BATON";
++    case SHAPE_ASSIST:    return "ASSIST";
+     }
+     return "";
+ }
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index e6d4744..116d7ae 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -58,13 +58,16 @@ static void WrappedOverlay(u16 *fb)
+ 
+ static void CB2_SelfTestDone(void)
+ {
+-    printf("[pkbn-selftest] outcome=%u playerHP=%u/%u level=%u exp=%u frames_dumped=%u\n",
+-           gBattleOutcome,
+-           (unsigned)GetMonData(&gPlayerParty[0], MON_DATA_HP),
+-           (unsigned)GetMonData(&gPlayerParty[0], MON_DATA_MAX_HP),
+-           (unsigned)GetMonData(&gPlayerParty[0], MON_DATA_LEVEL),
+-           (unsigned)GetMonData(&gPlayerParty[0], MON_DATA_EXP),
+-           (unsigned)sDumpCount);
++    s32 i;
++    printf("[pkbn-selftest] outcome=%u frames_dumped=%u\n", gBattleOutcome, (unsigned)sDumpCount);
++    for (i = 0; i < PARTY_SIZE && GetMonData(&gPlayerParty[i], MON_DATA_SPECIES) != SPECIES_NONE; i++)
++        printf("[pkbn-selftest]   slot %d: HP %u/%u Lv %u EXP %u PP %u/%u/%u/%u\n", (int)i,
++               (unsigned)GetMonData(&gPlayerParty[i], MON_DATA_HP),
++               (unsigned)GetMonData(&gPlayerParty[i], MON_DATA_MAX_HP),
++               (unsigned)GetMonData(&gPlayerParty[i], MON_DATA_LEVEL),
++               (unsigned)GetMonData(&gPlayerParty[i], MON_DATA_EXP),
++               (unsigned)GetMonData(&gPlayerParty[i], MON_DATA_PP1), (unsigned)GetMonData(&gPlayerParty[i], MON_DATA_PP2),
++               (unsigned)GetMonData(&gPlayerParty[i], MON_DATA_PP3), (unsigned)GetMonData(&gPlayerParty[i], MON_DATA_PP4));
+     fflush(stdout);
+     exit(gBattleOutcome == 0 ? 1 : 0);
+ }
+@@ -81,17 +84,22 @@ static void Autopilot(void)
+     switch (d.state)
+     {
+     case PKBN_GRID_CUSTOM:
+-        if (d.pickedCount < d.handCount)
+-            pressed = d.cursorPicked ? DPAD_RIGHT : A_BUTTON;
++        if (d.cursorSelectable)
++            pressed = A_BUTTON;
++        else if (d.anySelectable)
++            pressed = DPAD_DOWN;
+         else
+             pressed = START_BUTTON;
+         break;
++    case PKBN_GRID_PICK:
++        pressed = A_BUTTON; // first option
++        break;
+     case PKBN_GRID_FIGHT:
+         if (d.gaugeFull)
+             pressed = L_BUTTON;
+         else if (d.playerThreatened)
+             held = (d.py > 0) ? DPAD_UP : DPAD_DOWN;
+-        else if (d.queueCount > 0 && (d.nextShape == SHAPE_BARRIER || d.nextShape == SHAPE_LOCKON || d.nextShape == SHAPE_STATUS) && !d.playerLocked)
++        else if (d.queueCount > 0 && (d.nextShape == SHAPE_BARRIER || d.nextShape == SHAPE_LOCKON || d.nextShape == SHAPE_STATUS || d.nextShape == SHAPE_BATON || d.nextShape == SHAPE_ASSIST) && !d.playerLocked)
+             pressed = A_BUTTON; // position doesn't matter
+         else if (d.py != d.ey)
+             held = (d.py < d.ey) ? DPAD_DOWN : DPAD_UP;
+@@ -127,6 +135,26 @@ static void CB2_SelfTestBattle(void)
+     }
+ }
+ 
++// "species:level[:move/move/move/move]"
++static void CreateTestMon(struct Pokemon *mon, const char *desc, unsigned species, unsigned level)
++{
++    unsigned moves[4] = { 0, 0, 0, 0 };
++    s32 nMoves = 0, m;
++    if (desc != NULL)
++    {
++        const char *movePart;
++        sscanf(desc, "%u:%u", &species, &level);
++        movePart = strchr(strchr(desc, ':') + 1, ':');
++        if (movePart != NULL)
++            nMoves = sscanf(movePart + 1, "%u/%u/%u/%u", &moves[0], &moves[1], &moves[2], &moves[3]);
++    }
++    CreateMon(mon, species, level, USE_RANDOM_IVS, FALSE, 0, OT_ID_PLAYER_ID, 0);
++    for (m = 0; m < nMoves; m++)
++        SetMonMoveSlot(mon, moves[m], m);
++    for (; nMoves > 0 && m < 4; m++)
++        SetMonMoveSlot(mon, MOVE_NONE, m);
++}
++
+ void Pkbn_SelfTestMaybeStart(void)
+ {
+     if (getenv("PKBN_SELFTEST") == NULL)
+@@ -138,40 +166,27 @@ void Pkbn_SelfTestMaybeStart(void)
+     ZeroPlayerPartyMons();
+     ZeroEnemyPartyMons();
+     {
+-        // PKBN_SELFTEST="species:level[:move/move/move/move],species:level[:...]" (player,enemy)
++        // PKBN_SELFTEST="sp:lv[:m/m/m/m][|sp:lv[:...]]...,sp:lv[:...]" = player party ('|' separated), enemy.
+         // default: Torchic 7 vs Zigzagoon 4 with their level-up moves.
+         const char *spec = getenv("PKBN_SELFTEST");
+-        char buf[256];
+-        char *sides[2] = { NULL, NULL };
+-        s32 i;
++        char buf[512];
++        char *playerPart = NULL, *enemyPart = NULL;
++        char *members[PARTY_SIZE];
++        s32 nMembers = 0, i;
+         strncpy(buf, spec, sizeof(buf) - 1);
+         buf[sizeof(buf) - 1] = '\0';
+         if (strchr(buf, ':') != NULL)
+         {
+-            sides[0] = strtok(buf, ",");
+-            sides[1] = strtok(NULL, ",");
+-        }
+-        for (i = 0; i < 2; i++)
+-        {
+-            struct Pokemon *mon = (i == 0) ? &gPlayerParty[0] : &gEnemyParty[0];
+-            unsigned species = (i == 0) ? SPECIES_TORCHIC : SPECIES_ZIGZAGOON;
+-            unsigned level = (i == 0) ? 7 : 4;
+-            unsigned moves[4] = { 0, 0, 0, 0 };
+-            s32 nMoves = 0, m;
+-            if (sides[i] != NULL)
+-            {
+-                char *movePart = NULL;
+-                sscanf(sides[i], "%u:%u", &species, &level);
+-                movePart = strchr(strchr(sides[i], ':') + 1, ':');
+-                if (movePart != NULL)
+-                    nMoves = sscanf(movePart + 1, "%u/%u/%u/%u", &moves[0], &moves[1], &moves[2], &moves[3]);
+-            }
+-            CreateMon(mon, species, level, USE_RANDOM_IVS, FALSE, 0, OT_ID_PLAYER_ID, 0);
+-            for (m = 0; m < nMoves; m++)
+-                SetMonMoveSlot(mon, moves[m], m);
+-            for (; nMoves > 0 && m < 4; m++)
+-                SetMonMoveSlot(mon, MOVE_NONE, m);
++            playerPart = strtok(buf, ",");
++            enemyPart = strtok(NULL, ",");
++            for (members[nMembers] = strtok(playerPart, "|"); members[nMembers] != NULL && nMembers < PARTY_SIZE - 1;)
++                members[++nMembers] = strtok(NULL, "|");
+         }
++        if (nMembers == 0)
++            CreateTestMon(&gPlayerParty[0], NULL, SPECIES_TORCHIC, 7);
++        for (i = 0; i < nMembers; i++)
++            CreateTestMon(&gPlayerParty[i], members[i], SPECIES_TORCHIC, 7);
++        CreateTestMon(&gEnemyParty[0], enemyPart, SPECIES_ZIGZAGOON, 4);
+     }
+     gBattleTypeFlags = 0;
+     gMain.savedCallback = CB2_SelfTestDone;
+-- 
+2.43.0
+
