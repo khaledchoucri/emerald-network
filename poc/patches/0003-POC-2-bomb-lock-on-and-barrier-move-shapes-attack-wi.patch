@@ -1,0 +1,1075 @@
+From f9dd7c80469581a27121e8485e25cc1fcafb0c31 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Sun, 4 Oct 2026 16:55:50 +0300
+Subject: [PATCH] POC-2: bomb, lock-on and barrier move shapes; attack wind-up
+ pipeline; Gen 3 Protect odds
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ include/pkbn/grid_battle.h |   1 +
+ include/pkbn/move_shapes.h |  20 ++
+ src/pkbn/grid_battle.c     | 527 ++++++++++++++++++++++++++-----------
+ src/pkbn/move_shapes.c     |  63 +++++
+ src/pkbn/selftest.c        |  50 +++-
+ 5 files changed, 502 insertions(+), 159 deletions(-)
+ create mode 100644 include/pkbn/move_shapes.h
+ create mode 100644 src/pkbn/move_shapes.c
+
+diff --git a/include/pkbn/grid_battle.h b/include/pkbn/grid_battle.h
+index 468504c..06a097a 100644
+--- a/include/pkbn/grid_battle.h
++++ b/include/pkbn/grid_battle.h
+@@ -14,6 +14,7 @@ struct PkbnGridDebug
+     s8 px, py, ex, ey;
+     bool8 playerThreatened;
+     u8 queueCount;
++    u8 nextShape;
+     bool8 gaugeFull;
+     u8 handCount, cursor, pickedCount;
+     bool8 cursorPicked;
+diff --git a/include/pkbn/move_shapes.h b/include/pkbn/move_shapes.h
+new file mode 100644
+index 0000000..43ff93b
+--- /dev/null
++++ b/include/pkbn/move_shapes.h
+@@ -0,0 +1,20 @@
++#ifndef GUARD_PKBN_MOVE_SHAPES_H
++#define GUARD_PKBN_MOVE_SHAPES_H
++
++// How an Emerald move behaves on the grid. Modelled on BN6 chip families (research/03).
++enum
++{
++    SHAPE_NONE,      // not usable on the grid yet (most status moves)
++    SHAPE_CANNON,    // BN6 family 0x14: hits the first target down the row
++    SHAPE_LONGSWORD, // BN6 family 0x13 sub 2: hits up to 2 panels ahead
++    SHAPE_SPREADER,  // BN6 family 0x25: Cannon + 3x3 splash around the target
++    SHAPE_GRENADE,   // BN6 family 0x12 (MiniBomb): thrown 3 panels ahead, 3x3 blast on landing
++    SHAPE_LOCKON,    // BN6 MachGun family 0x29 idea: lock onto the target, then a hit it can't dodge
++    SHAPE_BARRIER,   // BN6 Barrier (family 0x15 sub 4, param 1): absorbs the next hit
++    SHAPE_COUNT
++};
++
++u8 Pkbn_ShapeForMove(u16 move);
++const char *Pkbn_ShapeLabel(u8 shape);
++
++#endif // GUARD_PKBN_MOVE_SHAPES_H
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index dd2bfc3..95dad88 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -1,15 +1,19 @@
+-// POC-1: real-time 6x3 grid battle (Battle Network style) driven by real Emerald data.
++// Real-time 6x3 grid battle (Battle Network style) driven by real Emerald data.
+ //
+-// Grounding (see research/02 and research/03):
++// Grounding (see research/02, research/03, poc/POC-1.md, poc/POC-2.md):
+ //  - Entry/exit: PkbnContract_Enter/Exit mirror the Emerald battle contract.
+ //  - Damage: Emerald's own CalculateBaseDamage (pokemon.c:3106) followed by the same STAB,
+ //    type-chart and random steps as Cmd_typecalc (battle_script_commands.c:1355) and
+ //    ApplyRandomDmgMultiplier (:1639).
+-//  - Attack shapes are modelled on BN6 chip families: Cannon 0x14, LongSword (family 0x13,
+-//    subfamily 2) and Spreader 0x25 (research/03 §2). Buster damage = 1, as BN6's MegaBuster
+-//    chip (ChipDataArr index 0, attack_power 1).
++//  - Move -> shape rules: src/pkbn/move_shapes.c (BN6 chip families, research/03 §2).
++//  - Buster damage = 1, as BN6's MegaBuster chip (ChipDataArr index 0, attack_power 1).
++//  - Barrier only stops moves Protect would stop (FLAG_PROTECT_AFFECTED), plus the Buster.
+ //  - Everything marked TUNE is our own design value, not taken from either game.
+ //
++// Attacks run through one pipeline: StartAttack -> wind-up (telegraph / flight / lock-on)
++// -> ImpactAttack. Player Cannon/Sword/Spreader have no wind-up (instant, like BN chips);
++// enemy ones are telegraphed so they can be dodged.
++//
+ // PC (PORTABLE) builds only: drawing goes through gPkbnFrameOverlay (src/platform/sdl2.c).
+ 
+ #ifdef PORTABLE
+@@ -31,11 +35,12 @@
+ #include "constants/songs.h"
+ #include "pkbn/battle_stub.h"
+ #include "pkbn/grid_battle.h"
++#include "pkbn/move_shapes.h"
+ #include "pkbn/render.h"
+ 
+ #ifdef PORTABLE
+ 
+-#define PKBN_LOG(...) do { printf("[pkbn] " __VA_ARGS__); printf("\n"); fflush(stdout); } while (0)
++#define PKBN_LOG(...) do { printf("[pkbn f%u] ", (unsigned)sB.frame); printf(__VA_ARGS__); printf("\n"); fflush(stdout); } while (0)
+ 
+ // ---- Layout -------------------------------------------------------------------------
+ #define GRID_COLS 6
+@@ -52,14 +57,18 @@
+ #define BUSTER_COOLDOWN      20   // TUNE
+ #define BUSTER_DAMAGE        1    // BN6 MegaBuster attack_power (ChipDataArr index 0)
+ #define CHIP_LOCKOUT         24   // TUNE: frames the attacker is busy after using a move
++#define THROW_LOCKOUT        21   // BN6 bomb routine ends the thrower's attack at frame 0x15 (asm31.s, sub_80EB644)
+ #define HIT_IFRAMES          45   // TUNE: invincibility after taking a move hit
+ #define ENEMY_STEP_MIN       40   // TUNE
+ #define ENEMY_STEP_RAND      50   // TUNE
+ #define ENEMY_TELEGRAPH      36   // TUNE: frames the threatened panels flash before an enemy move lands
++#define GRENADE_RANGE        3    // Khaled's spec: lands 3 panels ahead (BN bomb distance; not yet read from asm)
++#define GRENADE_FLIGHT       30   // TUNE: frames in the air
++#define LOCKON_FRAMES        40   // TUNE: crosshair tracking time before the shot
+ #define LONGSWORD_REACH      2    // BN6 LongSwrd: 2 panels ahead
+ #define MAX_HAND             4
++#define MAX_ATTACKS          6
+ 
+-enum { SHAPE_NONE, SHAPE_CANNON, SHAPE_LONGSWORD, SHAPE_SPREADER };
+ enum { ST_INTRO, ST_CUSTOM, ST_FIGHT, ST_END };
+ enum { SIDE_PLAYER, SIDE_ENEMY };
+ 
+@@ -71,6 +80,9 @@ struct Fighter
+     u16 lockout;
+     u16 iframes;
+     u16 hurtFlash;
++    bool8 barrier;
++    u8 protectUses;     // consecutive successful barriers (Gen 3 protectUses)
++    u8 lastShape;       // shape of the last move used (buster doesn't count)
+     u16 icon[2][32 * 32];
+     char name[POKEMON_NAME_LENGTH + 1];
+ };
+@@ -82,6 +94,19 @@ struct Chip
+     u8 shape;
+ };
+ 
++// An attack in flight / winding up.
++struct Attack
++{
++    bool8 active;
++    u8 side;
++    struct Chip chip;
++    u16 timer;          // frames until impact
++    u16 duration;       // total wind-up, for drawing arcs
++    s8 ox, oy;          // where it was launched from
++    s8 tx, ty;          // grenade landing panel / lock-on target panel
++    u8 cells[GRID_ROWS][GRID_COLS]; // panels it will hit (telegraph + impact)
++};
++
+ struct GridBattle
+ {
+     u8 state;
+@@ -96,15 +121,12 @@ struct GridBattle
+     struct Chip queue[MAX_HAND];
+     u8 queueCount;
+     u16 busterCd;
++    struct Attack attacks[MAX_ATTACKS];
+     // enemy AI
+     u16 aiStepTimer;
+     u16 aiAttackTimer;
+-    u16 aiTelegraph;     // >0 while an enemy attack is winding up
+-    struct Chip aiChip;
+-    u8 aiTargetRow;
+     // effects
+     u8 fx[GRID_ROWS][GRID_COLS];     // frames of hit flash per panel
+-    u8 warn[GRID_ROWS][GRID_COLS];   // 1 = threatened by enemy telegraph
+     char msg[40];
+     u16 msgTimer;
+     char banner[40];
+@@ -123,6 +145,16 @@ static void SetMsg(const char *text, u16 frames)
+     sB.msgTimer = frames;
+ }
+ 
++static bool8 InGrid(s32 c, s32 r)
++{
++    return c >= 0 && c < GRID_COLS && r >= 0 && r < GRID_ROWS;
++}
++
++static s8 Facing(u8 side)
++{
++    return side == SIDE_PLAYER ? 1 : -1;
++}
++
+ // Gen 3 battle data from a party/enemy Pokemon, following the field set used by
+ // the battle controllers' REQUEST_ALL_BATTLE copy.
+ static void MonToBattleMon(struct Pokemon *mon, struct BattlePokemon *bm)
+@@ -155,32 +187,6 @@ static void MonToBattleMon(struct Pokemon *mon, struct BattlePokemon *bm)
+     bm->status1 = GetMonData(mon, MON_DATA_STATUS);
+ }
+ 
+-// Our move -> BN6-family shape rule (design decision, documented in poc/POC-1.md):
+-// status moves are not playable yet; contact moves swing a LongSword; moves that hit
+-// both foes use Spreader; everything else is a Cannon down the row.
+-static u8 ShapeForMove(u16 move)
+-{
+-    const struct BattleMove *m = &gBattleMoves[move];
+-    if (move == MOVE_NONE || m->power == 0)
+-        return SHAPE_NONE;
+-    if (m->flags & FLAG_MAKES_CONTACT)
+-        return SHAPE_LONGSWORD;
+-    if (m->target & (MOVE_TARGET_BOTH | MOVE_TARGET_FOES_AND_ALLY))
+-        return SHAPE_SPREADER;
+-    return SHAPE_CANNON;
+-}
+-
+-static const char *ShapeLabel(u8 shape)
+-{
+-    switch (shape)
+-    {
+-    case SHAPE_CANNON:    return "CANNON";
+-    case SHAPE_LONGSWORD: return "SWORD";
+-    case SHAPE_SPREADER:  return "SPREAD";
+-    }
+-    return "";
+-}
+-
+ // Emerald damage pipeline. Returns damage; *eff = type multiplier x10 (10 = neutral).
+ static s32 CalcMoveDamage(u8 atkSide, u16 move, u16 *eff)
+ {
+@@ -212,7 +218,7 @@ static s32 CalcMoveDamage(u8 atkSide, u16 move, u16 *eff)
+         return 0;
+     }
+ 
+-    // Type chart walk, identical to Cmd_typecalc (no Foresight in POC-1).
++    // Type chart walk, identical to Cmd_typecalc (no Foresight yet).
+     for (i = 0; TYPE_EFFECT_ATK_TYPE(i) != TYPE_ENDTABLE; i += 3)
+     {
+         if (TYPE_EFFECT_ATK_TYPE(i) == TYPE_FORESIGHT)
+@@ -246,62 +252,56 @@ static s32 CalcMoveDamage(u8 atkSide, u16 move, u16 *eff)
+     return dmg;
+ }
+ 
+-static s8 Facing(u8 side)
+-{
+-    return side == SIDE_PLAYER ? 1 : -1;
+-}
+-
+-// Which panels a shape strikes from (x, y). Returns TRUE if the opponent is hit.
+-static bool8 ResolveShape(u8 side, u8 shape, s8 x, s8 y, u8 fxCells[GRID_ROWS][GRID_COLS])
++// Panels a direct shape (Cannon / Sword / Spreader) strikes from (x, y).
++static void DirectShapeCells(u8 side, u8 shape, s8 x, s8 y, u8 cells[GRID_ROWS][GRID_COLS])
+ {
+     struct Fighter *opp = &sB.f[side ^ 1];
+     s8 dir = Facing(side);
+     s8 c;
+-    bool8 hit = FALSE;
+ 
+     switch (shape)
+     {
+     case SHAPE_CANNON:
+         for (c = x + dir; c >= 0 && c < GRID_COLS; c += dir)
+         {
+-            fxCells[y][c] = 1;
++            cells[y][c] = 1;
+             if (opp->x == c && opp->y == y)
+-            {
+-                hit = TRUE;
+                 break;
+-            }
+         }
+         break;
+     case SHAPE_LONGSWORD:
+         for (c = x + dir; c != x + dir * (LONGSWORD_REACH + 1); c += dir)
+-        {
+-            if (c < 0 || c >= GRID_COLS)
+-                break;
+-            fxCells[y][c] = 1;
+-            if (opp->x == c && opp->y == y)
+-                hit = TRUE;
+-        }
++            if (c >= 0 && c < GRID_COLS)
++                cells[y][c] = 1;
+         break;
+     case SHAPE_SPREADER:
+         for (c = x + dir; c >= 0 && c < GRID_COLS; c += dir)
+         {
++            cells[y][c] = 1;
+             if (opp->x == c && opp->y == y)
+             {
+                 s8 dx, dy;
+-                hit = TRUE;
+                 for (dy = -1; dy <= 1; dy++)
+                     for (dx = -1; dx <= 1; dx++)
+-                        if (y + dy >= 0 && y + dy < GRID_ROWS && c + dx >= 0 && c + dx < GRID_COLS)
+-                            fxCells[y + dy][c + dx] = 1;
++                        if (InGrid(c + dx, y + dy))
++                            cells[y + dy][c + dx] = 1;
+                 break;
+             }
+-            fxCells[y][c] = 1;
+         }
+         break;
+     }
+-    return hit;
+ }
+ 
++static void BlastCells(s8 cx, s8 cy, u8 cells[GRID_ROWS][GRID_COLS])
++{
++    s8 dx, dy;
++    for (dy = -1; dy <= 1; dy++)
++        for (dx = -1; dx <= 1; dx++)
++            if (InGrid(cx + dx, cy + dy))
++                cells[cy + dy][cx + dx] = 1;
++}
++
++// One hit on the opponent of atkSide. move == MOVE_NONE means Buster (fixedDamage).
+ static void ApplyHit(u8 atkSide, u16 move, s32 fixedDamage)
+ {
+     struct Fighter *def = &sB.f[atkSide ^ 1];
+@@ -310,6 +310,18 @@ static void ApplyHit(u8 atkSide, u16 move, s32 fixedDamage)
+ 
+     if (def->iframes)
+         return;
++
++    // Barrier: absorbs the next hit Protect would have stopped (FLAG_PROTECT_AFFECTED), or a Buster shot.
++    if (def->barrier && (move == MOVE_NONE || (gBattleMoves[move].flags & FLAG_PROTECT_AFFECTED)))
++    {
++        def->barrier = FALSE;
++        def->hurtFlash = 6;
++        SetMsg("BARRIER BLOCKED IT!", 50);
++        PlaySE(SE_BOO);
++        PKBN_LOG("%s's barrier absorbed %s", def->name, move ? "a move" : "a buster shot");
++        return;
++    }
++
+     dmg = (move != MOVE_NONE) ? CalcMoveDamage(atkSide, move, &eff) : fixedDamage;
+     if (dmg > def->bm.hp)
+         dmg = def->bm.hp;
+@@ -327,28 +339,167 @@ static void ApplyHit(u8 atkSide, u16 move, s32 fixedDamage)
+         else if (eff < TYPE_MUL_NORMAL)
+             SetMsg("NOT VERY EFFECTIVE", 50);
+         PlaySE(eff > TYPE_MUL_NORMAL ? SE_SUPER_EFFECTIVE : eff < TYPE_MUL_NORMAL ? SE_NOT_EFFECTIVE : SE_EFFECTIVE);
+-        PKBN_LOG("%s used move %u on %s: %d dmg (x%u/10) -> %u/%u HP",
++        PKBN_LOG("%s's move %u hit %s: %d dmg (x%u/10) -> %u/%u HP",
+                  sB.f[atkSide].name, move, def->name, (int)dmg, eff, def->bm.hp, def->bm.maxHP);
+     }
+ }
+ 
+-static void UseChip(u8 side, const struct Chip *chip)
++static void FlashCells(const u8 cells[GRID_ROWS][GRID_COLS], u8 frames)
+ {
+-    struct Fighter *me = &sB.f[side];
+-    u8 cells[GRID_ROWS][GRID_COLS];
+-    s8 r, c;
+-
+-    memset(cells, 0, sizeof(cells));
+-    if (ResolveShape(side, chip->shape, me->x, me->y, cells))
+-        ApplyHit(side, chip->move, 0);
++    s32 r, c;
+     for (r = 0; r < GRID_ROWS; r++)
+         for (c = 0; c < GRID_COLS; c++)
+-            if (cells[r][c])
+-                sB.fx[r][c] = 10;
++            if (cells[r][c] && sB.fx[r][c] < frames)
++                sB.fx[r][c] = frames;
++}
++
++// ---- Attack pipeline ------------------------------------------------------------------
++
++static struct Attack *NewAttack(void)
++{
++    s32 i;
++    for (i = 0; i < MAX_ATTACKS; i++)
++        if (!sB.attacks[i].active)
++        {
++            memset(&sB.attacks[i], 0, sizeof(sB.attacks[i]));
++            sB.attacks[i].active = TRUE;
++            return &sB.attacks[i];
++        }
++    return NULL;
++}
++
++static bool8 SideHasPendingAttack(u8 side)
++{
++    s32 i;
++    for (i = 0; i < MAX_ATTACKS; i++)
++        if (sB.attacks[i].active && sB.attacks[i].side == side)
++            return TRUE;
++    return FALSE;
++}
++
++static void ImpactAttack(struct Attack *a)
++{
++    struct Fighter *opp = &sB.f[a->side ^ 1];
++    struct Fighter *me = &sB.f[a->side];
++
++    switch (a->chip.shape)
++    {
++    case SHAPE_CANNON:
++    case SHAPE_LONGSWORD:
++    case SHAPE_SPREADER:
++        // Telegraphed direct shapes strike the panels shown in the telegraph.
++        memset(a->cells, 0, sizeof(a->cells));
++        DirectShapeCells(a->side, a->chip.shape, me->x, me->y, a->cells);
++        if (a->cells[opp->y][opp->x])
++            ApplyHit(a->side, a->chip.move, 0);
++        FlashCells(a->cells, 10);
++        break;
++    case SHAPE_GRENADE:
++        if (a->cells[opp->y][opp->x])
++            ApplyHit(a->side, a->chip.move, 0);
++        FlashCells(a->cells, 12);
++        PKBN_LOG("%s's bomb landed on (%d,%d)", me->name, a->tx, a->ty);
++        break;
++    case SHAPE_LOCKON:
++        // Can't be dodged: hits wherever the target is now (barrier / i-frames still apply).
++        memset(a->cells, 0, sizeof(a->cells));
++        a->cells[opp->y][opp->x] = 1;
++        ApplyHit(a->side, a->chip.move, 0);
++        FlashCells(a->cells, 10);
++        break;
++    }
++    a->active = FALSE;
++}
++
++static void StartAttack(u8 side, const struct Chip *chip)
++{
++    struct Fighter *me = &sB.f[side];
++    struct Fighter *opp = &sB.f[side ^ 1];
++    struct Attack *a;
+ 
+     if (me->bm.pp[chip->slot] > 0)
+         me->bm.pp[chip->slot]--;
++
++    if (chip->shape == SHAPE_BARRIER)
++    {
++        // Gen 3 Protect rule (Cmd_setprotectlike, battle_script_commands.c:6523-6555): the counter
++        // resets unless the previous move was also Protect-like; each consecutive use halves the
++        // success chance (sProtectSuccessRates, :719). Clamped to the table size.
++        static const u16 sSuccess[] = { USHRT_MAX, USHRT_MAX / 2, USHRT_MAX / 4, USHRT_MAX / 8 };
++        if (me->lastShape != SHAPE_BARRIER)
++            me->protectUses = 0;
++        me->lastShape = SHAPE_BARRIER;
++        me->lockout = CHIP_LOCKOUT;
++        if (sSuccess[min(me->protectUses, 3)] >= Random())
++        {
++            me->barrier = TRUE;
++            me->protectUses++;
++            PlaySE(SE_SELECT);
++            PKBN_LOG("%s raised a barrier (consecutive %u)", me->name, me->protectUses);
++        }
++        else
++        {
++            me->protectUses = 0;
++            SetMsg("BARRIER FAILED!", 50);
++            PlaySE(SE_FAILURE);
++            PKBN_LOG("%s's barrier failed", me->name);
++        }
++        return;
++    }
++    me->lastShape = chip->shape;
++
++    a = NewAttack();
++    if (a == NULL)
++        return;
++    a->side = side;
++    a->chip = *chip;
++    a->ox = me->x;
++    a->oy = me->y;
+     me->lockout = CHIP_LOCKOUT;
++
++    switch (chip->shape)
++    {
++    case SHAPE_CANNON:
++    case SHAPE_LONGSWORD:
++    case SHAPE_SPREADER:
++        DirectShapeCells(side, chip->shape, me->x, me->y, a->cells);
++        a->timer = (side == SIDE_ENEMY) ? ENEMY_TELEGRAPH : 0;
++        break;
++    case SHAPE_GRENADE:
++        a->tx = me->x + Facing(side) * GRENADE_RANGE;
++        a->ty = me->y;
++        BlastCells(a->tx, a->ty, a->cells);
++        a->timer = GRENADE_FLIGHT;
++        me->lockout = THROW_LOCKOUT;
++        break;
++    case SHAPE_LOCKON:
++        a->tx = opp->x;
++        a->ty = opp->y;
++        a->timer = LOCKON_FRAMES;
++        break;
++    }
++    a->duration = a->timer;
++    if (a->timer == 0)
++        ImpactAttack(a);
++}
++
++static void UpdateAttacks(void)
++{
++    s32 i;
++    for (i = 0; i < MAX_ATTACKS; i++)
++    {
++        struct Attack *a = &sB.attacks[i];
++        if (!a->active)
++            continue;
++        if (a->chip.shape == SHAPE_LOCKON)
++        {
++            // crosshair tracks the target until it fires
++            a->tx = sB.f[a->side ^ 1].x;
++            a->ty = sB.f[a->side ^ 1].y;
++        }
++        if (a->timer > 0 && --a->timer == 0)
++            ImpactAttack(a);
++    }
+ }
+ 
+ // ---- Setup / teardown -----------------------------------------------------------------
+@@ -383,7 +534,7 @@ static void BuildHand(void)
+     sB.cursor = 0;
+     for (i = 0; i < MAX_MON_MOVES; i++)
+     {
+-        u8 shape = ShapeForMove(p->bm.moves[i]);
++        u8 shape = Pkbn_ShapeForMove(p->bm.moves[i]);
+         if (shape != SHAPE_NONE && p->bm.pp[i] > 0)
+         {
+             sB.hand[sB.handCount].move = p->bm.moves[i];
+@@ -416,7 +567,6 @@ static void Begin(void)
+     sB.f[SIDE_ENEMY].x = 4;
+     sB.f[SIDE_ENEMY].y = 1;
+     sB.aiStepTimer = ENEMY_STEP_MIN;
+-    // TUNE: enemy attack interval scales with its Speed stat (our "Speed = tempo" idea).
+     sB.aiAttackTimer = 120;
+     snprintf(sB.banner, sizeof(sB.banner), "WILD %s APPEARED!", sB.f[SIDE_ENEMY].name);
+     sB.state = ST_INTRO;
+@@ -450,7 +600,7 @@ static u16 EnemyAttackInterval(void)
+     u16 spd = sB.f[SIDE_ENEMY].bm.speed;
+     if (spd > 100)
+         spd = 100;
+-    return 150 - spd / 2 + (Random() % 40); // TUNE
++    return 150 - spd / 2 + (Random() % 40); // TUNE: faster Pokémon attack more often
+ }
+ 
+ // ---- Per-state update -----------------------------------------------------------------
+@@ -461,6 +611,7 @@ static void EndBattle(u8 outcome, const char *text)
+     strncpy(sB.banner, text, sizeof(sB.banner) - 1);
+     sB.state = ST_END;
+     sB.timer = 90;
++    memset(sB.attacks, 0, sizeof(sB.attacks));
+     if (outcome == B_OUTCOME_WON)
+         PlayBGM(MUS_VICTORY_WILD);
+     else if (outcome == B_OUTCOME_LOST)
+@@ -514,13 +665,25 @@ static void UpdatePlayer(void)
+     u16 held = gMain.heldKeys;
+     u16 keys = gMain.newKeys;
+ 
++    if (keys & SELECT_BUTTON)
++    {
++        EndBattle(B_OUTCOME_RAN, "GOT AWAY SAFELY!");
++        return;
++    }
++    if ((keys & (L_BUTTON | R_BUTTON)) && sB.gauge >= CUSTOM_FRAMES)
++    {
++        BuildHand();
++        sB.state = ST_CUSTOM;
++        PlaySE(SE_SELECT);
++        return;
++    }
+     if (p->lockout)
+         return;
+ 
+     if (p->moveCd == 0)
+     {
+         s8 nx = p->x, ny = p->y;
+-        if (held & DPAD_UP)    ny--;
++        if (held & DPAD_UP)         ny--;
+         else if (held & DPAD_DOWN)  ny++;
+         else if (held & DPAD_LEFT)  nx--;
+         else if (held & DPAD_RIGHT) nx++;
+@@ -539,54 +702,42 @@ static void UpdatePlayer(void)
+         for (i = 1; i < sB.queueCount; i++)
+             sB.queue[i - 1] = sB.queue[i];
+         sB.queueCount--;
+-        UseChip(SIDE_PLAYER, &chip);
++        StartAttack(SIDE_PLAYER, &chip);
+     }
+     else if ((held & B_BUTTON) && sB.busterCd == 0)
+     {
+         u8 cells[GRID_ROWS][GRID_COLS];
+-        s8 r, c;
++        struct Fighter *e = &sB.f[SIDE_ENEMY];
+         memset(cells, 0, sizeof(cells));
+-        if (ResolveShape(SIDE_PLAYER, SHAPE_CANNON, p->x, p->y, cells))
++        DirectShapeCells(SIDE_PLAYER, SHAPE_CANNON, p->x, p->y, cells);
++        if (cells[e->y][e->x])
+             ApplyHit(SIDE_PLAYER, MOVE_NONE, BUSTER_DAMAGE);
+         sB.busterCd = BUSTER_COOLDOWN;
+-        for (r = 0; r < GRID_ROWS; r++)
+-            for (c = 0; c < GRID_COLS; c++)
+-                if (cells[r][c] && sB.fx[r][c] < 3)
+-                    sB.fx[r][c] = 3;
++        FlashCells(cells, 3);
+     }
+-
+-    if ((keys & (L_BUTTON | R_BUTTON)) && sB.gauge >= CUSTOM_FRAMES)
+-    {
+-        BuildHand();
+-        sB.state = ST_CUSTOM;
+-        PlaySE(SE_SELECT);
+-    }
+-    if (keys & SELECT_BUTTON)
+-        EndBattle(B_OUTCOME_RAN, "GOT AWAY SAFELY!");
+ }
+ 
+-static void PickEnemyChip(void)
++static bool8 PickEnemyChip(struct Chip *out)
+ {
+     struct Fighter *e = &sB.f[SIDE_ENEMY];
+     struct Chip options[MAX_MON_MOVES];
+     s32 i, n = 0;
+     for (i = 0; i < MAX_MON_MOVES; i++)
+     {
+-        u8 shape = ShapeForMove(e->bm.moves[i]);
+-        if (shape != SHAPE_NONE && e->bm.pp[i] > 0)
+-        {
+-            options[n].move = e->bm.moves[i];
+-            options[n].slot = i;
+-            options[n].shape = shape;
+-            n++;
+-        }
++        u8 shape = Pkbn_ShapeForMove(e->bm.moves[i]);
++        if (shape == SHAPE_NONE || e->bm.pp[i] == 0)
++            continue;
++        if (shape == SHAPE_BARRIER && e->barrier)
++            continue; // already shielded
++        options[n].move = e->bm.moves[i];
++        options[n].slot = i;
++        options[n].shape = shape;
++        n++;
+     }
+     if (n == 0)
+-    {
+-        sB.aiChip.shape = SHAPE_NONE;
+-        return;
+-    }
+-    sB.aiChip = options[Random() % n];
++        return FALSE;
++    *out = options[Random() % n];
++    return TRUE;
+ }
+ 
+ static void UpdateEnemy(void)
+@@ -594,49 +745,32 @@ static void UpdateEnemy(void)
+     struct Fighter *e = &sB.f[SIDE_ENEMY];
+     struct Fighter *p = &sB.f[SIDE_PLAYER];
+ 
+-    if (e->lockout)
++    // Stand still while one of its own attacks is winding up or the attacker is busy.
++    if (e->lockout || SideHasPendingAttack(SIDE_ENEMY))
+         return;
+ 
+-    if (sB.aiTelegraph)
+-    {
+-        if (--sB.aiTelegraph == 0)
+-        {
+-            memset(sB.warn, 0, sizeof(sB.warn));
+-            UseChip(SIDE_ENEMY, &sB.aiChip);
+-            sB.aiAttackTimer = EnemyAttackInterval();
+-        }
+-        return;
+-    }
+-
+     if (sB.aiAttackTimer && --sB.aiAttackTimer == 0)
+     {
+-        u8 cells[GRID_ROWS][GRID_COLS];
+-        s8 r, c;
+-        PickEnemyChip();
+-        if (sB.aiChip.shape == SHAPE_NONE)
+-        {
+-            sB.aiAttackTimer = EnemyAttackInterval();
++        struct Chip chip;
++        sB.aiAttackTimer = EnemyAttackInterval();
++        if (!PickEnemyChip(&chip))
+             return;
+-        }
+-        // Line up with the player's row; sword users step to the front column.
+-        e->y = p->y;
+-        if (sB.aiChip.shape == SHAPE_LONGSWORD)
++        // Line up: same row as the player for row attacks; sword users step to the front
++        // column; bombers stand GRENADE_RANGE columns from the player when they can.
++        if (chip.shape != SHAPE_BARRIER && chip.shape != SHAPE_LOCKON)
++            e->y = p->y;
++        if (chip.shape == SHAPE_LONGSWORD)
+             e->x = PLAYER_COLS;
+-        memset(cells, 0, sizeof(cells));
+-        ResolveShape(SIDE_ENEMY, sB.aiChip.shape, e->x, e->y, cells);
+-        for (r = 0; r < GRID_ROWS; r++)
+-            for (c = 0; c < GRID_COLS; c++)
+-                sB.warn[r][c] = cells[r][c];
+-        sB.aiTelegraph = ENEMY_TELEGRAPH;
++        else if (chip.shape == SHAPE_GRENADE && p->x + GRENADE_RANGE >= PLAYER_COLS && p->x + GRENADE_RANGE < GRID_COLS)
++            e->x = p->x + GRENADE_RANGE;
++        StartAttack(SIDE_ENEMY, &chip);
+         return;
+     }
+ 
+     if (sB.aiStepTimer && --sB.aiStepTimer == 0)
+     {
+-        s8 nx = PLAYER_COLS + (Random() % (GRID_COLS - PLAYER_COLS));
+-        s8 ny = Random() % GRID_ROWS;
+-        e->x = nx;
+-        e->y = ny;
++        e->x = PLAYER_COLS + (Random() % (GRID_COLS - PLAYER_COLS));
++        e->y = Random() % GRID_ROWS;
+         sB.aiStepTimer = ENEMY_STEP_MIN + (Random() % ENEMY_STEP_RAND);
+     }
+ }
+@@ -668,6 +802,7 @@ static void UpdateFight(void)
+     if (sB.state != ST_FIGHT)
+         return;
+     UpdateEnemy();
++    UpdateAttacks();
+ 
+     if (sB.f[SIDE_ENEMY].bm.hp == 0)
+     {
+@@ -719,14 +854,22 @@ void CB2_PkbnGridBattle(void)
+ void PkbnGrid_GetDebug(struct PkbnGridDebug *d)
+ {
+     s32 i;
++    const struct Fighter *p = &sB.f[SIDE_PLAYER];
+     d->state = sB.state;
+     d->frame = sB.frame;
+-    d->px = sB.f[SIDE_PLAYER].x;
+-    d->py = sB.f[SIDE_PLAYER].y;
++    d->px = p->x;
++    d->py = p->y;
+     d->ex = sB.f[SIDE_ENEMY].x;
+     d->ey = sB.f[SIDE_ENEMY].y;
+-    d->playerThreatened = sB.warn[sB.f[SIDE_PLAYER].y][sB.f[SIDE_PLAYER].x];
++    d->playerThreatened = FALSE;
++    for (i = 0; i < MAX_ATTACKS; i++)
++    {
++        const struct Attack *a = &sB.attacks[i];
++        if (a->active && a->side == SIDE_ENEMY && a->chip.shape != SHAPE_LOCKON && a->cells[p->y][p->x])
++            d->playerThreatened = TRUE;
++    }
+     d->queueCount = sB.queueCount;
++    d->nextShape = sB.queueCount ? sB.queue[0].shape : 0;
+     d->gaugeFull = sB.gauge >= CUSTOM_FRAMES;
+     d->handCount = sB.handCount;
+     d->cursor = sB.cursor;
+@@ -734,7 +877,7 @@ void PkbnGrid_GetDebug(struct PkbnGridDebug *d)
+     d->pickedCount = 0;
+     for (i = 0; i < sB.handCount; i++)
+         d->pickedCount += sB.picked[i];
+-    d->playerLocked = sB.f[SIDE_PLAYER].lockout != 0;
++    d->playerLocked = p->lockout != 0;
+ }
+ 
+ // ---- Drawing ----------------------------------------------------------------------------
+@@ -745,6 +888,7 @@ void PkbnGrid_GetDebug(struct PkbnGridDebug *d)
+ #define COL_EDGE      PKBN_RGB(28, 28, 28)
+ #define COL_FX        PKBN_RGB(31, 31, 12)
+ #define COL_WARN      PKBN_RGB(31, 18, 0)
++#define COL_SHADOW    PKBN_RGB(12, 12, 14)
+ #define COL_TEXT      PKBN_RGB(31, 31, 31)
+ #define COL_DIM       PKBN_RGB(16, 16, 16)
+ #define COL_HP        PKBN_RGB(6, 28, 8)
+@@ -752,6 +896,15 @@ void PkbnGrid_GetDebug(struct PkbnGridDebug *d)
+ #define COL_GAUGE     PKBN_RGB(8, 20, 31)
+ #define COL_GAUGE_FULL PKBN_RGB(31, 26, 4)
+ #define COL_BOX       PKBN_RGB(4, 5, 10)
++#define COL_BARRIER   PKBN_RGB(8, 31, 31)
++#define COL_CROSS     PKBN_RGB(31, 4, 4)
++#define COL_BOMB      PKBN_RGB(10, 10, 10)
++
++static void PanelOrigin(s32 c, s32 r, s32 *x, s32 *y)
++{
++    *x = GRID_X + c * PANEL_W;
++    *y = GRID_Y + r * PANEL_H;
++}
+ 
+ static void DrawHpBar(u16 *fb, s32 x, s32 y, s32 w, const struct Fighter *f)
+ {
+@@ -768,18 +921,44 @@ static void DrawFighterHud(u16 *fb, s32 x, const struct Fighter *f)
+     DrawHpBar(fb, x, 11, 80, f);
+     snprintf(line, sizeof(line), "%u/%u", f->bm.hp, f->bm.maxHP);
+     Pkbn_DrawText(fb, x, 18, line, COL_TEXT, 1);
++    if (f->barrier)
++        Pkbn_DrawText(fb, x + 44, 18, "BARRIER", COL_BARRIER, 1);
+ }
+ 
+ static void DrawGrid(u16 *fb)
+ {
+-    s32 r, c;
++    s32 r, c, i;
++    u8 warn[GRID_ROWS][GRID_COLS];
++    u8 shadow[GRID_ROWS][GRID_COLS];
++
++    memset(warn, 0, sizeof(warn));
++    memset(shadow, 0, sizeof(shadow));
++    for (i = 0; i < MAX_ATTACKS; i++)
++    {
++        const struct Attack *a = &sB.attacks[i];
++        if (!a->active || a->chip.shape == SHAPE_LOCKON)
++            continue;
++        for (r = 0; r < GRID_ROWS; r++)
++            for (c = 0; c < GRID_COLS; c++)
++                if (a->cells[r][c])
++                {
++                    if (a->side == SIDE_ENEMY)
++                        warn[r][c] = 1;
++                    else
++                        shadow[r][c] = 1; // your own bomb's landing zone
++                }
++    }
++
+     for (r = 0; r < GRID_ROWS; r++)
+     {
+         for (c = 0; c < GRID_COLS; c++)
+         {
+-            s32 x = GRID_X + c * PANEL_W, y = GRID_Y + r * PANEL_H;
++            s32 x, y;
+             u16 col = c < PLAYER_COLS ? COL_PANEL_P : COL_PANEL_E;
+-            if (sB.warn[r][c] && (sB.frame & 4))
++            PanelOrigin(c, r, &x, &y);
++            if (shadow[r][c])
++                col = COL_SHADOW;
++            if (warn[r][c] && (sB.frame & 4))
+                 col = COL_WARN;
+             if (sB.fx[r][c])
+                 col = COL_FX;
+@@ -792,15 +971,55 @@ static void DrawGrid(u16 *fb)
+ static void DrawFighter(u16 *fb, u8 side)
+ {
+     const struct Fighter *f = &sB.f[side];
+-    s32 x = GRID_X + f->x * PANEL_W + (PANEL_W - 32) / 2;
+-    s32 y = GRID_Y + f->y * PANEL_H + PANEL_H - 32 - 2;
++    s32 x, y;
+     u16 tint = f->hurtFlash ? COL_TEXT : 0;
++
++    PanelOrigin(f->x, f->y, &x, &y);
++    if (f->barrier)
++        Pkbn_FrameRect(fb, x + 2, y - 14, PANEL_W - 4, PANEL_H + 12, (sB.frame & 8) ? COL_BARRIER : COL_TEXT);
+     if (f->iframes && (sB.frame & 2))
+         return;
+     if (f->bm.hp == 0 && sB.state == ST_END)
+         return; // fainted
+     // Emerald icons face left: flip the player's so it faces the enemy.
+-    Pkbn_BlitIcon(fb, f->icon[(sB.frame / 16) & 1], x, y, side == SIDE_PLAYER, tint);
++    Pkbn_BlitIcon(fb, f->icon[(sB.frame / 16) & 1], x + (PANEL_W - 32) / 2, y + PANEL_H - 34,
++                  side == SIDE_PLAYER, tint);
++}
++
++static void DrawAttacksOverlay(u16 *fb)
++{
++    s32 i;
++    for (i = 0; i < MAX_ATTACKS; i++)
++    {
++        const struct Attack *a = &sB.attacks[i];
++        s32 x0, y0, x1, y1, t, d, bx, by, arc;
++        if (!a->active)
++            continue;
++        if (a->chip.shape == SHAPE_LOCKON)
++        {
++            // crosshair on the tracked panel
++            PanelOrigin(a->tx, a->ty, &x1, &y1);
++            if (sB.frame & 2)
++            {
++                Pkbn_FrameRect(fb, x1 + 4, y1 + 2, PANEL_W - 8, PANEL_H - 4, COL_CROSS);
++                Pkbn_FillRect(fb, x1 + PANEL_W / 2, y1 + 1, 1, PANEL_H - 2, COL_CROSS);
++                Pkbn_FillRect(fb, x1 + 1, y1 + PANEL_H / 2, PANEL_W - 2, 1, COL_CROSS);
++            }
++        }
++        else if (a->chip.shape == SHAPE_GRENADE && a->duration > 0)
++        {
++            // bomb on a parabolic arc from launcher to landing panel
++            PanelOrigin(a->ox, a->oy, &x0, &y0);
++            PanelOrigin(a->tx, a->ty, &x1, &y1);
++            d = a->duration;
++            t = d - a->timer;
++            bx = x0 + (x1 - x0) * t / d + PANEL_W / 2 - 3;
++            arc = 4 * 28 * t * (d - t) / (d * d); // peak height 28px
++            by = y0 + (y1 - y0) * t / d + PANEL_H / 2 - 3 - arc;
++            Pkbn_FillRect(fb, bx, by, 6, 6, COL_BOMB);
++            Pkbn_FrameRect(fb, bx, by, 6, 6, COL_TEXT);
++        }
++    }
+ }
+ 
+ static void DrawChipLabel(u16 *fb, s32 x, s32 y, const struct Chip *chip, const struct Fighter *f, u16 color)
+@@ -808,8 +1027,11 @@ static void DrawChipLabel(u16 *fb, s32 x, s32 y, const struct Chip *chip, const
+     char name[MOVE_NAME_LENGTH + 1];
+     char line[48];
+     Pkbn_GameStringToAscii(name, gMoveNames[chip->move], sizeof(name));
+-    snprintf(line, sizeof(line), "%s %s P%u PP%u", name, ShapeLabel(chip->shape),
+-             gBattleMoves[chip->move].power, f->bm.pp[chip->slot]);
++    if (gBattleMoves[chip->move].power)
++        snprintf(line, sizeof(line), "%s %s P%u PP%u", name, Pkbn_ShapeLabel(chip->shape),
++                 gBattleMoves[chip->move].power, f->bm.pp[chip->slot]);
++    else
++        snprintf(line, sizeof(line), "%s %s PP%u", name, Pkbn_ShapeLabel(chip->shape), f->bm.pp[chip->slot]);
+     Pkbn_DrawText(fb, x, y, line, color, 1);
+ }
+ 
+@@ -842,7 +1064,7 @@ static void DrawCustomScreen(u16 *fb)
+     Pkbn_FrameRect(fb, 8, 40, 224, 100, COL_EDGE);
+     Pkbn_DrawText(fb, 16, 46, "CUSTOM", COL_GAUGE_FULL, 2);
+     if (sB.handCount == 0)
+-        Pkbn_DrawText(fb, 16, 66, "NO DAMAGING MOVES WITH PP - BUSTER ONLY", COL_TEXT, 1);
++        Pkbn_DrawText(fb, 16, 66, "NO USABLE MOVES WITH PP - BUSTER ONLY", COL_TEXT, 1);
+     for (i = 0; i < sB.handCount; i++)
+     {
+         s32 y = 64 + i * 10;
+@@ -870,6 +1092,7 @@ static void Overlay(u16 *fb)
+     DrawGrid(fb);
+     DrawFighter(fb, SIDE_PLAYER);
+     DrawFighter(fb, SIDE_ENEMY);
++    DrawAttacksOverlay(fb);
+     DrawBottomHud(fb);
+ 
+     if (sB.state == ST_CUSTOM)
+diff --git a/src/pkbn/move_shapes.c b/src/pkbn/move_shapes.c
+new file mode 100644
+index 0000000..3695ccf
+--- /dev/null
++++ b/src/pkbn/move_shapes.c
+@@ -0,0 +1,63 @@
++// Emerald move -> grid shape rules. Every rule reads a field of gBattleMoves
++// (src/data/battle_moves.h) except the curated "thrown" list, which is our design choice.
++#include "global.h"
++#include "battle.h"
++#include "pokemon.h"
++#include "constants/battle_move_effects.h"
++#include "constants/moves.h"
++#include "pkbn/move_shapes.h"
++
++// Moves that read as something thrown/lobbed -> Grenade. Curated by us (Gen 3 has no
++// "ball/bomb" flag); extend freely.
++static const u16 sThrownMoves[] =
++{
++    MOVE_ROCK_THROW, MOVE_EGG_BOMB, MOVE_BARRAGE, MOVE_SLUDGE_BOMB, MOVE_OCTAZOOKA,
++    MOVE_SHADOW_BALL, MOVE_WEATHER_BALL, MOVE_ROCK_TOMB,
++};
++
++static bool8 IsThrown(u16 move)
++{
++    u32 i;
++    for (i = 0; i < ARRAY_COUNT(sThrownMoves); i++)
++        if (sThrownMoves[i] == move)
++            return TRUE;
++    return FALSE;
++}
++
++u8 Pkbn_ShapeForMove(u16 move)
++{
++    const struct BattleMove *m = &gBattleMoves[move];
++
++    if (move == MOVE_NONE)
++        return SHAPE_NONE;
++    // Protect / Detect (EFFECT_PROTECT) -> Barrier
++    if (m->effect == EFFECT_PROTECT)
++        return SHAPE_BARRIER;
++    if (m->power == 0)
++        return SHAPE_NONE;
++    // "Never misses" moves (EFFECT_ALWAYS_HIT: Swift, Faint Attack, Shadow Punch, Aerial Ace,
++    // Magical Leaf, Shock Wave) -> Lock-on. Takes priority over contact.
++    if (m->effect == EFFECT_ALWAYS_HIT)
++        return SHAPE_LOCKON;
++    if (IsThrown(move))
++        return SHAPE_GRENADE;
++    if (m->flags & FLAG_MAKES_CONTACT)
++        return SHAPE_LONGSWORD;
++    if (m->target & (MOVE_TARGET_BOTH | MOVE_TARGET_FOES_AND_ALLY))
++        return SHAPE_SPREADER;
++    return SHAPE_CANNON;
++}
++
++const char *Pkbn_ShapeLabel(u8 shape)
++{
++    switch (shape)
++    {
++    case SHAPE_CANNON:    return "CANNON";
++    case SHAPE_LONGSWORD: return "SWORD";
++    case SHAPE_SPREADER:  return "SPREAD";
++    case SHAPE_GRENADE:   return "BOMB";
++    case SHAPE_LOCKON:    return "LOCK-ON";
++    case SHAPE_BARRIER:   return "BARRIER";
++    }
++    return "";
++}
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index 0e87905..ce620ce 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -13,6 +13,8 @@
+ #include "main.h"
+ #include "pokemon.h"
+ #include "constants/species.h"
++#include "constants/moves.h"
++#include "pkbn/move_shapes.h"
+ #include "pkbn/grid_battle.h"
+ #include "pkbn/render.h"
+ 
+@@ -21,6 +23,7 @@
+ static void (*sInnerOverlay)(u16 *fb);
+ static const char *sDumpDir;
+ static u32 sDumpCount;
++static u32 sDumpEvery = 30;
+ 
+ static void DumpFrame(u16 *fb, u32 frame)
+ {
+@@ -48,7 +51,7 @@ static void WrappedOverlay(u16 *fb)
+     sInnerOverlay(fb);
+     PkbnGrid_GetDebug(&d);
+     static u8 sLastState = 0xFF;
+-    if (sDumpDir != NULL && (d.frame % 30 == 0 || d.state != sLastState))
++    if (sDumpDir != NULL && (d.frame % sDumpEvery == 0 || d.state != sLastState))
+         DumpFrame(fb, d.frame);
+     sLastState = d.state;
+ }
+@@ -88,8 +91,12 @@ static void Autopilot(void)
+             pressed = L_BUTTON;
+         else if (d.playerThreatened)
+             held = (d.py > 0) ? DPAD_UP : DPAD_DOWN;
++        else if (d.queueCount > 0 && (d.nextShape == SHAPE_BARRIER || d.nextShape == SHAPE_LOCKON) && !d.playerLocked)
++            pressed = A_BUTTON; // position doesn't matter
+         else if (d.py != d.ey)
+             held = (d.py < d.ey) ? DPAD_DOWN : DPAD_UP;
++        else if (d.queueCount > 0 && d.nextShape == SHAPE_GRENADE && d.px + 3 != d.ex && d.ex - 3 >= 0 && d.ex - 3 < 3)
++            held = (d.px < d.ex - 3) ? DPAD_RIGHT : DPAD_LEFT; // stand 3 panels away to land the bomb
+         else if (d.queueCount > 0 && !d.playerLocked)
+             pressed = A_BUTTON;
+         else
+@@ -125,17 +132,46 @@ void Pkbn_SelfTestMaybeStart(void)
+     if (getenv("PKBN_SELFTEST") == NULL)
+         return;
+     sDumpDir = getenv("PKBN_DUMP_DIR");
++    if (getenv("PKBN_DUMP_EVERY") != NULL)
++        sDumpEvery = (u32)atoi(getenv("PKBN_DUMP_EVERY")) ? (u32)atoi(getenv("PKBN_DUMP_EVERY")) : 30;
+     SetSaveBlocksPointers(0);
+     ZeroPlayerPartyMons();
+     ZeroEnemyPartyMons();
+     {
+-        // PKBN_SELFTEST="playerSpecies:level,enemySpecies:level" (default Torchic 7 vs Zigzagoon 4)
+-        unsigned ps = SPECIES_TORCHIC, pl = 7, es = SPECIES_ZIGZAGOON, el = 4;
++        // PKBN_SELFTEST="species:level[:move/move/move/move],species:level[:...]" (player,enemy)
++        // default: Torchic 7 vs Zigzagoon 4 with their level-up moves.
+         const char *spec = getenv("PKBN_SELFTEST");
+-        if (strchr(spec, ':') != NULL)
+-            sscanf(spec, "%u:%u,%u:%u", &ps, &pl, &es, &el);
+-        CreateMon(&gPlayerParty[0], ps, pl, USE_RANDOM_IVS, FALSE, 0, OT_ID_PLAYER_ID, 0);
+-        CreateMon(&gEnemyParty[0], es, el, USE_RANDOM_IVS, FALSE, 0, OT_ID_PLAYER_ID, 0);
++        char buf[256];
++        char *sides[2] = { NULL, NULL };
++        s32 i;
++        strncpy(buf, spec, sizeof(buf) - 1);
++        buf[sizeof(buf) - 1] = '\0';
++        if (strchr(buf, ':') != NULL)
++        {
++            sides[0] = strtok(buf, ",");
++            sides[1] = strtok(NULL, ",");
++        }
++        for (i = 0; i < 2; i++)
++        {
++            struct Pokemon *mon = (i == 0) ? &gPlayerParty[0] : &gEnemyParty[0];
++            unsigned species = (i == 0) ? SPECIES_TORCHIC : SPECIES_ZIGZAGOON;
++            unsigned level = (i == 0) ? 7 : 4;
++            unsigned moves[4] = { 0, 0, 0, 0 };
++            s32 nMoves = 0, m;
++            if (sides[i] != NULL)
++            {
++                char *movePart = NULL;
++                sscanf(sides[i], "%u:%u", &species, &level);
++                movePart = strchr(strchr(sides[i], ':') + 1, ':');
++                if (movePart != NULL)
++                    nMoves = sscanf(movePart + 1, "%u/%u/%u/%u", &moves[0], &moves[1], &moves[2], &moves[3]);
++            }
++            CreateMon(mon, species, level, USE_RANDOM_IVS, FALSE, 0, OT_ID_PLAYER_ID, 0);
++            for (m = 0; m < nMoves; m++)
++                SetMonMoveSlot(mon, moves[m], m);
++            for (; nMoves > 0 && m < 4; m++)
++                SetMonMoveSlot(mon, MOVE_NONE, m);
++        }
+     }
+     gBattleTypeFlags = 0;
+     gMain.savedCallback = CB2_SelfTestDone;
+-- 
+2.43.0
+

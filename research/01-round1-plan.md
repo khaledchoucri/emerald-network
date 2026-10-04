@@ -31,3 +31,9 @@ correctly (no softlock, party state consistent, save works).
 Built inside the Emerald host instead of a standalone program so it can call Emerald's real damage code and data directly.
 Standalone SDL program: 6×3 grid, one Pokémon on each side, buster + 4 move-chips, using real values
 read from Emerald data (`gSpeciesInfo`, `gBattleMoves`, `CalculateBaseDamage`).
+
+## POC-2 — move shapes (Bomb, Lock-on, Barrier) — BUILT → poc/POC-2.md
+## Next R&D candidates
+- Read BN6 MachGun routine `sub_80ECF2E` (family 0x29) and the bomb object `t3_0x8_80C5BB0` to confirm lock-on/bomb timings and range.
+- Status moves → chip effects (stat stages, Growl/Leer), move side effects (burn/poison chance, drain).
+- Catching (Poké Ball chip) and switching (party as folder).
