@@ -5,7 +5,7 @@ usage: python3 tools/lanes_report.py [--root upstream/pokeemerald-pc_port] [--cs
 """
 import argparse, collections, random, re, sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lanes_curated import LANES, MOVES, PROGRAM_ADVANCES
+from lanes_curated import LANES, MOVES, PROGRAM_ADVANCES, REMOVED
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--root', default='upstream/pokeemerald-pc_port')
@@ -42,12 +42,12 @@ def strong(m):
     d = MV[m]; return int(d['power']) >= 90 or (int(d['pp']) <= 5 and int(d['power']) > 1)
 def weak_or_status(m):
     d = MV[m]; return int(d['power']) <= 50
-EXCEPTIONS_MULTI = {'SOLAR_BEAM', 'TRI_ATTACK', 'WEATHER_BALL', 'THUNDER', 'RAIN_DANCE', 'TAKE_DOWN', 'DREAM_EATER'}
+EXCEPTIONS_MULTI = {'SOLAR_BEAM', 'TRI_ATTACK', 'WEATHER_BALL', 'THUNDER', 'RAIN_DANCE', 'DREAM_EATER'}
 
 # ---------------- validation ----------------
 problems = []
-missing = [m for m in MV if m not in MOVES and m != 'STRUGGLE']
-extra = [m for m in MOVES if m not in MV]
+missing = [m for m in MV if m not in MOVES and m not in REMOVED and m != 'STRUGGLE']
+extra = [m for m in list(MOVES) + list(REMOVED) if m not in MV]
 if missing: problems.append(f'moves without lanes: {missing}')
 if extra: problems.append(f'unknown moves: {extra}')
 for m, spec in MOVES.items():
@@ -135,6 +135,7 @@ def folder(party, union):
     chips = []
     for i, (sp, lv) in enumerate(party):
         for m in moveset(sp, lv):
+            if m in REMOVED: continue
             roles, star = parse(MOVES[m])
             letters = [l for l, _ in roles] + (['*'] if star else [])
             for k in range(copies(m)):

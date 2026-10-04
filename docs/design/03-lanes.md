@@ -1,6 +1,6 @@
 # Design 03 — Curated chip lanes, Program Advances, combo rewards
 
-Status: **proposal v1 for Khaled's review** (2026-10-04).
+Status: **proposal v1, reviewed 2026-10-04** — round-1 decisions (D = DANCE, J removed, OHKO moves cut, letter edits) are applied in `tools/lanes_curated.py`; see `docs/design/04-attack-kinds.md` §1. Raw verdicts: `data/review-round1.json`.
 Source of truth: `tools/lanes_curated.py` (every Gen 3 move, hand-assigned). Full table: `data/lanes.csv`.
 Validation + simulation: `tools/lanes_report.py` → `research/04-lanes-report.md`.
 Decisions already made: 3 layers (element / codes / Program Advances); one code per folder copy (BN);

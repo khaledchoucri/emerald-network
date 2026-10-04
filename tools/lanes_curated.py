@@ -10,15 +10,14 @@ Notes ("# ...") explain non-obvious choices. Design rules: docs/design/03-lanes.
 
 LANES = {
  'A': ('AMBUSH',    'Strike first: priority, flinch, surprise hits. Short chains that open a turn.'),
- 'B': ('BIND',      'Pin the target in place (trap / grip / web), then finish it: the OHKO moves live here.'),
+ 'B': ('BIND',      'Pin the target in place (trap / grip / web), then finish it.'),
  'C': ('CHARGE',    'Build electricity, paralyse, lock on — then the big bolt. Paralysis payoffs (Smelling Salt).'),
- 'D': ('DRAGON',    'Draconic power: dance, breathe, rampage.'),
+ 'D': ('DANCE',     'Every Dance move: Swords, Dragon, Petal, Feather, Teeter and Rain Dance. Boost, then cash in.'),
  'E': ('ENDURE',    'Low HP and retaliation: survive, then punish (Flail, Reversal, Counter, Endeavor).'),
  'F': ('FURY',      'Flurries and escalating hits: multi-hit moves, Rollout, Fury Cutter, Rage.'),
  'G': ('GROWTH',    'Plants: grow, seed, drain, bloom.'),
  'H': ('HARDEN',    'Armour up and turn defence into offence (Defense Curl -> Rollout, Harden -> Tackle).'),
  'I': ('ICE',       'Hail, chill, slow, freeze.'),
- 'J': ('JINX',      'Curses and hauntings: ghosts, grudges, disable, nightmares.'),
  'K': ('KUNG-FU',   'Martial arts: kicks, chops, throws, focus.'),
  'L': ('LOWER',     'Break defences (Defense / Sp. Def drops), then hit hard.'),
  'M': ('MIND',      'Psychic focus: calm, confuse, foresee, screens.'),
@@ -30,7 +29,7 @@ LANES = {
  'S': ('SUN',       'Fire and daylight: sunshine, flames, solar power.'),
  'T': ('TEMPO',     'Speed and evasion: outpace (Agility), slow them (String Shot), dodge (Double Team).'),
  'U': ('UP',        'Power up, then cash in: Swords Dance / Focus Energy into crits and charged blows.'),
- 'V': ('VOICE',     'Performance: songs, roars and dances (sound moves + "Dance" moves).'),
+ 'V': ('VOICE',     'Sound: songs, roars, screeches and snores.'),
  'W': ('WIND',      'Sky and air: gusts, wings, dives.'),
  'X': ('EXTREME',   'All-in finishers with a cost: recharge, recoil, self-KO. Payoff-only lane.'),
  'Y': ('YIELD',     'Support and team play: heal, shield, soften blows, help the next Pokemon (ties into switching).'),
@@ -49,14 +48,13 @@ MOVES = {
  'THUNDER_PUNCH':'Pp Cp',
  'SCRATCH':      'Lp Ux *',      # contest: follows Leer
  'VICE_GRIP':    'Bs Lp',        # the grip holds the target
- 'GUILLOTINE':   'Bp',           # OHKO: finish a pinned target
  'RAZOR_WIND':   'Up Wp',        # charged + high-crit
- 'SWORDS_DANCE': 'Us Vs',        # premium setup: no wildcard
+ 'SWORDS_DANCE': 'Ds Us',        # review: D U (Dance lane)
  'CUT':          'Up Lp',
  'GUST':         'Ws Rx *',
  'WING_ATTACK':  'Wp Ax',
  'WHIRLWIND':    'Ws Tx *',
- 'FLY':          'Wp Ax',
+ 'FLY':          'Wp Rx',        # review: W R
  'BIND':         'Bs Fx *',
  'SLAM':         'Lp Bp',        # contest: follows Pound
  'VINE_WHIP':    'Gs Bs *',      # vines grab
@@ -69,11 +67,10 @@ MOVES = {
  'HEADBUTT':     'Ap Hx',
  'HORN_ATTACK':  'Lp Fs',        # contest: Horn Attack starts Fury Attack / Horn Drill
  'FURY_ATTACK':  'Fp Lx *',
- 'HORN_DRILL':   'Bp',
  'TACKLE':       'Lp Hp Ax *',   # contest: follows Leer, Harden AND Defense Curl -> the glue move
  'BODY_SLAM':    'Cs Lp',
  'WRAP':         'Bs Fx *',
- 'TAKE_DOWN':    'Xp Hp',        # exception: contest Harden -> Take Down (STAMPEDE)
+ 'TAKE_DOWN':    'Hp',           # review: too weak for X; stays on H for STAMPEDE
  'THRASH':       'Xp',
  'DOUBLE_EDGE':  'Xp',
  'TAIL_WHIP':    'Ls Vx *',
@@ -86,8 +83,6 @@ MOVES = {
  'ROAR':         'Vs Ws',
  'SING':         'Vs Zs',
  'SUPERSONIC':   'Vs Zs *',
- 'SONIC_BOOM':   'Vp Wx *',
- 'DISABLE':      'Js Ms',
  'ACID':         'Ls Os *',
  'EMBER':        'Sp Os *',      # burn = attrition
  'FLAMETHROWER': 'Sp',
@@ -101,9 +96,9 @@ MOVES = {
  'BUBBLE_BEAM':  'Rp Ts',
  'AURORA_BEAM':  'Ip Ys',
  'HYPER_BEAM':   'Xp',
- 'PECK':         'Wp Fx *',
+ 'PECK':         'Wp Fx Ax *',   # review: W F A *
  'DRILL_PECK':   'Wp',
- 'SUBMISSION':   'Kp Xp',
+ 'SUBMISSION':   'Kp',           # review: too weak for X
  'LOW_KICK':     'Kp Tx',
  'COUNTER':      'Ep Kx',
  'SEISMIC_TOSS': 'Kp Ex',
@@ -117,9 +112,9 @@ MOVES = {
  'POISON_POWDER':'Os Gs *',
  'STUN_SPORE':   'Cs Gs',
  'SLEEP_POWDER': 'Zs Gs',
- 'PETAL_DANCE':  'Gp Vp',
+ 'PETAL_DANCE':  'Gp Dp',        # review: G D
  'STRING_SHOT':  'Ts Bs *',
- 'DRAGON_RAGE':  'Dp Ax',
+ 'DRAGON_RAGE':  'Ap Ex',        # was D; fixed 40 damage opener
  'FIRE_SPIN':    'Bs Ss',
  'THUNDER_SHOCK':'Cs Ax *',
  'THUNDERBOLT':  'Cp',
@@ -127,7 +122,6 @@ MOVES = {
  'THUNDER':      'Cp Rp',        # canon: rain makes Thunder never miss
  'ROCK_THROW':   'Qp Ax *',
  'EARTHQUAKE':   'Qp',
- 'FISSURE':      'Bp',
  'DIG':          'Qp Ax',
  'TOXIC':        'Os',
  'CONFUSION':    'Mp Zs *',
@@ -138,15 +132,13 @@ MOVES = {
  'QUICK_ATTACK': 'Ap Tp *',
  'RAGE':         'Up Ex *',
  'TELEPORT':     'Tx Yx *',
- 'NIGHT_SHADE':  'Jp Nx',
+ 'NIGHT_SHADE':  'Np',           # was J
  'MIMIC':        '*',            # copy moves are pure wildcards
  'SCREECH':      'Ls Vs',
- 'DOUBLE_TEAM':  'Ts Ax *',
  'RECOVER':      'Ys',
  'HARDEN':       'Hs Ys *',      # contest: Harden starts Tackle / Take Down / Rollout
- 'MINIMIZE':     'Ts Ys',
  'SMOKESCREEN':  'Ns Ss *',
- 'CONFUSE_RAY':  'Zs Js',
+ 'CONFUSE_RAY':  'Zs Ns',        # was J
  'WITHDRAW':     'Hs Rs *',
  'DEFENSE_CURL': 'Hs Fs *',      # contest: Defense Curl starts Rollout
  'BARRIER':      'Hs Ms',
@@ -159,7 +151,7 @@ MOVES = {
  'MIRROR_MOVE':  '*',
  'SELF_DESTRUCT':'Xp',
  'EGG_BOMB':     'Xp',
- 'LICK':         'Jp Cs *',
+ 'LICK':         'Cs Ax *',      # was J; paralysis
  'SMOG':         'Os Ss *',
  'SLUDGE':       'Op',
  'BONE_CLUB':    'Qp Ap',
@@ -201,26 +193,23 @@ MOVES = {
  'TRI_ATTACK':   'Sp Cp Ip',     # deliberate three-way bridge: burn / paralyse / freeze
  'SUPER_FANG':   'Np Ep',
  'SLASH':        'Up Np',
- 'SUBSTITUTE':   'Ys Es',
  'SKETCH':       '*',
  'TRIPLE_KICK':  'Kp Fp',
  'THIEF':        'Np Ax *',
- 'SPIDER_WEB':   'Bs Js',
- 'MIND_READER':  'Ms Ks',        # contest: starts Dynamic Punch / Zap Cannon style hits
- 'NIGHTMARE':    'Jp Zp',
+ 'SPIDER_WEB':   'Bs',           # was J
+ 'NIGHTMARE':    'Zp Ns',        # was J; pays off sleep
  'FLAME_WHEEL':  'Sp Ax',
- 'SNORE':        'Zp Vp',
- 'CURSE':        'Js Us',
+ 'SNORE':        'Zp Vp *',      # review: Z V *
+ 'CURSE':        'Us Hs',        # was J; Gen 3 non-Ghost Curse = Atk/Def up
  'FLAIL':        'Ep',
  'CONVERSION_2': '*',
  'AEROBLAST':    'Wp',
  'COTTON_SPORE': 'Ts Gs',
  'REVERSAL':     'Ep Kp',
- 'SPITE':        'Js Ns *',
  'POWDER_SNOW':  'Ip Wx *',
  'PROTECT':      'Ys Hs',
  'MACH_PUNCH':   'Pp Ap *',
- 'SCARY_FACE':   'Ts Ds',        # contest starter; dragons' glare (Dragon lane needed a setup)
+ 'SCARY_FACE':   'Ts Ns',        # was D; intimidation
  'FAINT_ATTACK': 'Np Ax',
  'SWEET_KISS':   'Zs Vx *',
  'BELLY_DRUM':   'Us Es',
@@ -229,41 +218,34 @@ MOVES = {
  'OCTAZOOKA':    'Rp Ns',
  'SPIKES':       'Qs Os',
  'ZAP_CANNON':   'Cp',
- 'FORESIGHT':    'Ns Js *',
- 'DESTINY_BOND': 'Ep Js',
- 'PERISH_SONG':  'Vs Bs',
  'ICY_WIND':     'Ip Ts',
  'DETECT':       'Ys Ks',
  'BONE_RUSH':    'Qp Fp',
  'LOCK_ON':      'Cs Bs',
- 'OUTRAGE':      'Dp',
+ 'OUTRAGE':      'Up',           # was D; rampage after Dragon Dance (DRAGON RUSH on U)
  'SANDSTORM':    'Qs Ws',
  'GIGA_DRAIN':   'Gp',
- 'ENDURE':       'Es Hs',
  'CHARM':        'Ys Vs',
  'ROLLOUT':      'Fp Hp',
  'FALSE_SWIPE':  'Ux Nx *',
- 'SWAGGER':      'Zs Ns',
+ 'SWAGGER':      '*',            # review: wildcard only
  'MILK_DRINK':   'Ys',
  'SPARK':        'Cp Ap',
  'FURY_CUTTER':  'Fp Ux *',
  'STEEL_WING':   'Wp Hs',
- 'MEAN_LOOK':    'Bs Js',
- 'ATTRACT':      'Zs Vs',
+ 'MEAN_LOOK':    'Bs Ns',        # was J
+ 'ATTRACT':      '*',            # review: wildcard only
  'SLEEP_TALK':   'Zx *',
  'HEAL_BELL':    'Ys Vs',
  'RETURN':       'Yp',
- 'PRESENT':      'Yx *',
  'FRUSTRATION':  'Ep Np',
  'SAFEGUARD':    'Ys',
- 'PAIN_SPLIT':   'Es Jx',
  'SACRED_FIRE':  'Sp',
  'MAGNITUDE':    'Qp',
  'DYNAMIC_PUNCH':'Pp',
  'MEGAHORN':     'Xp',
- 'DRAGON_BREATH':'Dp Cs',
+ 'DRAGON_BREATH':'Cs Sx',        # was D; paralysing breath
  'BATON_PASS':   'Ts *',
- 'ENCORE':       'Vs Ns',
  'PURSUIT':      'Np Ap *',
  'RAPID_SPIN':   'Hx Tx *',
  'SWEET_SCENT':  'Gs Ns *',
@@ -275,46 +257,34 @@ MOVES = {
  'MOONLIGHT':    'Ys Ns',
  'HIDDEN_POWER': '*',
  'CROSS_CHOP':   'Kp',
- 'TWISTER':      'Dp Wp *',
- 'RAIN_DANCE':   'Rs Cs',        # canon: rain makes Thunder never miss -> rain clouds feed Charge
+ 'TWISTER':      'Wp Rx *',      # review: W R * (leaves the old Dragon lane)
+ 'RAIN_DANCE':   'Rs Cs Ds',     # a Dance (review: D = all Dance moves); exception: PA STORM CALLER
  'SUNNY_DAY':    'Ss',
  'CRUNCH':       'Np Lp',
- 'MIRROR_COAT':  'Ep Mx',
  'PSYCH_UP':     'Us *',
  'EXTREME_SPEED':'Ap',
  'ANCIENT_POWER':'Qp',
- 'SHADOW_BALL':  'Jp',
+ 'SHADOW_BALL':  'Np',           # was J
  'FUTURE_SIGHT': 'Mp',
  'ROCK_SMASH':   'Kp Ls *',
  'WHIRLPOOL':    'Bs Rs',
  'BEAT_UP':      'Np Yp',        # the whole party attacks: a team move
  'FAKE_OUT':     'As Ns *',
- 'UPROAR':       'Vp Fx',
- 'STOCKPILE':    'Hs Us',
- 'SPIT_UP':      'Up',
- 'SWALLOW':      'Ys',
  'HEAT_WAVE':    'Sp',
  'HAIL':         'Is',
- 'TORMENT':      'Ns Js',
- 'FLATTER':      'Zs Ns',
- 'WILL_O_WISP':  'Os Js',
+ 'FLATTER':      '*',            # review: wildcard only
+ 'WILL_O_WISP':  'Os Ss',        # was J; burn
  'MEMENTO':      'Es Ys',        # faint to weaken the foe for the next Pokemon
  'FACADE':       'Ep Op',
  'FOCUS_PUNCH':  'Pp',
- 'SMELLING_SALT':'Cp Np',        # paralysis payoff
- 'FOLLOW_ME':    'Ys *',
  'NATURE_POWER': '*',
  'CHARGE':       'Cs',
- 'TAUNT':        'Ns',
- 'HELPING_HAND': 'Ys *',
- 'TRICK':        'Ns Ms',
  'ROLE_PLAY':    '*',
  'WISH':         'Ys',
  'ASSIST':       '*',
  'INGRAIN':      'Gs Ys',
  'SUPERPOWER':   'Xp',
- 'MAGIC_COAT':   'Ms Ys',
- 'RECYCLE':      'Ys *',
+ 'MAGIC_COAT':   'Ys',           # review: Y
  'REVENGE':      'Ep Kp',
  'BRICK_BREAK':  'Kp Lp',
  'YAWN':         'Zs *',
@@ -322,10 +292,7 @@ MOVES = {
  'ENDEAVOR':     'Ep',
  'ERUPTION':     'Sp',
  'SKILL_SWAP':   '*',
- 'IMPRISON':     'Ms Js',
  'REFRESH':      'Ys *',
- 'GRUDGE':       'Js Es',
- 'SNATCH':       'Ns *',
  'SECRET_POWER': 'Qx Nx',        # its effect depends on the terrain (hidden = Night)
  'DIVE':         'Rp Ax',
  'ARM_THRUST':   'Kp Fp *',
@@ -333,8 +300,8 @@ MOVES = {
  'TAIL_GLOW':    'Us Ms',
  'LUSTER_PURGE': 'Mp',
  'MIST_BALL':    'Mp',
- 'FEATHER_DANCE':'Ws Vs',
- 'TEETER_DANCE': 'Vs Zs',
+ 'FEATHER_DANCE':'Ws Ds',        # review: W D J -> J lane was rejected, so W D
+ 'TEETER_DANCE': 'Vs Ds Zs',     # review: V D Z
  'BLAZE_KICK':   'Kp Sp',
  'MUD_SPORT':    'Qs Rs *',      # contest: Mud Sport starts Water Gun / Mud-Slap
  'ICE_BALL':     'Ip Fp',
@@ -346,34 +313,31 @@ MOVES = {
  'BLAST_BURN':   'Xp',
  'HYDRO_CANNON': 'Xp',
  'METEOR_MASH':  'Pp',
- 'ASTONISH':     'Js As *',
+ 'ASTONISH':     'As Nx *',      # was J
  'WEATHER_BALL': 'Rp Sp Ip Qp',  # changes type with the weather: one letter per weather
  'AROMATHERAPY': 'Ys Gs',
  'FAKE_TEARS':   'Ls Ns',
  'AIR_CUTTER':   'Wp Up',
  'OVERHEAT':     'Xp',
- 'ODOR_SLEUTH':  'Ns *',
  'ROCK_TOMB':    'Qp Ts',
  'SILVER_WIND':  'Wp',
  'METAL_SOUND':  'Vs Ls',
- 'GRASS_WHISTLE':'Zs Vs',
+ 'GRASS_WHISTLE':'Zs Gs *',      # review: Z G *
  'TICKLE':       'Ls Ys *',
  'COSMIC_POWER': 'Hs Ms',
  'WATER_SPOUT':  'Rp',
  'SIGNAL_BEAM':  'Zs Mp',
- 'SHADOW_PUNCH': 'Jp Pp',
+ 'SHADOW_PUNCH': 'Pp Np',        # was J
  'EXTRASENSORY': 'Mp',
  'SKY_UPPERCUT': 'Pp',
  'SAND_TOMB':    'Bs Qs',
- 'SHEER_COLD':   'Bp',
  'MUDDY_WATER':  'Rp',
  'BULLET_SEED':  'Gp Fp *',
  'AERIAL_ACE':   'Wp Ap',
  'ICICLE_SPEAR': 'Ip Fp *',
  'IRON_DEFENSE': 'Hs',
- 'BLOCK':        'Bs',
  'HOWL':         'Us Vs *',
- 'DRAGON_CLAW':  'Dp',
+ 'DRAGON_CLAW':  'Up',           # was D; claw like Slash / Crush Claw
  'FRENZY_PLANT': 'Xp',
  'BULK_UP':      'Ks Ps',        # muscles feed kicks and punches
  'BOUNCE':       'Wp',
@@ -385,7 +349,7 @@ MOVES = {
  'WATER_SPORT':  'Rs Ys *',
  'CALM_MIND':    'Ms',
  'LEAF_BLADE':   'Gp Up',
- 'DRAGON_DANCE': 'Ds Vs',
+ 'DRAGON_DANCE': 'Ds Us',        # Dance lane; raises Attack (U)
  'ROCK_BLAST':   'Qp Fp',
  'SHOCK_WAVE':   'Cp Tx',
  'WATER_PULSE':  'Rp Zs',
@@ -394,6 +358,45 @@ MOVES = {
 }
 
 # Program Advances: an exact 3-move sequence in one chain becomes a brand-new move.
+# Moves cut by Khaled's review (2026-10-04). They never become chips.
+REMOVED = {
+ 'GUILLOTINE': 'OHKO (lane B review)',
+ 'HORN_DRILL': 'OHKO',
+ 'FISSURE': 'OHKO',
+ 'SHEER_COLD': 'OHKO',
+ 'DESTINY_BOND': 'review',
+ 'DISABLE': 'review',
+ 'DOUBLE_TEAM': 'review',
+ 'ENCORE': 'review',
+ 'ENDURE': 'review',
+ 'FOLLOW_ME': 'no double battles',
+ 'HELPING_HAND': 'no double battles',
+ 'FORESIGHT': 'review',
+ 'GRUDGE': 'review',
+ 'IMPRISON': 'review',
+ 'MIND_READER': 'review',
+ 'MINIMIZE': 'review',
+ 'MIRROR_COAT': 'review',
+ 'ODOR_SLEUTH': 'review',
+ 'PAIN_SPLIT': 'review',
+ 'PERISH_SONG': 'review',
+ 'PRESENT': 'simplicity',
+ 'RECYCLE': 'review',
+ 'SMELLING_SALT': 'review',
+ 'SNATCH': 'review',
+ 'SONIC_BOOM': 'review',
+ 'SPITE': 'review',
+ 'SPIT_UP': 'Stockpile family',
+ 'STOCKPILE': 'Stockpile family',
+ 'SWALLOW': 'Stockpile family',
+ 'SUBSTITUTE': 'simplicity',
+ 'TAUNT': 'review',
+ 'TORMENT': 'review',
+ 'TRICK': 'review',
+ 'UPROAR': 'review',
+ 'BLOCK': 'review',
+}
+
 PROGRAM_ADVANCES = [
  # name, recipe (in order), new-move sketch
  ('MEGA SOLAR BEAM', ['SUNNY_DAY', 'GROWTH', 'SOLAR_BEAM'], 'GRASS 180, no charge; beam sweeps the whole enemy area row by row'),

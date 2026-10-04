@@ -1,0 +1,2330 @@
+{
+ "lane:A": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:08:44.562Z"
+ },
+ "lane:B": {
+  "status": "reject",
+  "note": "Lets remove all the OHKO moves",
+  "letters": "",
+  "at": "2026-10-04T17:08:27.321Z"
+ },
+ "lane:C": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:07:40.258Z"
+ },
+ "lane:D": {
+  "status": "reject",
+  "note": "I think this should instead be renamed into Dance and have all the Dance type moves. Dragon moves should live elsewhere.",
+  "letters": "",
+  "at": "2026-10-04T17:06:41.691Z"
+ },
+ "lane:E": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:06:37.890Z"
+ },
+ "lane:F": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:06:26.377Z"
+ },
+ "lane:G": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:05:38.767Z"
+ },
+ "lane:H": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:05:37.731Z"
+ },
+ "lane:I": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:04:32.091Z"
+ },
+ "lane:J": {
+  "status": "reject",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:03:18.480Z"
+ },
+ "lane:K": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:02:36.796Z"
+ },
+ "lane:L": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:59:47.551Z"
+ },
+ "lane:M": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:58:20.048Z"
+ },
+ "lane:N": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:55:27.609Z"
+ },
+ "lane:O": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:51:07.164Z"
+ },
+ "lane:P": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:48:45.511Z"
+ },
+ "lane:Q": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:47:46.428Z"
+ },
+ "lane:R": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:45:32.133Z"
+ },
+ "lane:S": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:42:46.001Z"
+ },
+ "lane:T": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:38:29.750Z"
+ },
+ "lane:U": {
+  "status": "change",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:33:49.210Z"
+ },
+ "lane:V": {
+  "status": "change",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:33:47.074Z"
+ },
+ "lane:W": {
+  "status": "change",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:51:35.162Z"
+ },
+ "lane:X": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:51:21.924Z"
+ },
+ "lane:Y": {
+  "status": "change",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:33:45.377Z"
+ },
+ "lane:Z": {
+  "status": "change",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:33:43.832Z"
+ },
+ "move:ABSORB": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:49:42.541Z"
+ },
+ "move:ACID": {
+  "status": "approved",
+  "note": "Cannon Range",
+  "letters": "",
+  "at": "2026-10-04T16:49:34.877Z"
+ },
+ "move:ACID_ARMOR": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:50:49.262Z"
+ },
+ "move:AERIAL_ACE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:17:37.248Z"
+ },
+ "move:AEROBLAST": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:13:12.947Z"
+ },
+ "move:AGILITY": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:35:24.279Z"
+ },
+ "move:AIR_CUTTER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:17:21.618Z"
+ },
+ "move:AMNESIA": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:56:23.829Z"
+ },
+ "move:ANCIENT_POWER": {
+  "status": "approved",
+  "note": "Make it cannon attack range",
+  "letters": "",
+  "at": "2026-10-04T16:47:18.490Z"
+ },
+ "move:ARM_THRUST": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:02:03.069Z"
+ },
+ "move:AROMATHERAPY": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:25:57.505Z"
+ },
+ "move:ASTONISH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:03:11.571Z"
+ },
+ "move:ATTRACT": {
+  "status": "change",
+  "note": "",
+  "letters": "*",
+  "at": "2026-10-04T16:05:28.986Z"
+ },
+ "move:AURORA_BEAM": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:18:58.622Z"
+ },
+ "move:BARRAGE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:06:19.596Z"
+ },
+ "move:BARRIER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:56:20.087Z"
+ },
+ "move:BATON_PASS": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:37:20.463Z"
+ },
+ "move:BEAT_UP": {
+  "status": "approved",
+  "note": "This could be cool but complex to implement.",
+  "letters": "",
+  "at": "2026-10-04T16:22:41.216Z"
+ },
+ "move:BELLY_DRUM": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:31:42.299Z"
+ },
+ "move:BIDE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:04:42.629Z"
+ },
+ "move:BIND": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:06:12.314Z"
+ },
+ "move:BITE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:51:58.418Z"
+ },
+ "move:BLAST_BURN": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T15:56:49.922Z"
+ },
+ "move:BLAZE_KICK": {
+  "status": "approved",
+  "note": "Should hit 3 columns\n",
+  "letters": "",
+  "at": "2026-10-04T17:02:16.710Z"
+ },
+ "move:BLIZZARD": {
+  "status": "approved",
+  "note": "Gun Del Sol Range",
+  "letters": "",
+  "at": "2026-10-04T17:04:02.300Z"
+ },
+ "move:BLOCK": {
+  "status": "reject",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:08:09.793Z"
+ },
+ "move:BODY_SLAM": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:59:15.720Z"
+ },
+ "move:BONEMERANG": {
+  "status": "approved",
+  "note": "Should Use Air Hockey Attack Range",
+  "letters": "",
+  "at": "2026-10-04T16:46:19.510Z"
+ },
+ "move:BONE_CLUB": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:46:00.872Z"
+ },
+ "move:BONE_RUSH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:46:52.314Z"
+ },
+ "move:BOUNCE": {
+  "status": "approved",
+  "note": "Make it a bomb attack",
+  "letters": "",
+  "at": "2026-10-04T16:17:54.646Z"
+ },
+ "move:BRICK_BREAK": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:59:33.707Z"
+ },
+ "move:BUBBLE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:36:16.277Z"
+ },
+ "move:BUBBLE_BEAM": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:34:39.722Z"
+ },
+ "move:BULK_UP": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:48:17.836Z"
+ },
+ "move:BULLET_SEED": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:05:53.002Z"
+ },
+ "move:CALM_MIND": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:57:48.706Z"
+ },
+ "move:CHARGE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:07:08.010Z"
+ },
+ "move:CHARM": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:21:02.612Z"
+ },
+ "move:CLAMP": {
+  "status": "approved",
+  "note": "Make it Wide Sword Attack Range",
+  "letters": "",
+  "at": "2026-10-04T16:44:19.974Z"
+ },
+ "move:COMET_PUNCH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:47:57.549Z"
+ },
+ "move:CONFUSE_RAY": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:00:52.327Z"
+ },
+ "move:CONFUSION": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T15:59:00.390Z"
+ },
+ "move:CONSTRICT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:36:09.271Z"
+ },
+ "move:COSMIC_POWER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:57:43.240Z"
+ },
+ "move:COTTON_SPORE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:36:24.894Z"
+ },
+ "move:COUNTER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:00:44.176Z"
+ },
+ "move:COVET": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:26:08.351Z"
+ },
+ "move:CRABHAMMER": {
+  "status": "approved",
+  "note": "Make it Wide Sword Attack Range",
+  "letters": "",
+  "at": "2026-10-04T16:44:34.179Z"
+ },
+ "move:CROSS_CHOP": {
+  "status": "approved",
+  "note": "Wide Sword Attack Range",
+  "letters": "",
+  "at": "2026-10-04T17:01:56.183Z"
+ },
+ "move:CRUNCH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:53:35.724Z"
+ },
+ "move:CRUSH_CLAW": {
+  "status": "approved",
+  "note": "Make it hit 3 columns (3x1) ",
+  "letters": "",
+  "at": "2026-10-04T16:32:57.813Z"
+ },
+ "move:CURSE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:31:39.320Z"
+ },
+ "move:CUT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:30:06.784Z"
+ },
+ "move:DEFENSE_CURL": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:04:39.486Z"
+ },
+ "move:DESTINY_BOND": {
+  "status": "reject",
+  "note": "remove",
+  "letters": "",
+  "at": "2026-10-04T17:02:48.637Z"
+ },
+ "move:DETECT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:20:44.356Z"
+ },
+ "move:DIG": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:45:51.812Z"
+ },
+ "move:DISABLE": {
+  "status": "reject",
+  "note": "Remove",
+  "letters": "",
+  "at": "2026-10-04T16:55:54.467Z"
+ },
+ "move:DIVE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:44:50.619Z"
+ },
+ "move:DIZZY_PUNCH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:03:26.206Z"
+ },
+ "move:DOOM_DESIRE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:57:52.846Z"
+ },
+ "move:DOUBLE_EDGE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T15:53:59.350Z"
+ },
+ "move:DOUBLE_KICK": {
+  "status": "approved",
+  "note": "Should hit 3 columns\n",
+  "letters": "",
+  "at": "2026-10-04T17:00:29.686Z"
+ },
+ "move:DOUBLE_SLAP": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:47:52.134Z"
+ },
+ "move:DOUBLE_TEAM": {
+  "status": "reject",
+  "note": "Remove",
+  "letters": "",
+  "at": "2026-10-04T16:35:52.839Z"
+ },
+ "move:DRAGON_BREATH": {
+  "status": "approved",
+  "note": "Gun Del Sol Range",
+  "letters": "",
+  "at": "2026-10-04T17:07:04.588Z"
+ },
+ "move:DRAGON_DANCE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:29:19.661Z"
+ },
+ "move:DRAGON_RAGE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:08:36.486Z"
+ },
+ "move:DREAM_EATER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:02:57.839Z"
+ },
+ "move:DRILL_PECK": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:12:32.193Z"
+ },
+ "move:DYNAMIC_PUNCH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:48:07.066Z"
+ },
+ "move:EARTHQUAKE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:45:41.897Z"
+ },
+ "move:EGG_BOMB": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T15:56:15.970Z"
+ },
+ "move:EMBER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:38:52.961Z"
+ },
+ "move:ENCORE": {
+  "status": "reject",
+  "note": "Remove",
+  "letters": "",
+  "at": "2026-10-04T16:28:03.723Z"
+ },
+ "move:ENDEAVOR": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:06:34.843Z"
+ },
+ "move:ENDURE": {
+  "status": "reject",
+  "note": "remove",
+  "letters": "",
+  "at": "2026-10-04T17:04:56.676Z"
+ },
+ "move:ERUPTION": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:42:15.835Z"
+ },
+ "move:EXPLOSION": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T15:56:18.145Z"
+ },
+ "move:EXTRASENSORY": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:57:46.434Z"
+ },
+ "move:EXTREME_SPEED": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:08:41.241Z"
+ },
+ "move:FACADE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:50:58.336Z"
+ },
+ "move:FAINT_ATTACK": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:52:38.093Z"
+ },
+ "move:FAKE_OUT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:53:38.176Z"
+ },
+ "move:FAKE_TEARS": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:55:20.500Z"
+ },
+ "move:FALSE_SWIPE": {
+  "status": "approved",
+  "note": "Make it Wide Sword attack pattern",
+  "letters": "",
+  "at": "2026-10-04T16:32:01.616Z"
+ },
+ "move:FEATHER_DANCE": {
+  "status": "change",
+  "note": "Move to D (Dance)",
+  "letters": "WDJ",
+  "at": "2026-10-04T16:28:41.449Z"
+ },
+ "move:FIRE_BLAST": {
+  "status": "approved",
+  "note": "Should be a bomb attack that hits only diagonal adjacent columns and the center hit square (Star shape roughly)",
+  "letters": "",
+  "at": "2026-10-04T16:41:16.023Z"
+ },
+ "move:FIRE_PUNCH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:38:39.010Z"
+ },
+ "move:FIRE_SPIN": {
+  "status": "approved",
+  "note": "Should Use Air Hockey Attack Pattern",
+  "letters": "",
+  "at": "2026-10-04T16:39:13.256Z"
+ },
+ "move:FISSURE": {
+  "status": "reject",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:08:03.171Z"
+ },
+ "move:FLAIL": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:06:32.173Z"
+ },
+ "move:FLAMETHROWER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:38:58.369Z"
+ },
+ "move:FLAME_WHEEL": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:42:04.480Z"
+ },
+ "move:FLASH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:41:22.174Z"
+ },
+ "move:FLATTER": {
+  "status": "change",
+  "note": "",
+  "letters": "*",
+  "at": "2026-10-04T16:06:11.152Z"
+ },
+ "move:FLY": {
+  "status": "approved",
+  "note": "Make it a slow Bomb Attack that makes you immune while it is throwing the bomb but has a very slow recovery time.",
+  "letters": "WR",
+  "at": "2026-10-04T16:16:03.406Z"
+ },
+ "move:FOCUS_ENERGY": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:30:56.493Z"
+ },
+ "move:FOCUS_PUNCH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:48:09.234Z"
+ },
+ "move:FOLLOW_ME": {
+  "status": "reject",
+  "note": "Useless as there are no double-battles. Remove.",
+  "letters": "",
+  "at": "2026-10-04T16:23:38.119Z"
+ },
+ "move:FORESIGHT": {
+  "status": "reject",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:52:45.362Z"
+ },
+ "move:FRENZY_PLANT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T15:57:15.101Z"
+ },
+ "move:FRUSTRATION": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:52:55.847Z"
+ },
+ "move:FURY_ATTACK": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:59:08.191Z"
+ },
+ "move:FURY_CUTTER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:32:07.977Z"
+ },
+ "move:FURY_SWIPES": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:59:21.526Z"
+ },
+ "move:FUTURE_SIGHT": {
+  "status": "approved",
+  "note": "Fires a projectile down this row but after a long delay",
+  "letters": "",
+  "at": "2026-10-04T16:57:04.037Z"
+ },
+ "move:GIGA_DRAIN": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:05:47.864Z"
+ },
+ "move:GLARE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:52:15.526Z"
+ },
+ "move:GRASS_WHISTLE": {
+  "status": "change",
+  "note": "",
+  "letters": "ZG*",
+  "at": "2026-10-04T16:07:00.217Z"
+ },
+ "move:GROWL": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:27:02.195Z"
+ },
+ "move:GROWTH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:39:02.006Z"
+ },
+ "move:GRUDGE": {
+  "status": "reject",
+  "note": "remove",
+  "letters": "",
+  "at": "2026-10-04T17:03:06.051Z"
+ },
+ "move:GUILLOTINE": {
+  "status": "reject",
+  "note": "remove",
+  "letters": "",
+  "at": "2026-10-04T17:08:00.787Z"
+ },
+ "move:GUST": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:08:06.568Z"
+ },
+ "move:HAIL": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:04:07.175Z"
+ },
+ "move:HARDEN": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:19:34.336Z"
+ },
+ "move:HAZE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:19:46.157Z"
+ },
+ "move:HEADBUTT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:04:36.689Z"
+ },
+ "move:HEAL_BELL": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:21:10.818Z"
+ },
+ "move:HEAT_WAVE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:42:12.468Z"
+ },
+ "move:HELPING_HAND": {
+  "status": "reject",
+  "note": "Useless as there are no double-battles. Remove.",
+  "letters": "",
+  "at": "2026-10-04T16:23:42.340Z"
+ },
+ "move:HI_JUMP_KICK": {
+  "status": "approved",
+  "note": "Should hit 3 columns\n",
+  "letters": "",
+  "at": "2026-10-04T17:00:50.124Z"
+ },
+ "move:HORN_ATTACK": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:59:02.416Z"
+ },
+ "move:HORN_DRILL": {
+  "status": "reject",
+  "note": "remove",
+  "letters": "",
+  "at": "2026-10-04T17:07:56.939Z"
+ },
+ "move:HOWL": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:29:27.491Z"
+ },
+ "move:HYDRO_CANNON": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T15:56:57.872Z"
+ },
+ "move:HYDRO_PUMP": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:42:56.020Z"
+ },
+ "move:HYPER_BEAM": {
+  "status": "approved",
+  "note": "Immobile next turn = Cannot select chips next time custom menu shows up.",
+  "letters": "",
+  "at": "2026-10-04T15:54:48.490Z"
+ },
+ "move:HYPER_FANG": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:52:18.856Z"
+ },
+ "move:HYPER_VOICE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:28:58.841Z"
+ },
+ "move:HYPNOSIS": {
+  "status": "approved",
+  "note": "We will probably reflect the low accuracy of these types of moves by making them hard to hit slow moving projectiles.",
+  "letters": "",
+  "at": "2026-10-04T16:00:45.870Z"
+ },
+ "move:ICE_BALL": {
+  "status": "approved",
+  "note": "Bomb Attack Range",
+  "letters": "",
+  "at": "2026-10-04T17:04:15.605Z"
+ },
+ "move:ICE_BEAM": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:03:48.260Z"
+ },
+ "move:ICE_PUNCH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:48:01.712Z"
+ },
+ "move:ICICLE_SPEAR": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:04:18.787Z"
+ },
+ "move:ICY_WIND": {
+  "status": "approved",
+  "note": "Make this use the Gun Del Sol Attack pattern (Cone basically)",
+  "letters": "",
+  "at": "2026-10-04T16:37:17.257Z"
+ },
+ "move:IMPRISON": {
+  "status": "reject",
+  "note": "remove",
+  "letters": "",
+  "at": "2026-10-04T16:57:22.541Z"
+ },
+ "move:INGRAIN": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:24:23.395Z"
+ },
+ "move:IRON_DEFENSE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:05:09.515Z"
+ },
+ "move:IRON_TAIL": {
+  "status": "approved",
+  "note": "Wide Sword attack range",
+  "letters": "",
+  "at": "2026-10-04T16:59:28.315Z"
+ },
+ "move:JUMP_KICK": {
+  "status": "approved",
+  "note": "Make it hit 3 columns (3x1)",
+  "letters": "",
+  "at": "2026-10-04T16:11:17.996Z"
+ },
+ "move:KARATE_CHOP": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:29:41.554Z"
+ },
+ "move:KINESIS": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:52:06.578Z"
+ },
+ "move:KNOCK_OFF": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:54:42.069Z"
+ },
+ "move:LEAF_BLADE": {
+  "status": "approved",
+  "note": "Make it Wide Sword attack range",
+  "letters": "",
+  "at": "2026-10-04T16:33:34.300Z"
+ },
+ "move:LEECH_LIFE": {
+  "status": "approved",
+  "note": "Life Sword attack range",
+  "letters": "",
+  "at": "2026-10-04T16:50:46.825Z"
+ },
+ "move:LEECH_SEED": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:49:59.747Z"
+ },
+ "move:LEER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:51:56.394Z"
+ },
+ "move:LICK": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:02:41.378Z"
+ },
+ "move:LIGHT_SCREEN": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:19:41.619Z"
+ },
+ "move:LOCK_ON": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:06:53.240Z"
+ },
+ "move:LOVELY_KISS": {
+  "status": "approved",
+  "note": "We will probably reflect the lower accuracy of these types of moves by making them hard to hit slow moving projectiles.",
+  "letters": "",
+  "at": "2026-10-04T16:03:20.520Z"
+ },
+ "move:LOW_KICK": {
+  "status": "approved",
+  "note": "Make it Wide Sword attack range",
+  "letters": "",
+  "at": "2026-10-04T16:34:52.173Z"
+ },
+ "move:LUSTER_PURGE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:57:25.113Z"
+ },
+ "move:MACH_PUNCH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:48:05.469Z"
+ },
+ "move:MAGICAL_LEAF": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:38:07.383Z"
+ },
+ "move:MAGIC_COAT": {
+  "status": "change",
+  "note": "Should act like Safeguard but applies the effect to the opponent instead of just cancelling it.",
+  "letters": "Y",
+  "at": "2026-10-04T16:25:16.085Z"
+ },
+ "move:MAGNITUDE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:46:59.439Z"
+ },
+ "move:MEAN_LOOK": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:02:50.154Z"
+ },
+ "move:MEDITATE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:30:31.338Z"
+ },
+ "move:MEGAHORN": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T15:56:31.862Z"
+ },
+ "move:MEGA_DRAIN": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:49:44.672Z"
+ },
+ "move:MEGA_KICK": {
+  "status": "approved",
+  "note": "Should hit 3 columns\n",
+  "letters": "",
+  "at": "2026-10-04T17:00:33.585Z"
+ },
+ "move:MEGA_PUNCH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:47:59.867Z"
+ },
+ "move:MEMENTO": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:23:15.220Z"
+ },
+ "move:METAL_CLAW": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:32:12.843Z"
+ },
+ "move:METAL_SOUND": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:29:04.174Z"
+ },
+ "move:METEOR_MASH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:48:10.599Z"
+ },
+ "move:MILK_DRINK": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:21:06.264Z"
+ },
+ "move:MIND_READER": {
+  "status": "reject",
+  "note": "remove",
+  "letters": "",
+  "at": "2026-10-04T16:56:33.925Z"
+ },
+ "move:MINIMIZE": {
+  "status": "reject",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:35:56.050Z"
+ },
+ "move:MIRROR_COAT": {
+  "status": "reject",
+  "note": "remove",
+  "letters": "",
+  "at": "2026-10-04T16:56:44.012Z"
+ },
+ "move:MIST": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:18:54.361Z"
+ },
+ "move:MIST_BALL": {
+  "status": "approved",
+  "note": "Make it bomb attack",
+  "letters": "",
+  "at": "2026-10-04T16:57:41.402Z"
+ },
+ "move:MOONLIGHT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:22:13.967Z"
+ },
+ "move:MORNING_SUN": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:22:08.147Z"
+ },
+ "move:MUDDY_WATER": {
+  "status": "approved",
+  "note": "Make it Life Sword Attack Range",
+  "letters": "",
+  "at": "2026-10-04T16:45:22.599Z"
+ },
+ "move:MUD_SHOT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:38:05.381Z"
+ },
+ "move:MUD_SLAP": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:46:39.776Z"
+ },
+ "move:MUD_SPORT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:44:54.339Z"
+ },
+ "move:NEEDLE_ARM": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:05:50.602Z"
+ },
+ "move:NIGHTMARE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:04:28.410Z"
+ },
+ "move:NIGHT_SHADE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:52:01.268Z"
+ },
+ "move:OCTAZOOKA": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:44:36.482Z"
+ },
+ "move:ODOR_SLEUTH": {
+  "status": "reject",
+  "note": "remove",
+  "letters": "",
+  "at": "2026-10-04T16:55:17.851Z"
+ },
+ "move:OVERHEAT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T15:57:10.263Z"
+ },
+ "move:PAIN_SPLIT": {
+  "status": "reject",
+  "note": "remove",
+  "letters": "",
+  "at": "2026-10-04T17:02:56.535Z"
+ },
+ "move:PAY_DAY": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:51:53.453Z"
+ },
+ "move:PECK": {
+  "status": "change",
+  "note": "",
+  "letters": "WFA*",
+  "at": "2026-10-04T16:12:07.803Z"
+ },
+ "move:PERISH_SONG": {
+  "status": "reject",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:27:38.328Z"
+ },
+ "move:PETAL_DANCE": {
+  "status": "change",
+  "note": "",
+  "letters": "GD",
+  "at": "2026-10-04T16:27:25.211Z"
+ },
+ "move:PIN_MISSILE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:06:17.916Z"
+ },
+ "move:POISON_FANG": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:51:01.014Z"
+ },
+ "move:POISON_GAS": {
+  "status": "approved",
+  "note": "accuracy note about status moves",
+  "letters": "",
+  "at": "2026-10-04T16:16:36.287Z"
+ },
+ "move:POISON_POWDER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:50:04.951Z"
+ },
+ "move:POISON_STING": {
+  "status": "approved",
+  "note": "Should be Long Sword Attack Range",
+  "letters": "",
+  "at": "2026-10-04T16:49:00.272Z"
+ },
+ "move:POISON_TAIL": {
+  "status": "approved",
+  "note": "Make it Wide Sword attack range",
+  "letters": "",
+  "at": "2026-10-04T16:33:11.125Z"
+ },
+ "move:POUND": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:47:50.274Z"
+ },
+ "move:POWDER_SNOW": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:13:24.101Z"
+ },
+ "move:PRESENT": {
+  "status": "reject",
+  "note": "Remove for simplicity",
+  "letters": "",
+  "at": "2026-10-04T16:21:44.326Z"
+ },
+ "move:PROTECT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:20:30.473Z"
+ },
+ "move:PSYBEAM": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T15:58:47.618Z"
+ },
+ "move:PSYCHIC": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:56:18.408Z"
+ },
+ "move:PSYCHO_BOOST": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T15:24:23.797Z"
+ },
+ "move:PSYCH_UP": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:32:16.609Z"
+ },
+ "move:PSYWAVE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:56:26.409Z"
+ },
+ "move:PURSUIT": {
+  "status": "approved",
+  "note": "Make it hit the whole row (Up to 5 columns)",
+  "letters": "",
+  "at": "2026-10-04T16:53:18.293Z"
+ },
+ "move:QUICK_ATTACK": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:35:31.787Z"
+ },
+ "move:RAGE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:30:45.612Z"
+ },
+ "move:RAIN_DANCE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:44:38.298Z"
+ },
+ "move:RAPID_SPIN": {
+  "status": "approved",
+  "note": "Should Use Air Hockey Attack Pattern",
+  "letters": "",
+  "at": "2026-10-04T16:37:36.189Z"
+ },
+ "move:RAZOR_LEAF": {
+  "status": "approved",
+  "note": "Make it Wide Sword attack range",
+  "letters": "",
+  "at": "2026-10-04T16:30:26.771Z"
+ },
+ "move:RAZOR_WIND": {
+  "status": "approved",
+  "note": "Should be quite slow to launch",
+  "letters": "",
+  "at": "2026-10-04T16:08:42.095Z"
+ },
+ "move:RECOVER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:19:21.708Z"
+ },
+ "move:RECYCLE": {
+  "status": "reject",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:25:29.861Z"
+ },
+ "move:REFLECT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:19:49.540Z"
+ },
+ "move:REFRESH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:25:36.348Z"
+ },
+ "move:REST": {
+  "status": "approved",
+  "note": "I think sleep should be automatically broken when an attack lands. Otherwise it would be way too strong.",
+  "letters": "",
+  "at": "2026-10-04T16:04:21.441Z"
+ },
+ "move:RETURN": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:21:30.257Z"
+ },
+ "move:REVENGE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:02:00.278Z"
+ },
+ "move:REVERSAL": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:00:55.193Z"
+ },
+ "move:ROAR": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:11:21.332Z"
+ },
+ "move:ROCK_BLAST": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:47:33.257Z"
+ },
+ "move:ROCK_SLIDE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:46:23.237Z"
+ },
+ "move:ROCK_SMASH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:59:31.525Z"
+ },
+ "move:ROCK_THROW": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:45:39.774Z"
+ },
+ "move:ROCK_TOMB": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:38:03.078Z"
+ },
+ "move:ROLLING_KICK": {
+  "status": "approved",
+  "note": "Should hit 3 columns\n",
+  "letters": "",
+  "at": "2026-10-04T17:00:40.389Z"
+ },
+ "move:ROLLOUT": {
+  "status": "approved",
+  "note": "Make it hit the whole row",
+  "letters": "",
+  "at": "2026-10-04T17:05:05.293Z"
+ },
+ "move:SACRED_FIRE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:42:08.156Z"
+ },
+ "move:SAFEGUARD": {
+  "status": "approved",
+  "note": "Acts like protect but for status moves",
+  "letters": "",
+  "at": "2026-10-04T16:22:03.400Z"
+ },
+ "move:SANDSTORM": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:13:38.689Z"
+ },
+ "move:SAND_ATTACK": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:45:37.569Z"
+ },
+ "move:SAND_TOMB": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:47:30.594Z"
+ },
+ "move:SCARY_FACE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:36:28.105Z"
+ },
+ "move:SCRATCH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:29:46.212Z"
+ },
+ "move:SCREECH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:27:31.197Z"
+ },
+ "move:SECRET_POWER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:47:20.664Z"
+ },
+ "move:SEISMIC_TOSS": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:00:46.441Z"
+ },
+ "move:SELF_DESTRUCT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T15:55:10.142Z"
+ },
+ "move:SHADOW_BALL": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:02:58.299Z"
+ },
+ "move:SHADOW_PUNCH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:48:13.021Z"
+ },
+ "move:SHARPEN": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:31:06.520Z"
+ },
+ "move:SHEER_COLD": {
+  "status": "reject",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:08:05.751Z"
+ },
+ "move:SHOCK_WAVE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:38:09.243Z"
+ },
+ "move:SIGNAL_BEAM": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:07:14.143Z"
+ },
+ "move:SILVER_WIND": {
+  "status": "approved",
+  "note": "Make it spreader",
+  "letters": "",
+  "at": "2026-10-04T16:17:33.881Z"
+ },
+ "move:SING": {
+  "status": "approved",
+  "note": "We will probably reflect the low accuracy of these types of moves by making them hard to hit slow moving projectiles.",
+  "letters": "",
+  "at": "2026-10-04T15:59:37.815Z"
+ },
+ "move:SKULL_BASH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:04:46.866Z"
+ },
+ "move:SKY_ATTACK": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:13:05.538Z"
+ },
+ "move:SKY_UPPERCUT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:48:14.919Z"
+ },
+ "move:SLACK_OFF": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:25:44.072Z"
+ },
+ "move:SLAM": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:59:00.714Z"
+ },
+ "move:SLASH": {
+  "status": "approved",
+  "note": "Make it Wide Sword attack range",
+  "letters": "",
+  "at": "2026-10-04T16:31:25.474Z"
+ },
+ "move:SLEEP_POWDER": {
+  "status": "approved",
+  "note": "We will probably reflect the lower accuracy of these types of moves by making them hard to hit slow moving projectiles.",
+  "letters": "",
+  "at": "2026-10-04T16:00:02.708Z"
+ },
+ "move:SLEEP_TALK": {
+  "status": "reject",
+  "note": "Either should use a random move like metronome, or be removed.",
+  "letters": "",
+  "at": "2026-10-04T16:05:55.611Z"
+ },
+ "move:SLUDGE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:50:08.926Z"
+ },
+ "move:SLUDGE_BOMB": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:50:51.197Z"
+ },
+ "move:SMELLING_SALT": {
+  "status": "reject",
+  "note": "remove",
+  "letters": "",
+  "at": "2026-10-04T16:54:26.874Z"
+ },
+ "move:SMOG": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:39:37.465Z"
+ },
+ "move:SMOKESCREEN": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:39:32.261Z"
+ },
+ "move:SNATCH": {
+  "status": "reject",
+  "note": "Remove",
+  "letters": "",
+  "at": "2026-10-04T16:56:07.209Z"
+ },
+ "move:SNORE": {
+  "status": "change",
+  "note": "",
+  "letters": "ZV*",
+  "at": "2026-10-04T16:07:41.420Z"
+ },
+ "move:SOFT_BOILED": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:19:54.760Z"
+ },
+ "move:SOLAR_BEAM": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:39:03.813Z"
+ },
+ "move:SONIC_BOOM": {
+  "status": "reject",
+  "note": "I dont know why you have it as varies but I guess we can just remove this move",
+  "letters": "",
+  "at": "2026-10-04T16:11:55.468Z"
+ },
+ "move:SPARK": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:06:55.469Z"
+ },
+ "move:SPIDER_WEB": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:02:43.859Z"
+ },
+ "move:SPIKES": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:46:42.190Z"
+ },
+ "move:SPIKE_CANNON": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:46:08.537Z"
+ },
+ "move:SPITE": {
+  "status": "reject",
+  "note": "Remove",
+  "letters": "",
+  "at": "2026-10-04T16:52:36.504Z"
+ },
+ "move:SPIT_UP": {
+  "status": "reject",
+  "note": "Remove",
+  "letters": "",
+  "at": "2026-10-04T16:32:25.032Z"
+ },
+ "move:SPORE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:03:31.799Z"
+ },
+ "move:STEEL_WING": {
+  "status": "approved",
+  "note": "Should switch to wide Sword Attack pattern (1x3)",
+  "letters": "",
+  "at": "2026-10-04T16:15:54.101Z"
+ },
+ "move:STOCKPILE": {
+  "status": "reject",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:32:18.349Z"
+ },
+ "move:STOMP": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:34:32.747Z"
+ },
+ "move:STRENGTH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:59:18.985Z"
+ },
+ "move:STRING_SHOT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:34:56.672Z"
+ },
+ "move:STUN_SPORE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:05:46.259Z"
+ },
+ "move:SUBMISSION": {
+  "status": "reject",
+  "note": "Too weak for X",
+  "letters": "",
+  "at": "2026-10-04T17:02:29.745Z"
+ },
+ "move:SUBSTITUTE": {
+  "status": "reject",
+  "note": "Just remove I think for simplicity",
+  "letters": "",
+  "at": "2026-10-04T16:20:27.158Z"
+ },
+ "move:SUNNY_DAY": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:42:09.917Z"
+ },
+ "move:SUPERPOWER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T15:56:36.827Z"
+ },
+ "move:SUPERSONIC": {
+  "status": "approved",
+  "note": "We will probably reflect the low accuracy of these types of moves by making them hard to hit slow moving projectiles.",
+  "letters": "",
+  "at": "2026-10-04T15:59:40.454Z"
+ },
+ "move:SUPER_FANG": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:52:22.284Z"
+ },
+ "move:SURF": {
+  "status": "approved",
+  "note": "Make it Life Sword Attack Range",
+  "letters": "",
+  "at": "2026-10-04T16:43:19.263Z"
+ },
+ "move:SWAGGER": {
+  "status": "change",
+  "note": "",
+  "letters": "*",
+  "at": "2026-10-04T16:05:20.450Z"
+ },
+ "move:SWALLOW": {
+  "status": "reject",
+  "note": "Remove this and the related moves (Stockpile, Spit up)",
+  "letters": "",
+  "at": "2026-10-04T16:23:02.702Z"
+ },
+ "move:SWEET_KISS": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:05:13.063Z"
+ },
+ "move:SWEET_SCENT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:53:01.719Z"
+ },
+ "move:SWIFT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:36:04.239Z"
+ },
+ "move:SWORDS_DANCE": {
+  "status": "change",
+  "note": "",
+  "letters": "DU",
+  "at": "2026-10-04T16:26:37.571Z"
+ },
+ "move:SYNTHESIS": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:22:10.938Z"
+ },
+ "move:TACKLE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:59:11.334Z"
+ },
+ "move:TAIL_GLOW": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:32:30.528Z"
+ },
+ "move:TAIL_WHIP": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:26:45.835Z"
+ },
+ "move:TAKE_DOWN": {
+  "status": "reject",
+  "note": "might be too weak to include here",
+  "letters": "",
+  "at": "2026-10-04T15:55:05.020Z"
+ },
+ "move:TAUNT": {
+  "status": "reject",
+  "note": "remove",
+  "letters": "",
+  "at": "2026-10-04T16:54:33.213Z"
+ },
+ "move:TEETER_DANCE": {
+  "status": "change",
+  "note": "",
+  "letters": "VDZ",
+  "at": "2026-10-04T16:28:54.078Z"
+ },
+ "move:TELEPORT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:19:16.043Z"
+ },
+ "move:THIEF": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:52:28.164Z"
+ },
+ "move:THRASH": {
+  "status": "change",
+  "note": "Change attack area to life Sword (2x3)",
+  "letters": "",
+  "at": "2026-10-04T15:53:54.745Z"
+ },
+ "move:THUNDER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:43:32.913Z"
+ },
+ "move:THUNDERBOLT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:06:49.229Z"
+ },
+ "move:THUNDER_PUNCH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:48:03.571Z"
+ },
+ "move:THUNDER_SHOCK": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:06:47.219Z"
+ },
+ "move:THUNDER_WAVE": {
+  "status": "approved",
+  "note": "Always lands on the foe wherever it stands: no aiming, goes through Barrier and invincibility.\n\n",
+  "letters": "",
+  "at": "2026-10-04T16:35:17.147Z"
+ },
+ "move:TICKLE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:26:01.862Z"
+ },
+ "move:TORMENT": {
+  "status": "reject",
+  "note": "Remove",
+  "letters": "",
+  "at": "2026-10-04T16:54:13.906Z"
+ },
+ "move:TOXIC": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:50:06.167Z"
+ },
+ "move:TRICK": {
+  "status": "reject",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:54:35.798Z"
+ },
+ "move:TRIPLE_KICK": {
+  "status": "approved",
+  "note": "Should hit 3 columns\n",
+  "letters": "",
+  "at": "2026-10-04T17:00:53.363Z"
+ },
+ "move:TRI_ATTACK": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:41:31.406Z"
+ },
+ "move:TWINEEDLE": {
+  "status": "approved",
+  "note": "Should be Long Sword Attack Range",
+  "letters": "",
+  "at": "2026-10-04T16:49:27.579Z"
+ },
+ "move:TWISTER": {
+  "status": "change",
+  "note": "",
+  "letters": "WR*",
+  "at": "2026-10-04T16:15:47.793Z"
+ },
+ "move:UPROAR": {
+  "status": "reject",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:28:23.900Z"
+ },
+ "move:VICE_GRIP": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:58:57.646Z"
+ },
+ "move:VINE_WHIP": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:05:42.899Z"
+ },
+ "move:VITAL_THROW": {
+  "status": "approved",
+  "note": "Should Use Air Hockey Attack Pattern",
+  "letters": "",
+  "at": "2026-10-04T16:37:50.935Z"
+ },
+ "move:VOLT_TACKLE": {
+  "status": "approved",
+  "note": "Make it hit the whole row",
+  "letters": "",
+  "at": "2026-10-04T17:07:36.755Z"
+ },
+ "move:WATERFALL": {
+  "status": "approved",
+  "note": "Make it Hit the whole row (Up to 5 squares range)",
+  "letters": "",
+  "at": "2026-10-04T16:44:07.037Z"
+ },
+ "move:WATER_GUN": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:42:53.560Z"
+ },
+ "move:WATER_PULSE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:07:27.972Z"
+ },
+ "move:WATER_SPORT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:26:16.931Z"
+ },
+ "move:WATER_SPOUT": {
+  "status": "approved",
+  "note": "Should be a bomb attack",
+  "letters": "",
+  "at": "2026-10-04T16:45:15.279Z"
+ },
+ "move:WEATHER_BALL": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:42:39.228Z"
+ },
+ "move:WHIRLPOOL": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:44:43.059Z"
+ },
+ "move:WHIRLWIND": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:09:18.267Z"
+ },
+ "move:WILL_O_WISP": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:50:53.867Z"
+ },
+ "move:WING_ATTACK": {
+  "status": "approved",
+  "note": "Should switch to wide Sword Attack pattern (1x3)",
+  "letters": "",
+  "at": "2026-10-04T16:15:57.451Z"
+ },
+ "move:WISH": {
+  "status": "approved",
+  "note": "Heals the user after the next time the custom menu opens",
+  "letters": "",
+  "at": "2026-10-04T16:24:06.543Z"
+ },
+ "move:WITHDRAW": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:43:41.763Z"
+ },
+ "move:WRAP": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:06:16.341Z"
+ },
+ "move:YAWN": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T16:06:14.121Z"
+ },
+ "move:ZAP_CANNON": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:06:51.510Z"
+ },
+ "pa:DRAGON_RUSH": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:10.812Z"
+ },
+ "pa:DREAM_DEVOURER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:04.759Z"
+ },
+ "pa:EARTH_RENDER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:01.609Z"
+ },
+ "pa:MEGA_SOLAR_BEAM": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:08:49.662Z"
+ },
+ "pa:MUDSLIDE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:28.002Z"
+ },
+ "pa:PERMAFROST": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:08:58.760Z"
+ },
+ "pa:ROLLING_THUNDER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:29.112Z"
+ },
+ "pa:STAMPEDE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:27.260Z"
+ },
+ "pa:STORM_CALLER": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:08:53.279Z"
+ },
+ "pa:THOUSAND_FISTS": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:11.839Z"
+ },
+ "pa:TSUNAMI": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:08:55.602Z"
+ },
+ "pa:VENOM_STORM": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:09.733Z"
+ },
+ "pa:Z-DRAIN": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:39.727Z"
+ },
+ "pa:Z-FLARE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:31.587Z"
+ },
+ "pa:Z-FROST": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:37.189Z"
+ },
+ "pa:Z-HYDRO": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:32.428Z"
+ },
+ "pa:Z-PSI": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:38.929Z"
+ },
+ "pa:Z-SLUDGE": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:38.014Z"
+ },
+ "pa:Z-VOLT": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:30.365Z"
+ },
+ "reward:dmg": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:51.200Z"
+ },
+ "reward:effect": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:53.105Z"
+ },
+ "reward:meter": {
+  "status": "reject",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:58.474Z"
+ },
+ "reward:panel": {
+  "status": "approved",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:09:55.310Z"
+ },
+ "reward:pp": {
+  "status": "reject",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:10:00.057Z"
+ },
+ "reward:tempo": {
+  "status": "reject",
+  "note": "",
+  "letters": "",
+  "at": "2026-10-04T17:10:01.242Z"
+ }
+}
