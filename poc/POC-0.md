@@ -43,5 +43,6 @@ catching, no money — those come with the real battle module.
 
 ## Results
 - 2026-10-04 (Khaled, Linux build via WSLg): **PASS** — wild battle hands off to the stub and returns
-  to the field; lead Pokémon receives EXP. Not yet reported: Pokédex "seen", save/reload,
-  `PKBN_STUB=0` A/B, trainer battle.
+  to the field; lead Pokémon receives EXP.
+- 2026-10-04 (Khaled): remaining checklist items confirmed working — Pokédex "seen", save/reload,
+  `PKBN_STUB=0` vanilla battles, vanilla trainer battle. **POC-0 complete.**
