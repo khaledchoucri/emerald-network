@@ -27,6 +27,7 @@ In a copy of the host (poc/, never upstream/), replace the wild-battle entry wit
 immediately returns a win and writes back the outputs found in R1. Success = overworld continues
 correctly (no softlock, party state consistent, save works).
 
-## POC-1 (after R2): grid sandbox
+## POC-1 (after R2): grid sandbox — BUILT inside the host (not standalone) → poc/POC-1.md
+Built inside the Emerald host instead of a standalone program so it can call Emerald's real damage code and data directly.
 Standalone SDL program: 6×3 grid, one Pokémon on each side, buster + 4 move-chips, using real values
 read from Emerald data (`gSpeciesInfo`, `gBattleMoves`, `CalculateBaseDamage`).
