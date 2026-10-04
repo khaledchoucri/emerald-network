@@ -2,7 +2,7 @@
 
 Goal of round 1: prove the two seams we depend on, using only the code.
 
-## R1. Emerald battle contract (host side)
+## R1. Emerald battle contract (host side) — DONE → 02-emerald-battle-contract.md
 What does the overworld hand to a battle, and what does it read back?
 - Trace every path into `CB2_InitBattle`. Direct `SetMainCallback2(CB2_InitBattle)` sites at pc_port @1165825:
   `src/battle_setup.c:373, :944`, `src/battle_main.c:1955`, `src/battle_tower.c:2002`, `src/cable_club.c:871, :937`,
