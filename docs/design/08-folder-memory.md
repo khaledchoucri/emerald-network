@@ -476,15 +476,18 @@ Pokémon can use may follow the Switch slot:
 Switching becomes the move. The hand tells you who should fight, much as BN6's Navi chips did, without tying chips
 to a Pokémon.
 
-### 11.4 Proposal
+### 11.4 Decision (2026-10-05)
 
 - **F = 30 + 2 per extra party Pokémon** (40 max). Copy caps per move as in §2.3.
-- **"Has learned":** every level-up and egg move of its species counts (no level gate); TM and tutor moves count only
-  once taught.
-- **Switch, then act.**
+- **"Can learn" (Khaled's rule):** any move the species can learn counts (level-up at any level, egg, TM/HM, tutor).
+  - §11.2's Normal-heavy folder is accepted as self-limiting, the way it is in Pokémon itself: Ghost-types wall it,
+    it is never super-effective, and Rock/Steel resist it.
+  - The sim's builder ignored matchups (it used average effectiveness), so 55% is a worst case, not a prediction.
+  - If it shows up in play, the lever is chip **availability** (which shops and drops carry Body Slam / Double-Edge),
+    not the rule.
+- **Switch, then act:** still proposed. It matters less under "can learn" (only ~5% of Customs need a switch).
 - **Learning a move** still adds 1 copy (the move's first code) to the pack. Drops and shops add more (§4).
 - **Not modelled:**
-  - status chips (they make "nothing usable" rarer);
+  - status chips;
   - the NaviCust hand bonus;
-  - early-game folders, which are small, so the lack of reshuffle bites. Proposal: reshuffle only while the folder
-    is under 15 chips.
+  - early-game folders: reshuffle only while the folder is under 15 chips.
