@@ -1,6 +1,6 @@
 # 10 — Catching and chips
 
-Status: **brainstorm and proposal**, nothing implemented.
+Status: **design**, nothing implemented. Decisions of 2026-10-05 are in §10 at the end.
 
 Already in our code:
 - **Catching** uses Gen 3's formula in `src/pkbn/grid_catch.c`, ball bonuses included:
@@ -107,3 +107,85 @@ A shiny catch gives a `*` copy of every move it knew. It's the jackpot moment.
 | 1 | Capture Grade (§1) and Dex chip (§2) | answers the problem and the request directly |
 | 2 | Ball codes (§4) and Partner chips (§6) | the most "only in this game" ideas |
 | 3 | Milestones (§3), credit (§5), release (§7), eggs (§8), shiny (§9) | cheap add-ons once the chip pack exists |
+
+---
+
+## 10. Decisions (2026-10-05) and the revised design
+
+| # | idea | decision |
+|---|---|---|
+| §1 | Capture Grade | **approved** |
+| §2 | Dex chip | **replaced by Candy** (§10.1): one free chip felt punishing |
+| §3 | Pokédex milestones | **yes** |
+| §4 | ball codes | **reworked** (§10.2); the Master Ball gives **1 copy of every move** it knew |
+| §5 | catch credit and Mastery | **no** (Mastery dropped from design 08 §12 too) |
+| §6 | Partner chips from S grades | **no**: earned from the story and levelled up like Navi chips (§10.3) |
+| §7 | release | **folded into Candy** |
+| §8 | eggs bring egg moves | **yes** |
+| §9 | shiny `*` copies | **yes** (Gen 3 shiny odds are 1/8192, which keeps it rare) |
+
+### 10.1 Candy: **type candy** (recommended over species candy)
+
+**Sanity check, from the port's data:**
+
+| | species candy | type candy |
+|---|---|---|
+| currencies | 386 (202 in Hoenn); most are never spent | **17** |
+| "catch a higher-level X" incentive | direct | kept by the level gate below |
+| farming | per species, so naturally slow | **risk:** common Pokémon flood a type. 24 Hoenn species have catch rate 255 (Zigzagoon, Numel, Feebas…) and 46 Hoenn species are Water-type |
+| scarcity | flat | **natural:** Fire 10 Hoenn species, Dragon 10, Ghost 6, Ice 6, Water 46, Psychic 28 |
+
+Type candy is better, provided two brakes from Emerald's own data are in place.
+
+**Earning (TUNE):**
+- **Catch:** `1 + (255 − catchRate) / 50` candy of **each** of its types, using `catchRate` from `species_info.h`.
+  - Zigzagoon (255) gives 1 Normal, Slugma (190) 2 Fire, Bagon (45) 5 Dragon, Beldum (3) 6 Steel + 6 Psychic.
+  - Rare and evolved catches pay more; farming Zigzagoons pays least.
+- **First catch** of a species: ×3. This replaces the Dex chip: a first Slugma gives 6 Fire candy, about two Embers.
+- **Release:** 1 candy of each of its types, +1 at level 30 or above.
+- **Capture Grade S:** +2.
+
+**Spending:**
+- You buy a copy of a **damaging or status move of that type** that is in the level-up learnset of a Pokémon **you
+  own** (party or PC). That Pokémon must have reached
+  `max(the level it learns the move at, the move's MB)` (TUNE).
+  - The MB floor is needed because evolved forms learn some strong moves "at level 1": Raichu's Thunderbolt at
+    L1, Weezing's Self-Destruct at L1 (`level_up_learnsets.h`). With the floor, Thunderbolt (MB 28) needs a
+    level-28 Raichu, Self-Destruct (MB 50) needs level 50, and Psychic (MB 27) needs level 27.
+- **Price:** `ceil(MB / 4)` candy. Ember 3, Bite 5, Flamethrower 7, Fire Blast 9, Hyper Beam 10, Explosion 17.
+- **Code:** the move's first lane. +2 candy to choose any lane.
+- Legendaries' moves can be bought only once you own that legendary.
+
+**Income check:**
+- About 5–8 catches an hour at about 2 candy each, ×3 on first catches, gives **~15–25 candy an hour** spread over
+  the types.
+- That's about **3–5 chosen chips an hour**, on top of the ~10 random drops an hour from busting (design 08 §12.1).
+
+### 10.2 Ball codes, reworked: the ball decides **how** the code is picked
+
+Only 5 of the 25 lanes had a themed ball, so the ball now sets the *rule*, not the lane:
+
+| ball | code of the Capture Grade chip |
+|---|---|
+| Poké | the move's first lane |
+| Great | a random lane of the move |
+| Ultra | **you choose** a lane of the move |
+| Net / Dive / Nest / Timer / Luxury | their themed lane (B / R / G / T / Y) **if the move has it**, otherwise you choose |
+| Repeat | a code you already own for that move (stacks combos) |
+| Premier | `*` if the move allows it, otherwise you choose |
+| Safari | random lane, 2 chips |
+| **Master** | **1 copy of every move it knew**, codes you choose |
+
+### 10.3 Partner chips: from the story, levelled like Navi chips
+
+- **Earned deterministically** at story beats, never from random drops or grades. For example:
+  - the **starter's** chip after the first rival battle (Route 103);
+  - one more at each of a few badges, assigned to a party Pokémon of your choice.
+- A partner chip is tied to that Pokémon: it switches it in and uses its move, costing the Custom.
+- **Levels V1 → V2 → V3** (BN6's Roll → RollV2 → RollV3) raise the move's power or add a rider. They come from:
+  - **friendship** (`MON_DATA_FRIENDSHIP`, 0–255; e.g. V2 at 150, V3 at 220);
+  - or story events (Elite Four).
+- **Alternative for later:** "guest" chips of the gym leaders' or rival's signature Pokémon, which appear, attack and
+  leave, exactly like BN6's Navi chips. Roxanne's Nosepass Rock Tomb V1 after her badge, V2 after the rematch.
+
+Shiny `*` copies may be strong, but at 1/8192 they're a jackpot moment, not a strategy.

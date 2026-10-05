@@ -491,3 +491,54 @@ to a Pokémon.
   - status chips;
   - the NaviCust hand bonus;
   - early-game folders: reshuffle only while the folder is under 15 chips.
+
+**Decided (2026-10-05):** switching keeps costing the whole Custom (no chips after the Switch slot), for balance.
+
+---
+
+## 12. Getting more copies, including specific ones
+
+Learning a move gives 1 copy, and that alone would feel crippling. There are two kinds of supply:
+- **volume:** random copies, so the folder fills;
+- **choice:** you pick the move and the code.
+
+The items and NPCs below already exist in Emerald. PP is gone (§11), so the PP items become free to reuse.
+
+| source | gives | kind | Emerald hook |
+|---|---|---|---|
+| **PP Up** | +1 copy of a chip you own (same move, same code), up to the move's cap | choice | Hidden/field PP Ups in Slateport, Lilycove, Route 123 and the Safari Zone (`data/maps/*/scripts.inc`, 7 map files), and in Pickup's common table (`src/battle_script_commands.c:802`) |
+| **PP Max** | fills one chip up to its cap | choice, rare | 2 map files |
+| **TMs** | Under "can learn" nobody needs teaching, so **a TM is a chip**: each one found or bought gives that move's copies (TUNE: 2) | choice | Lilycove Dept. Store 4F TM shelves (`LilycoveCity_DepartmentStore_4F/scripts.inc:21,39`); every field TM |
+| **Move Relearner** (Fallarbor) | 1 Heart Scale → 1 copy of **any level-up move a party member can learn**, **code of your choice** from its lanes | choice + code | Already takes a Heart Scale (`FallarborTown_MoveRelearnersHouse/scripts.inc:15,38`). Heart Scales are Luvdisc's held item (`species_info.h:9076`) |
+| **Busting drops** (design 09) | a copy of one of the **wild Pokémon's own moves** | volume, but targeted: hunt Slugma for Ember | new |
+| **Mart chip shelves** | fixed (move, code) stock per town, 60 × MB ₽ | choice | new shelf in each Poké Mart |
+| **Mastery** (optional) | every 10 uses of a move in battle → +1 copy, random lane code | volume, earned by playing | new counter in `pkbn.sav` |
+| **Chip Trader** (later) | 3 copies → 1 random copy | turns spares into something | new |
+
+### 12.1 Is that enough? (rough maths, TUNE)
+
+Each chip uses one folder slot, so the goal is to **own about the folder size by mid-game** and then spend the rest
+of the game reshaping it.
+
+- **Folder size** (§11.1): 30 to 40.
+- **Busting drops:**
+  - At a typical busting level of 5–8, the tier is 1–3 (`byte_8020B9C`, research/06).
+  - With design 09's lists, that is a chip in roughly 50–75% of won wild battles.
+  - At about 30 wild battles per hour, that's **~15–20 copies an hour**.
+  - **Too generous.** Proposal: the chip entries sit only in tiers 3–4, about 1 chip every 3 battles, or **~10 an
+    hour**. That fills a 30-chip folder in 2–3 hours of play, which is roughly Mauville.
+- **Choice sources** (PP Up, TMs, Heart Scales, shelves) are fewer: maybe 20–30 over the whole game. That's the right
+  rarity for "make my folder *this* folder".
+- **Mastery:** a heavily used move gets about +1 copy per 3–4 battles at 2–3 uses per battle. Self-correcting: the
+  moves you actually use get copies.
+
+### 12.2 Code choice
+
+| source | code |
+|---|---|
+| Learning | the move's first lane |
+| Drops, Mastery | random lane, with the first lane at half weight (§4) |
+| PP Up | copies the chip's code |
+| Heart Scale, Mart shelf | the code you choose or buy |
+
+So building a same-code combo costs choice resources. That's the BN6 feel.
