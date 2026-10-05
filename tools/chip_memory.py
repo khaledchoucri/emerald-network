@@ -4,7 +4,7 @@
 Reads the moves from the port's own data (src/data/battle_moves.h). Rules (all TUNE):
   damaging move: MB = round(K * power * hits) + adjustments
   power <= 1 (fixed damage, OHKO, variable): MB from PP, like status moves
-  status move:   MB = round(300 / PP)
+  status move:   MB = round(200 / PP)   (POC-10: 300/PP left weather moves (PP 5) at 1 copy)
 Copy cap = BN6's rule by MB (bn6f asm/asm36.s:10634): <=19 -> 5, 20-29 -> 4, 30-39 -> 3, 40-49 -> 2, >=50 -> 1.
 """
 import re, sys, collections
@@ -30,7 +30,7 @@ def load(path):
 
 def mb(mv):
     if mv['power'] <= 1:
-        return max(1, round(300 / mv['pp'])) if mv['pp'] else 99
+        return max(1, round(200 / mv['pp'])) if mv['pp'] else 99
     v = K * mv['power'] * HITS.get(mv['effect'], 1) + ADJ.get(mv['effect'], 0)
     if mv['prio'] > 0 and mv['effect'] != 'EFFECT_QUICK_ATTACK':
         v += 8

@@ -170,7 +170,7 @@ Only 5 of the 25 lanes had a themed ball, so the ball now sets the *rule*, not t
 | Poké | the move's first lane |
 | Great | a random lane of the move |
 | Ultra | **you choose** a lane of the move |
-| Net / Dive / Nest / Timer / Luxury | their themed lane (B / R / G / T / Y) **if the move has it**, otherwise you choose |
+| Net / Dive / Nest / Timer / Luxury | their themed lane (B / R / G / T / Y) **if the move has it**, otherwise a **random** lane (decided 2026-10-05: themed balls are not Ultra-level control) |
 | Repeat | a code you already own for that move (stacks combos) |
 | Premier | `*` if the move allows it, otherwise you choose |
 | Safari | random lane, 2 chips |

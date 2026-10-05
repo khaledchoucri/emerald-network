@@ -1,0 +1,798 @@
+From a1295e064cbadca988db11af53915096eb1d611f Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Mon, 5 Oct 2026 14:54:27 +0300
+Subject: [PATCH 2/2] POC-10b: Busting Level, Capture Grade, chip rewards, EXP
+ scaling
+
+BN6's busting score adapted to grid battles (time by turns or seconds via
+PKBN_BUST_CLOCK, both logged; stun/push hits, steps, chain size, counter hits,
+no faint). Rewards use BN6's tier table on a 20-entry list generated from the
+enemy's own moves: money, HP, or a chip of its move (into the pack). S scales
+EXP x1.2, <=3 x0.9. Catches get a Capture Grade (HP left, status, balls,
+critical catch) and a chip whose code depends on the ball (Master Ball: every
+move). New 'COUNTER HIT!' when hitting a busy enemy.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/busting.h       |  30 +++
+ include/pkbn/grid_battle.h   |   1 +
+ include/pkbn/grid_internal.h |   3 +
+ src/pkbn/busting.c           | 441 +++++++++++++++++++++++++++++++++++
+ src/pkbn/grid_battle.c       |  14 +-
+ src/pkbn/grid_field.c        |   2 +
+ src/pkbn/grid_moves.c        |   9 +
+ src/pkbn/post_battle.c       |  60 ++++-
+ src/pkbn/render.c            |   2 +-
+ src/pkbn/selftest.c          |  10 +
+ 10 files changed, 568 insertions(+), 4 deletions(-)
+ create mode 100644 include/pkbn/busting.h
+ create mode 100644 src/pkbn/busting.c
+
+diff --git a/include/pkbn/busting.h b/include/pkbn/busting.h
+new file mode 100644
+index 0000000..1a538e6
+--- /dev/null
++++ b/include/pkbn/busting.h
+@@ -0,0 +1,30 @@
++#ifndef GUARD_PKBN_BUSTING_H
++#define GUARD_PKBN_BUSTING_H
++// Busting Level and Capture Grade (POC-10b): src/pkbn/busting.c, docs/design/09 and 10.
++
++struct PkbnBustStats
++{
++    u32 fightFrames;     // fight time (the Custom screen and time-stops don't count, as BN6's timer)
++    u16 hits;            // hits that stunned or pushed the player's Pokémon
++    u16 steps;           // panel moves by the player
++    u8 chainPts;         // best chain: 2 chips +2, 3 +4, Program Advance +6
++    u8 counters;         // counter hits landed
++    bool8 fainted;       // a player Pokémon fainted
++    u8 balls;            // balls thrown
++    bool8 prevStun;
++};
++
++void Busting_Reset(void);
++void Busting_OnFightFrame(void);
++void Busting_NotePush(void);
++void Busting_NoteStep(void);
++void Busting_NoteChain(u8 chips, bool8 programAdvance);
++void Busting_NoteCounter(void);
++void Busting_NoteFaint(void);
++void Busting_NoteThrow(void);
++u8 Busting_Level(void);                              // 1..11 (11 = S); logs both clocks
++void Busting_Reward(u8 level, char *msg, u32 size);  // grants it
++void Busting_ScaleExp(u8 level);
++u8 Capture_Grade(void);
++void Capture_Reward(u8 grade, char *msg, u32 size);
++#endif // GUARD_PKBN_BUSTING_H
+diff --git a/include/pkbn/grid_battle.h b/include/pkbn/grid_battle.h
+index cf4ce1a..49edb60 100644
+--- a/include/pkbn/grid_battle.h
++++ b/include/pkbn/grid_battle.h
+@@ -28,4 +28,5 @@ struct PkbnGridDebug
+ };
+ void PkbnGrid_GetDebug(struct PkbnGridDebug *d);
+ 
++extern void (*gPkbnPostBattleDump)(u16 *fb); // self-tests: frame dumps of the post-battle screen
+ #endif // GUARD_PKBN_GRID_BATTLE_H
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index bea0bbf..7cb1e62 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -20,6 +20,7 @@
+ #include "pokemon.h"
+ #include "pkbn/folder.h"
+ #include "pkbn/chip_pack.h"
++#include "pkbn/busting.h"
+ #include "pkbn/move_table.h"
+ #include "pkbn/gfx.h"
+ #include "pkbn/navicust.h"
+@@ -188,6 +189,8 @@ struct GridBattle
+     u8 partyCount;
+     u8 active;
+     bool8 folderEmptyLogged;
++    struct PkbnBustStats bust;
++    u32 counterReady;           // next frame a counter hit can count  // Busting Level / Capture Grade counters (POC-10b)
+     struct Folder folder;
+     u8 hand[HAND_MAX];
+     u8 handCount;
+diff --git a/src/pkbn/busting.c b/src/pkbn/busting.c
+new file mode 100644
+index 0000000..3748777
+--- /dev/null
++++ b/src/pkbn/busting.c
+@@ -0,0 +1,441 @@
++// Busting Level and Capture Grade (POC-10b). docs/design/09-busting-level.md, docs/design/10-catching-and-chips.md.
++//
++// BN6: sub_800AC20 scores the battle (bn6f asm/asm00_1.s:16678), sub_80AA910 picks the reward
++// (asm/asm29.s:10801) from a 20-entry list per enemy with the tier table byte_8020B9C (data/dat01.s:200).
++// research/06-bn6-busting-level.md has the decoded details. Our adaptations are marked ADAPT / TUNE.
++#include "pkbn/grid_vfx.h"
++#include "pkbn/grid_internal.h"
++#include "pkbn/chip_pack.h"
++#include "pkbn/busting.h"
++#include "pkbn/move_table.h"
++#include "money.h"
++#include "battle_main.h"
++#include "data.h"
++#include "pkbn/render.h"
++#include "random.h"
++#include "constants/items.h"
++
++#ifdef PORTABLE
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++// byte_8020B9C (bn6f data/dat01.s:200-212) decoded as tier = value/4, 16 columns per level. Only the counts per
++// level matter (the column is random), so each row lists the tiers in order.
++static const u8 sTierTable[12][16] =
++{
++    {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, // L0 (unused, clamped to 1)
++    {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, // L1
++    {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, // L2
++    {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, // L3
++    {0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1}, // L4
++    {1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2}, // L5
++    {2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2}, // L6
++    {2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3}, // L7
++    {3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3}, // L8
++    {3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4}, // L9
++    {3,3,3,3,3,3,3,3,4,4,4,4,4,4,4,4}, // L10
++    {4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4}, // L11 (S)
++};
++
++enum { R_MONEY_S, R_MONEY_M, R_MONEY_L, R_HP_S, R_HP_M, R_CHIP1, R_CHIP2, R_CHIP2_RARE };
++
++// The 20-entry list, generated for every species from its own moves (design 09 §3.2 with the §12.1 drop rate:
++// chips only at tiers 3-4, about one chip every 3 won wild battles at typical levels). TUNE.
++static const u8 sRewardList[20] =
++{
++    R_MONEY_S, R_MONEY_S, R_MONEY_M, R_MONEY_M, R_MONEY_L, R_MONEY_L, R_CHIP1, R_CHIP2, R_CHIP2_RARE, R_CHIP2_RARE,
++    R_HP_S,    R_HP_S,    R_HP_S,    R_MONEY_M, R_HP_M,    R_MONEY_L, R_CHIP1, R_CHIP2, R_CHIP2_RARE, R_CHIP2_RARE,
++};
++
++// ---- Counting during the battle ------------------------------------------------------------------------------
++
++void Busting_Reset(void)
++{
++    memset(&sB.bust, 0, sizeof(sB.bust));
++}
++
++void Busting_OnFightFrame(void)
++{
++    struct Fighter *p = &sB.f[SIDE_PLAYER];
++    sB.bust.fightFrames++;
++    // BN6 counter 3: hits that put the Navi into a flinch/paralysis/freeze/bubble/push state (asm/asm00_2.s:18305..)
++    if (p->stun && !sB.bust.prevStun)
++        sB.bust.hits++;
++    sB.bust.prevStun = p->stun != 0;
++}
++
++void Busting_NotePush(void)
++{
++    sB.bust.hits++;
++}
++
++void Busting_NoteStep(void)
++{
++    if (sB.bust.steps < 0xFFFF)
++        sB.bust.steps++;
++}
++
++// ADAPT of BN6's multi-delete (bit 3): the biggest chain picked in one Custom. 2 chips +2, 3 +4, a PA +6.
++void Busting_NoteChain(u8 chips, bool8 programAdvance)
++{
++    u8 pts = programAdvance ? 6 : chips >= 2 ? (chips - 1) * 2 : 0;
++    if (pts > 6)
++        pts = 6;
++    if (pts > sB.bust.chainPts)
++        sB.bust.chainPts = pts;
++}
++
++void Busting_NoteCounter(void)
++{
++    sB.bust.counters++;
++}
++
++void Busting_NoteFaint(void)
++{
++    sB.bust.fainted = TRUE;
++}
++
++void Busting_NoteThrow(void)
++{
++    sB.bust.balls++;
++}
++
++// ---- The score -------------------------------------------------------------------------------------------------
++
++static s32 Clamp(s32 v)
++{
++    return v < 1 ? 1 : v > 11 ? 11 : v;
++}
++
++static s32 HitPoints(void)
++{
++    // BN6 bit 1: n<4 -> 1-n, else -3 (asm/asm00_1.s:16720-16738)
++    return sB.bust.hits < 4 ? 1 - (s32)sB.bust.hits : -3;
++}
++
++static s32 TimePoints(bool8 seconds)
++{
++    u32 secs = sB.bust.fightFrames / 60;
++    u32 turns = sB.bust.fightFrames / CUSTOM_FRAMES;
++    if (!sB.trainer)
++    {
++        if (seconds) // BN6 normal battles: <=5 s 6, <=12 s 5, <=36 s 4, else 3 (asm/asm00_1.s:16918-16927)
++            return secs <= 5 ? 6 : secs <= 12 ? 5 : secs <= 36 ? 4 : 3;
++        return turns == 0 ? 6 : turns <= 1 ? 5 : turns <= 4 ? 4 : 3;   // ADAPT: turns (design 09 §2)
++    }
++    if (seconds)     // BN6 boss rank: <=30 s 10, <=40 s 8, <=50 s 6, else 4
++        return secs <= 30 ? 10 : secs <= 40 ? 8 : secs <= 50 ? 6 : 4;
++    {
++        u32 per = turns / (sB.enemyCount ? sB.enemyCount : 1);       // ADAPT: average turns per enemy Pokémon
++        return per <= 1 ? 10 : per <= 2 ? 8 : per <= 3 ? 6 : 4;
++    }
++}
++
++static u8 Score(bool8 seconds, s32 *parts)
++{
++    s32 t = TimePoints(seconds), h = HitPoints(), st = sB.bust.steps <= 2 ? 1 : 0;
++    s32 ch = sB.bust.chainPts, co = sB.bust.counters < 3 ? sB.bust.counters : 3, nf = sB.bust.fainted ? 0 : 1;
++    if (parts)
++        parts[0] = t, parts[1] = h, parts[2] = st, parts[3] = ch, parts[4] = co, parts[5] = nf;
++    return Clamp(t + h + st + ch + co + nf);
++}
++
++u8 Busting_Level(void)
++{
++    s32 a[6], b[6];
++    u8 turns = Score(FALSE, a), secs = Score(TRUE, b);
++    bool8 useSeconds = getenv("PKBN_BUST_CLOCK") != NULL && strcmp(getenv("PKBN_BUST_CLOCK"), "seconds") == 0;
++    PKBN_LOG("busting: turns-clock L%u (time %d hits %d steps %d chain %d counters %d nofaint %d), seconds-clock L%u "
++             "(time %d), %u frames, using %s", turns, (int)a[0], (int)a[1], (int)a[2], (int)a[3], (int)a[4], (int)a[5],
++             secs, (int)b[0], (unsigned)sB.bust.fightFrames, useSeconds ? "seconds" : "turns");
++    return useSeconds ? secs : turns;
++}
++
++// ---- Chips from a Pokémon's moves --------------------------------------------------------------------------------
++
++// The lowest-MB and highest-MB chip moves a Pokémon knows (m1 / m2, design 09 §3.2).
++static void PickMoves(struct Pokemon *mon, u16 *m1, u16 *m2)
++{
++    s32 i;
++    *m1 = *m2 = MOVE_NONE;
++    for (i = 0; i < MAX_MON_MOVES; i++)
++    {
++        u16 mv = GetMonData(mon, MON_DATA_MOVE1 + i);
++        if (!PkbnFolder_MoveIsChip(mv))
++            continue;
++        if (*m1 == MOVE_NONE || Chip_MB(mv) < Chip_MB(*m1))
++            *m1 = mv;
++        if (*m2 == MOVE_NONE || Chip_MB(mv) > Chip_MB(*m2))
++            *m2 = mv;
++    }
++}
++
++static bool8 HasLane(u16 move, u8 letter)
++{
++    const struct PkbnMoveInfo *info = &gPkbnMoveInfo[move];
++    s32 i;
++    for (i = 0; i < info->laneCount; i++)
++        if (info->lanes[i] == letter)
++            return TRUE;
++    return FALSE;
++}
++
++// A random lane; the first lane (what learning gives) at half weight (design 08 §4). rare: never the first lane,
++// and `*` (when the move allows it) 1 in 4.
++static u8 RandomLane(u16 move, bool8 rare)
++{
++    const struct PkbnMoveInfo *info = &gPkbnMoveInfo[move];
++    u32 w = 0, r, i;
++    if (info->laneCount == 0)
++        return 0;
++    if (rare)
++    {
++        if (HasLane(move, LETTER_WILD) && Random() % 4 == 0)
++            return LETTER_WILD;
++        if (info->laneCount == 1)
++            return info->lanes[0];
++        return info->lanes[1 + Random() % (info->laneCount - 1)];
++    }
++    for (i = 0; i < info->laneCount; i++)
++        w += i == 0 ? 1 : 2;
++    r = Random() % w;
++    for (i = 0; i < info->laneCount; i++)
++    {
++        u32 wi = i == 0 ? 1 : 2;
++        if (r < wi)
++            return info->lanes[i];
++        r -= wi;
++    }
++    return info->lanes[0];
++}
++
++// "You choose" (Ultra / Master Ball): no picker screen yet, so the code you already own most chips of. TUNE/UI later.
++static u8 ChosenLane(u16 move)
++{
++    const struct PkbnMoveInfo *info = &gPkbnMoveInfo[move];
++    u8 best = info->laneCount ? info->lanes[0] : 0;
++    u32 bestN = 0, i;
++    for (i = 0; i < info->laneCount; i++)
++    {
++        u32 n = 0, mv;
++        for (mv = 1; mv < MOVES_COUNT; mv++)
++            n += PkbnPack_Get(mv, info->lanes[i]);
++        if (n > bestN)
++            bestN = n, best = info->lanes[i];
++    }
++    return best;
++}
++
++static void ChipName(char *dst, u32 size, u16 move, u8 letter)
++{
++    char nm[MOVE_NAME_LENGTH + 1];
++    Pkbn_GameStringToAscii(nm, gMoveNames[move], sizeof(nm));
++    snprintf(dst, size, "%s %c", nm, PkbnFolder_LetterChar(letter));
++}
++
++static void GiveChip(u16 move, u8 letter, char *msg, u32 size)
++{
++    char nm[24];
++    PkbnPack_Add(move, letter, 1);
++    ChipName(nm, sizeof(nm), move, letter);
++    snprintf(msg, size, "GOT A CHIP: %s!", nm);
++}
++
++// ---- Busting reward (won battles) --------------------------------------------------------------------------------
++
++static bool8 CollectBug(void)
++{
++    s32 i;
++    for (i = 0; i < sB.partyCount; i++)
++        if (sB.party[i].participated && sB.party[i].navi.bug[6])
++            return TRUE;
++    return FALSE;
++}
++
++static bool8 AmuletCoin(void)
++{
++    s32 i;
++    for (i = 0; i < sB.partyCount; i++)
++        if (sB.party[i].participated && sB.party[i].navi.amuletCoin)
++            return TRUE;
++    return FALSE;
++}
++
++void Busting_Reward(u8 level, char *msg, u32 size)
++{
++    struct Pokemon *enemy;
++    struct Pokemon *mine = &gPlayerParty[sB.active];
++    u16 m1, m2, hp = GetMonData(mine, MON_DATA_HP), maxHP = GetMonData(mine, MON_DATA_MAX_HP);
++    u8 lvl, tier, entry, kind;
++    bool8 lowHP = hp <= 3 * (maxHP >> 3);   // asm/asm29.s:11011-11048
++    s32 slot = 0;
++
++    // BN6 picks a random enemy of the battle (asm/asm29.s:10960-10971)
++    if (sB.trainer && sB.enemyCount)
++        slot = Random() % sB.enemyCount;
++    enemy = &gEnemyParty[slot];
++    lvl = GetMonData(enemy, MON_DATA_LEVEL);
++    PickMoves(enemy, &m1, &m2);
++
++    tier = sTierTable[level][Random() % 16];
++    entry = 2 * tier + (Random() & 1) + (lowHP ? 10 : 0);
++    kind = sRewardList[entry];
++    if (CollectBug())
++        kind = (Random() & 1) ? R_MONEY_S : R_MONEY_M;   // BN6 bug row 6: money only, level ignored (asm/asm29.s:10815)
++    if ((kind == R_CHIP1 || kind == R_CHIP2 || kind == R_CHIP2_RARE) && m1 == MOVE_NONE)
++        kind = R_MONEY_L;
++
++    switch (kind)
++    {
++    case R_MONEY_S:
++    case R_MONEY_M:
++    case R_MONEY_L:
++    {
++        u32 money = lvl * (kind == R_MONEY_S ? 4 : kind == R_MONEY_M ? 8 : 12);   // TUNE
++        if (AmuletCoin())
++            money *= 2;
++        AddMoney(&gSaveBlock1Ptr->money, money);
++        snprintf(msg, size, "GOT $%u!", (unsigned)money);
++        break;
++    }
++    case R_HP_S:
++    case R_HP_M:
++    {
++        u16 heal = kind == R_HP_S ? 20 : 50;     // BN6 HP entries (asm/asm03_0.s:12082-12105); TUNE amounts
++        u16 nhp = hp + heal > maxHP ? maxHP : hp + heal;
++        u32 v = nhp;
++        if (hp)
++            SetMonData(mine, MON_DATA_HP, &v);
++        snprintf(msg, size, "RECOVERED %u HP!", (unsigned)(nhp - hp));
++        break;
++    }
++    case R_CHIP1:
++        GiveChip(m1, RandomLane(m1, FALSE), msg, size);
++        break;
++    case R_CHIP2:
++        GiveChip(m2, RandomLane(m2, FALSE), msg, size);
++        break;
++    default:
++        GiveChip(m2, RandomLane(m2, TRUE), msg, size);
++        break;
++    }
++    PKBN_LOG("busting reward: L%u tier %u entry %u%s -> %s", level, tier, entry, lowHP ? " (low HP)" : "", msg);
++}
++
++// EXP scaled by the Busting Level (design 09 §3.4, decided on): S x1.2, <=3 x0.9. TUNE.
++void Busting_ScaleExp(u8 level)
++{
++    s32 i;
++    for (i = 0; i < PKBN_PARTY_MAX; i++)
++    {
++        if (level >= 11)
++            sB.pendingExp[i] = sB.pendingExp[i] * 6 / 5;
++        else if (level <= 3)
++            sB.pendingExp[i] = sB.pendingExp[i] * 9 / 10;
++    }
++}
++
++// ---- Capture Grade (design 10 §1) ---------------------------------------------------------------------------------
++
++u8 Capture_Grade(void)
++{
++    struct Fighter *e = &sB.f[SIDE_ENEMY];
++    u32 pct = e->bm.maxHP ? e->bm.hp * 100 / e->bm.maxHP : 100;
++    s32 hpPts = pct <= 10 ? 4 : pct <= 25 ? 3 : pct <= 50 ? 2 : 0;
++    u32 st = e->bm.status1;
++    s32 stPts = (st & (STATUS1_SLEEP | STATUS1_FREEZE)) ? 3
++              : (st & (STATUS1_PARALYSIS | STATUS1_POISON | STATUS1_TOXIC_POISON | STATUS1_BURN)) ? 2 : 0;
++    s32 balls = sB.bust.balls, ballPts = balls <= 1 ? 3 : balls == 2 ? 2 : balls == 3 ? 1 : 0;
++    s32 crit = (balls <= 1 && pct >= 50) ? 2 : 0;
++    s32 h = HitPoints();
++    u8 g = Clamp(hpPts + stPts + ballPts + crit + h);
++    PKBN_LOG("capture grade: %u (hp %u%% -> %d, status %d, balls %d -> %d, critical %d, hits %d)", g, (unsigned)pct,
++             (int)hpPts, (int)stPts, (int)balls, (int)ballPts, (int)crit, (int)h);
++    return g;
++}
++
++// The ball decides how the chip's code is picked (design 10 §10.2).
++static u8 BallLane(u16 ball, u16 move, u8 *copies)
++{
++    u8 themed = 0xFF;
++    *copies = 1;
++    switch (ball)
++    {
++    case ITEM_POKE_BALL:   return gPkbnMoveInfo[move].lanes[0];
++    case ITEM_ULTRA_BALL:
++    case ITEM_MASTER_BALL: return ChosenLane(move);
++    case ITEM_NET_BALL:    themed = 'B' - 'A'; break;
++    case ITEM_DIVE_BALL:   themed = 'R' - 'A'; break;
++    case ITEM_NEST_BALL:   themed = 'G' - 'A'; break;
++    case ITEM_TIMER_BALL:  themed = 'T' - 'A'; break;
++    case ITEM_LUXURY_BALL: themed = 'Y' - 'A'; break;
++    case ITEM_PREMIER_BALL: themed = LETTER_WILD; break;
++    case ITEM_REPEAT_BALL:
++    {
++        u8 l, best = 0xFF, n = 0;
++        for (l = 0; l < PACK_LETTERS; l++)
++            if (PkbnPack_Get(move, l) > n)
++                n = PkbnPack_Get(move, l), best = l;
++        if (best != 0xFF)
++            return best;
++        break;
++    }
++    case ITEM_SAFARI_BALL: *copies = 2; break;
++    }
++    if (themed != 0xFF && HasLane(move, themed))
++        return themed;
++    return RandomLane(move, FALSE);   // Great Ball, and themed balls without their lane (decision 2026-10-05)
++}
++
++void Capture_Reward(u8 grade, char *msg, u32 size)
++{
++    struct Pokemon *mon = &gEnemyParty[sB.enemySlot];
++    u16 ball = sB.ballItem, m1, m2;
++    u8 tier = sTierTable[grade][Random() % 16], copies, i;
++    PickMoves(mon, &m1, &m2);
++    msg[0] = '\0';
++    if (ball == ITEM_MASTER_BALL)
++    {
++        // Master Ball: 1 copy of every move it knew (Khaled, 2026-10-05)
++        u8 n = 0;
++        for (i = 0; i < MAX_MON_MOVES; i++)
++        {
++            u16 mv = GetMonData(mon, MON_DATA_MOVE1 + i);
++            if (PkbnFolder_MoveIsChip(mv))
++                PkbnPack_Add(mv, ChosenLane(mv), 1), n++;
++        }
++        snprintf(msg, size, n == 1 ? "MASTER BALL: GOT A CHIP OF ITS MOVE!" : "MASTER BALL: GOT %u CHIPS OF ITS MOVES!", n);
++    }
++    else if (tier >= 3 && m1 != MOVE_NONE)
++    {
++        u16 mv = tier == 4 ? m2 : m1;
++        u8 lane = BallLane(ball, mv, &copies);
++        char nm[24];
++        PkbnPack_Add(mv, lane, copies);
++        ChipName(nm, sizeof(nm), mv, lane);
++        if (copies > 1)
++            snprintf(msg, size, "GOT %u CHIPS: %s!", copies, nm);
++        else
++            snprintf(msg, size, "GOT A CHIP: %s!", nm);
++    }
++    else
++    {
++        // lower grades: extra candy of its first type (tier + 1)
++        u8 type = gSpeciesInfo[GetMonData(mon, MON_DATA_SPECIES)].types[0];
++        char t[16];
++        PkbnCandy_Add(type, tier + 1);
++        Pkbn_GameStringToAscii(t, gTypeNames[type], sizeof(t));
++        snprintf(msg, size, "GOT %u MORE %s CANDY!", tier + 1, t);
++    }
++    if (grade >= 11) // design 10 §10.1: S grade +2 candy of each of its types
++    {
++        const struct SpeciesInfo *si = &gSpeciesInfo[GetMonData(mon, MON_DATA_SPECIES)];
++        PkbnCandy_Add(si->types[0], 2);
++        if (si->types[1] != si->types[0])
++            PkbnCandy_Add(si->types[1], 2);
++    }
++    PKBN_LOG("capture reward: grade %u tier %u ball %u -> %s", grade, tier, ball, msg);
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 19baa08..35a7987 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -460,6 +460,7 @@ static void Begin(void)
+     s32 lead = -1;
+ 
+     memset(&sB, 0, sizeof(sB));
++    Busting_Reset();
+ 
+     PkbnContract_Enter();
+     // Same resource setup as CB2_InitBattle (battle_main.c:588-592) so Emerald's damage
+@@ -730,6 +731,7 @@ static void UpdateCustom(void)
+             s32 i;
+             RemoveBagItem(sB.ballItem, 1);
+             sB.throwShakes = Catch_Throw(sB.ballItem);
++            Busting_NoteThrow();
+             PKBN_LOG("threw ball %u: %u shakes%s", sB.ballItem, sB.throwShakes > 3 ? 3 : sB.throwShakes,
+                      sB.throwShakes == 4 ? " - CAUGHT" : "");
+             for (i = 0; i < HAND_MAX; i++)
+@@ -798,7 +800,14 @@ static void UpdateCustom(void)
+         for (i = 0; i < HAND_MAX; i++)
+             sB.picked[i] = FALSE;
+         sB.wildPicked = FALSE;
+-        FormProgramAdvances();
++        {
++            u8 chips = 0, q;
++            for (q = 0; q < sB.queueCount; q++)
++                if (sB.queue[q] != FOLDER_QUEUE_WILD)
++                    chips++;
++            FormProgramAdvances();
++            Busting_NoteChain(chips, sB.paCount > 0);
++        }
+         sB.paPreview[0] = '\0';
+         sB.f[SIDE_PLAYER].recharge = FALSE; // recharged
+         sB.gauge = 0;
+@@ -1013,6 +1022,7 @@ static void UpdatePlayer(void)
+         if ((dx || dy) && Field_CanStand(SIDE_PLAYER, p->x + dx, p->y + dy))
+         {
+             Field_Step(SIDE_PLAYER, p->x + dx, p->y + dy);
++            Busting_NoteStep();
+             // Gen 3 paralysis quarters Speed -> four times slower steps
+             p->moveCd = (p->bm.status1 & STATUS1_PARALYSIS) ? MOVE_COOLDOWN * 4 : MOVE_COOLDOWN;
+         }
+@@ -1357,6 +1367,7 @@ static void CheckFaints(void)
+         for (i = 0; i < PKBN_PARTY_MAX; i++)
+             others += alive[i];
+         PKBN_LOG("%s fainted (%d others can fight)", sB.f[SIDE_PLAYER].name, (int)others);
++        Busting_NoteFaint();
+         if (others > 0)
+         {
+             SetMsg("CHOOSE THE NEXT POKEMON", 60);
+@@ -1394,6 +1405,7 @@ static void UpdateFight(void)
+     }
+     if (sB.busterCd)
+         sB.busterCd--;
++    Busting_OnFightFrame();
+     Tick(&sB.f[SIDE_PLAYER]);
+     Tick(&sB.f[SIDE_ENEMY]);
+     for (r = 0; r < GRID_ROWS; r++)
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index 21a5bb4..327ce7d 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -115,6 +115,8 @@ void Field_PushBack(u8 side, u8 panels)
+     }
+     if (f->navi.flags & NCPF_SUPER_ARMOR)
+         return;   // SuprArmr program: no knock-back
++    if (side == SIDE_PLAYER)
++        Busting_NotePush();   // BN6 counts the push state among the busting "hits" (asm/asm00_2.s:18735)
+     while (panels-- && Field_CanStand(side, f->x + back, f->y))
+         Field_Step(side, f->x + back, f->y);
+ }
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index aea286d..5a6b5c3 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -794,6 +794,15 @@ static void ApplyHit(struct Attack *a, bool8 last)
+         PKBN_LOG("move %u: no effect on %s", a->move, def->name);
+         return;
+     }
++    // Counter hit (Busting Level, design 09 §2 row 5; BN6 sub_801A45C, asm/asm00_2.s:22012): the player hits the
++    // enemy while it is still busy with its own attack or charging one. Once per enemy attack.
++    if (a->side == SIDE_PLAYER && (def->lockout || def->charging) && sB.frame >= sB.counterReady)
++    {
++        sB.counterReady = sB.frame + CHIP_LOCKOUT + 1;
++        Busting_NoteCounter();
++        SetMsg("COUNTER HIT!", 50);
++        PKBN_LOG("counter hit on %s", def->name);
++    }
+     // Gust / Twister x2 on a flyer, Earthquake / Magnitude x2 on a digger, Surf / Whirlpool on a diver (Gen 3)
+     if (def->invuln && CanHitInvulnerable(a->move, def->invulnKind))
+         dmg *= 2;
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index 7f0bf16..c94fd40 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -39,6 +39,7 @@
+ #include "pkbn/battle_stub.h"
+ #include "pkbn/render.h"
+ #include "pkbn/chip_pack.h"
++#include "pkbn/grid_battle.h"
+ 
+ #ifdef PORTABLE
+ 
+@@ -59,6 +60,10 @@ enum
+     PB_EVO_NEXT,
+     PB_EXIT,
+     PB_CANDY,         // type candy from a catch (POC-10, design 10 §10.1)
++    PB_BUSTING,       // Busting Level + reward (POC-10b, design 09)
++    PB_CAPTURE,       // Capture Grade + reward (POC-10b, design 10 §1)
++    PB_CLEAR_GRADE_EXP,
++    PB_CLEAR_GRADE_NICK,
+ };
+ 
+ struct PostBattle
+@@ -76,8 +81,12 @@ struct PostBattle
+     u8 nick[POKEMON_NAME_LENGTH + 1];
+     bool8 autopilot;
+     char candyMsg[64];
++    char bigGrade[4];        // shown big while the Busting Level / Capture Grade text is up
++    bool8 bigCapture;
+ };
+ 
++void (*gPkbnPostBattleDump)(u16 *fb); // self-tests: frame dumps of this screen
++
+ static struct PostBattle sPB;
+ 
+ static void CB2_PkbnPostBattle(void);
+@@ -186,6 +195,14 @@ static void Overlay(u16 *fb)
+             Pkbn_DrawText(fb, (DISPLAY_WIDTH - Pkbn_TextWidth(line, 1)) / 2, 66, line, COL_TEXT, 1);
+         }
+     }
++    if (sPB.bigGrade[0] && (sPB.step == PB_TEXT || sPB.step == PB_BUSTING || sPB.step == PB_CAPTURE))
++    {
++        // BN6-style result: the level in big type above the text box
++        const char *label = sPB.bigCapture ? "CAPTURE GRADE" : "BUSTING LEVEL";
++        Pkbn_DrawText(fb, (DISPLAY_WIDTH - Pkbn_TextWidth(label, 1)) / 2, 18, label, COL_HINT, 1);
++        Pkbn_DrawText(fb, (DISPLAY_WIDTH - Pkbn_TextWidth(sPB.bigGrade, 4)) / 2, 34, sPB.bigGrade,
++                      sPB.bigGrade[0] == 'S' ? COL_HINT : COL_TEXT, 4);
++    }
+     Pkbn_FillRect(fb, 4, 100, 232, 52, COL_BOX);
+     Pkbn_FrameRect(fb, 4, 100, 232, 52, COL_EDGE);
+     for (i = 0; i < sPB.lineCount; i++)
+@@ -194,6 +211,8 @@ static void Overlay(u16 *fb)
+         Pkbn_DrawText(fb, 150, 143, "A:YES  B:NO", COL_HINT, 1);
+     else if ((gMain.vblankCounter1 / 16) & 1)
+         Pkbn_DrawText(fb, 226, 143, ">", COL_HINT, 1);
++    if (gPkbnPostBattleDump != NULL)
++        gPkbnPostBattleDump(fb);
+ }
+ 
+ static void ShowOverlay(void)
+@@ -288,7 +307,7 @@ static void StepStart(void)
+             Say(PB_START, "%s PICKED UP $%u!", player, (unsigned)m);
+             return;
+         }
+-        sPB.step = PB_EXP_NEXT;
++        sPB.step = PB_BUSTING;
+         return;
+     case B_OUTCOME_LOST:
+     {
+@@ -508,8 +527,45 @@ static void CB2_PkbnPostBattle(void)
+             sPB.step = sPB.next;
+         break;
+     case PB_CANDY:
+-        Say(PB_NICK_ASK, "%s", sPB.candyMsg);
++        Say(PB_CAPTURE, "%s", sPB.candyMsg);
++        break;
++    case PB_CLEAR_GRADE_EXP:
++    case PB_CLEAR_GRADE_NICK:
++        sPB.bigGrade[0] = '\0';
++        sPB.step = sPB.step == PB_CLEAR_GRADE_EXP ? PB_EXP_NEXT : PB_NICK_ASK;
+         break;
++    case PB_BUSTING:
++    case PB_CAPTURE:
++    {
++        static u8 sPart;
++        static char sMsg[64];
++        bool8 capture = sPB.step == PB_CAPTURE;
++        if (sPart == 0)
++        {
++            u8 level = capture ? Capture_Grade() : Busting_Level();
++            char lv[4];
++            if (capture)
++                Capture_Reward(level, sMsg, sizeof(sMsg));
++            else
++            {
++                Busting_ScaleExp(level);
++                Busting_Reward(level, sMsg, sizeof(sMsg));
++            }
++            if (level >= 11)
++                snprintf(lv, sizeof(lv), "S");
++            else
++                snprintf(lv, sizeof(lv), "%u", level);
++            sPart = 1;
++            snprintf(sPB.bigGrade, sizeof(sPB.bigGrade), "%s", lv);
++            sPB.bigCapture = capture;
++            Say(sPB.step, capture ? "CAPTURE GRADE %s!" : "BUSTING LEVEL %s!", lv);
++            break;
++        }
++        sPart = 0;
++        Say(capture ? PB_NICK_ASK : PB_EXP_NEXT, "%s", sMsg);
++        sPB.next = capture ? PB_CLEAR_GRADE_NICK : PB_CLEAR_GRADE_EXP;
++        break;
++    }
+     case PB_NICK_ASK:
+         if (!sPB.prompt)
+         {
+diff --git a/src/pkbn/render.c b/src/pkbn/render.c
+index 5270d8d..bc03f62 100644
+--- a/src/pkbn/render.c
++++ b/src/pkbn/render.c
+@@ -53,7 +53,7 @@ static const u8 sGlyphs[][6] = {
+     {'9', 7,5,7,1,6}, {'-', 0,0,7,0,0}, {'.', 0,0,0,0,2}, {':', 0,2,0,2,0}, {'/', 1,1,2,4,4},
+     {'!', 2,2,2,0,2}, {'?', 6,1,2,0,2}, {'\'',2,2,0,0,0}, {'(', 1,2,2,2,1}, {')', 4,2,2,2,4},
+     {'+', 0,2,7,2,0}, {'>', 4,2,1,2,4}, {'<', 1,2,4,2,1}, {',', 0,0,0,2,4}, {'=', 0,7,0,7,0},
+-    {'$', 3,6,2,3,6}, {'&', 2,5,2,5,3},
++    {'$', 3,6,2,3,6}, {'&', 2,5,2,5,3}, {'*', 0,5,2,5,0},
+ };
+ 
+ static const u8 *FindGlyph(char c)
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index e3d750b..bf5c53c 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -331,6 +331,14 @@ static void CB2_SelfTestEditorDone(void)
+     SetMainCallback2(CB2_SelfTestBattle);
+ }
+ 
++static u32 sPostFrame;
++static void PostBattleDump(u16 *fb)
++{
++    if (sDumpDir != NULL && sPostFrame % sDumpEvery == 0)
++        DumpFrame(fb, 80000 + sPostFrame);
++    sPostFrame++;
++}
++
+ static u32 sEditorFrame;
+ static void WrappedEditorOverlay(u16 *fb)
+ {
+@@ -345,6 +353,8 @@ void Pkbn_SelfTestMaybeStart(void)
+     if (getenv("PKBN_SELFTEST") == NULL)
+         return;
+     sDumpDir = getenv("PKBN_DUMP_DIR");
++    if (sDumpDir != NULL)
++        gPkbnPostBattleDump = PostBattleDump;
+     if (getenv("PKBN_DUMP_EVERY") != NULL)
+         sDumpEvery = (u32)atoi(getenv("PKBN_DUMP_EVERY")) ? (u32)atoi(getenv("PKBN_DUMP_EVERY")) : 30;
+     SetSaveBlocksPointers(0);
+-- 
+2.43.0
+
