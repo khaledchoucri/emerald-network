@@ -89,10 +89,10 @@ The shape follows BN6's own lists: money at low tiers, the virus's chip at tiers
 - **The collect bug:** today it halves prize money (POC-9). It becomes BN6's bug row 6: the reward is forced to money and the level is ignored (asm/asm29.s:10815-10831, asm/asm37_0.s:2819-2844).
 - **AmuletCn** already doubles prize money. It now doubles busting money too.
 
-### 3.4 Optional: Busting Level scales EXP
+### 3.4 Busting Level scales EXP (decided: on)
 
-- **Off by default** (TUNE): S = ×1.2, ≤3 = ×0.9, applied in `post_battle.c` before EXP is shared.
-- It's a separate switch because it changes level curves, which affects every balance test so far.
+- **On** (TUNE values): S = ×1.2, ≤3 = ×0.9, applied in `post_battle.c` before EXP is shared.
+- It changes level curves, so the balance self-tests are rerun when it lands.
 
 ## 4. Screen
 
@@ -118,8 +118,11 @@ Then the line in the log: `[pkbn] busting L11 tier4 entry9 -> chip EMBER O`.
    - the log line above for every battle;
    - a regression to check that levels match hand-computed scores for the x/k/t suites.
 
-## 6. Questions
+## 6. Decisions (2026-10-05) and questions
 
-1. Time in turns (proposed) or in seconds like BN6?
-2. "No Pokémon fainted" as the +1, or something else (for example, no Switch used)?
-3. EXP scaling: off (proposed) or on?
+- **EXP scaling: on.** S = ×1.2, ≤3 = ×0.9 to start (TUNE).
+- **Time: build both and compare.**
+  - `PKBN_BUST_CLOCK=turns|seconds` picks which one scores.
+  - Seconds uses BN6's own thresholds (5/12/36 s wild, 30/40/50 s trainer), timer stopped during the Custom screen.
+  - The log line prints both scores, so play sessions show how the two differ.
+- **Still open:** "No Pokémon fainted" as the +1, or something else (for example, no Switch used)?

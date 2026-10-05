@@ -246,3 +246,48 @@ Self-tests:
 2. MB factor 0.3 (166 moves get 5 copies) or 0.25 (more moves get 5)?
 3. Drop rule: first lane at half weight, or uniform?
 4. Mart price of 60 × MB?
+
+---
+
+## 9. Open (2026-10-05): do we drop the 4-move limit?
+
+You asked whether respecting Emerald's 4-move menus costs too much. Battles are ours now, so the only reasons to
+keep 4 moves are the **other** systems that read them. In the pinned host, 31 files read `MON_DATA_MOVE1..4` (or
+PP1..4). Examples:
+- contests (`src/contest.c:2812`)
+- the day care's egg moves (`src/daycare.c:654`)
+- field moves / HMs (`src/party_menu.c`, `sFieldMoves`)
+- the summary screen (`src/pokemon_summary_screen.c:1426`)
+- trades, the Frontier, vanilla battles, the Move Relearner and evolution
+
+**Option P: "move pool + 4-slot cache"** (proposal).
+- **The pool.** A Pokémon keeps every move it ever learned: level-up, TM, tutor, egg move. Nothing is ever forgotten.
+  - The pool lives in `pkbn.sav` under the Navi ID we already have: a 355-bit set = 45 bytes per Pokémon, 27 KB for
+    600 Pokémon.
+  - Each pooled move is a base chip (§2.1). The **folder of 30** becomes the only real limit, as in BN.
+- **The cache.** `BoxPokemon.moves[4]` stays, but as a *cache*. When the folder is saved, each Pokémon's 4 slots are
+  rewritten to its 4 moves with the most folder copies. Ties go by MB.
+  - Every vanilla system above keeps working unchanged: contests, day care, trades, the Frontier.
+  - **Exception: HM checks** read the pool, so Surf never "falls out" of the cache.
+- **Level-up** no longer asks "forget which move?". The move joins the pool, with a "new chip!" message.
+  - That screen (`GetMoveSlotToReplace`, POC-7) goes, and so do the Move Deleter and Relearner (the Relearner
+    becomes pointless).
+- **Summary → Moves page** becomes the Pokémon's **chip list**: every pooled move, its folder copies and codes, MB,
+  power and kind. It's display only. Editing happens in FOLDER.
+
+**What we give up:**
+- The "4 moves" identity of a Pokémon. Its identity becomes "what it brings to the folder".
+- Per-move PP outside the cache. Either:
+  - (a) PP is stored per pooled move in `pkbn.sav` (1 byte each), or
+  - (b) we drop PP as stamina and let **copies be the stamina**: BN6's rule, where a used chip is gone for the rest
+    of the battle, with the reshuffle only for folders under ~15 chips.
+
+  (b) is the cleaner BN answer, and §3.3 shows copies already behave like stamina.
+
+**What we gain:**
+- A Pokémon's whole learnset is usable, and the folder becomes BN's central decision.
+- Copies and codes matter more, because there are more moves to fill 30 slots with.
+
+**Questions:**
+- P with PP option (a) or (b)?
+- Should the 30-chip folder also cap chips per Pokémon? Without one, a single Pokémon could fill it. TUNE, e.g. 12.
