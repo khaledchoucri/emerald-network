@@ -30,3 +30,25 @@ run wild_pack 0:16:10:10 "W200,J,G288:4,W60,P,W200,P,W400,M2500,W60,P,W10,Q" "do
 run tm_script 0:10:10:10 "W200,T323,W60,Q" "chip grant: TM/HM item 323"
 # the Move Relearner (Heart Scale) gives a chip in a new code (Wingull relearns Supersonic)
 OWPARTY="309:8:45/55|281:20:52/24/64/116" run relearner 5:7:4:5 "W200,U,W20,A,M2500,W10,Q" "chip grant: relearned" PKBN_OWTEST_ITEMS=111:1
+# releasing a Pokémon from the PC gives type candy (Oldale Pokémon Center PC, Withdraw, Release, Yes)
+run release_candy 2:2:10:2 "W200,U,W20,A,Y,A,Y,A,W30,Y,A,Y,A,Y,A,W60,A,W300,D,W30,D,W30,D,W30,A,W90,U,W30,A,W200,P,W10,Q" \
+    "candy grant: released species 288" PKBN_OWTEST_BOX=288:35
+# a hatching egg brings its egg moves as chips (Mudkip egg knowing Stomp and Curse, one step in Oldale)
+OWPARTY="281:20:52/24/64/116|e283:1:33/45/23/174" run egg_moves 0:10:10:10 "W200,H16R,W60,Y,A,W600,Y,A,W200,P,W10,Q" \
+    "chip grant: egg move 23"
+
+# Battle self-tests for catch bonuses (no map needed)
+bt() {   # name spec expect [extra env...]
+  local name=$1 spec=$2 expect=$3; shift 3
+  rm -rf "$OUT/$name"; mkdir -p "$OUT/$name"
+  env "$@" PKBN_SELFTEST="$spec" SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy timeout 300 ./pokeemerald64 > "$OUT/$name/log.txt" 2>&1
+  if grep -aq "$expect" "$OUT/$name/log.txt"; then echo "PASS $name"; else echo "FAIL $name (no '$expect')"; fi
+  rm -f pkbn.sav
+}
+# a 10th species caught gives a PP Up, a 50th a PP Max; a shiny gives * copies of its moves
+bt milestone_10 "283:14:33/45,288:5:33/45" "10 SPECIES CAUGHT! GOT A PP UP" PKBN_TEST_DEX_CAUGHT=9 PKBN_TEST_BALLS=4:5 PKBN_TEST_THROW=5
+bt milestone_50 "283:14:33/45,288:5:33/45" "50 SPECIES CAUGHT! GOT A PP MAX" PKBN_TEST_DEX_CAUGHT=49 PKBN_TEST_BALLS=4:5 PKBN_TEST_THROW=5
+bt shiny_catch "283:14:33/45,288:5:33/45" "IT'S SHINY! GOT 2 \* CHIPS" PKBN_TEST_SHINY=1 PKBN_TEST_BALLS=4:5 PKBN_TEST_THROW=5
+# the folder used up with nothing usable in hand -> a Struggle chip (status-only 18-chip folder vs Wailmer)
+bt struggle "283:14:45/193/300/182,313:20:150" "folder used up: STRUGGLE chip" PKBN_TEST_PACK_LEARNED=1 \
+    PKBN_TEST_PACK="45:A:5,193:A:5,300:A:5,182:A:5,156:A:5,104:A:5"

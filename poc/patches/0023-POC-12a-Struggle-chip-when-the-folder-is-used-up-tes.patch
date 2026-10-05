@@ -1,0 +1,312 @@
+From 438ef9c981c7e6b47b730b6dfa1dfa9328459893 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Mon, 5 Oct 2026 21:39:49 +0300
+Subject: [PATCH 23/24] POC-12a: Struggle chip when the folder is used up;
+ tests for release candy, egg moves, milestones, shiny
+
+Gen 3 Struggle (battle_util.c:99-105) as an unlimited * chip when the draw pile is
+empty and nothing in hand works. Owtests: player name, box Pokemon, eggs that hatch
+next step, Y (wait for text). Selftests: PKBN_TEST_SHINY, PKBN_TEST_DEX_CAUGHT.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/folder.h        |  5 ++-
+ include/pkbn/grid_internal.h |  1 +
+ src/pkbn/folder.c            |  4 +++
+ src/pkbn/grid_battle.c       | 25 ++++++++++++++
+ src/pkbn/grid_draw.c         |  2 ++
+ src/pkbn/owtest.c            | 65 +++++++++++++++++++++++++++++++++---
+ src/pkbn/selftest.c          | 30 +++++++++++++++++
+ 7 files changed, 127 insertions(+), 5 deletions(-)
+
+diff --git a/include/pkbn/folder.h b/include/pkbn/folder.h
+index 98737ba..33442da 100644
+--- a/include/pkbn/folder.h
++++ b/include/pkbn/folder.h
+@@ -27,6 +27,9 @@
+ #define HAND_MAX 8    // with Custom programs (BN6 caps the Custom level at 8)
+ #define PKBN_PARTY_MAX 6
+ #define LETTER_WILD 26
++// POC-12: when the folder is used up and nothing in the hand works, the hand gets Struggle - Gen 3's move for a
++// Pokémon with no PP left (battle_util.c:99-105, noValidMoves -> MOVE_STRUGGLE). It sits outside the folder count.
++#define FOLDER_STRUGGLE FOLDER_MAX
+ 
+ struct FolderChip
+ {
+@@ -38,7 +41,7 @@ struct FolderChip
+ 
+ struct Folder
+ {
+-    struct FolderChip chips[FOLDER_MAX];
++    struct FolderChip chips[FOLDER_MAX + 1];   // + FOLDER_STRUGGLE
+     u8 count;
+     u8 pile[FOLDER_MAX];
+     u8 pileCount;
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 380cd7d..42975a0 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -192,6 +192,7 @@ struct GridBattle
+     u8 partyCount;
+     u8 active;
+     bool8 folderEmptyLogged;
++    bool8 struggleLogged;
+     struct PkbnBustStats bust;
+     u32 counterReady;           // next frame a counter hit can count  // Busting Level / Capture Grade counters (POC-10b)
+     struct Folder folder;
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index 4839132..a36dbc8 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -60,6 +60,8 @@ bool8 Chip_CanUse(const struct BattlePokemon *bm, u16 move)
+     s32 i;
+     if (bm->species == SPECIES_NONE)
+         return FALSE;
++    if (move == MOVE_STRUGGLE)
++        return TRUE;   // any Pokémon can Struggle
+     for (i = 0; i < MAX_MON_MOVES; i++)
+         if (bm->moves[i] == move)
+             return TRUE;
+@@ -340,6 +342,8 @@ void PkbnFolder_OrderPile(struct Folder *folder)
+ 
+ void PkbnFolder_Discard(struct Folder *folder, u8 idx)
+ {
++    if (idx == FOLDER_STRUGGLE)
++        return;   // never runs out (Gen 3 Struggle spends no PP: HITMARKER_NO_PPDEDUCT)
+     if (folder->discardCount < FOLDER_MAX)
+         folder->discard[folder->discardCount++] = idx;
+ }
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 7e0c066..39a963b 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -508,6 +508,31 @@ static void RefillHand(void)
+         }
+         sB.hand[sB.handCount++] = idx;
+     }
++    // POC-12: the folder is used up and nothing left in the hand works for whoever is in -> Struggle.
++    if (sB.folder.pileCount == 0 && !(sB.folder.discardCount && sB.folder.count < FOLDER_RESHUFFLE_BELOW)
++     && sB.handCount < HAND_MAX)
++    {
++        bool8 usable = FALSE;
++        SyncActiveToParty();
++        for (i = 0; i < sB.handCount; i++)
++        {
++            const struct FolderChip *c = &sB.folder.chips[sB.hand[i]];
++            if (c->owner != CHIP_SHARED ? PartyAlive(c->owner) : Chip_CanUse(&sB.f[SIDE_PLAYER].bm, c->move))
++                usable = TRUE;
++        }
++        if (!usable)
++        {
++            struct FolderChip *st = &sB.folder.chips[FOLDER_STRUGGLE];
++            st->move = MOVE_STRUGGLE;
++            st->letter = LETTER_WILD;
++            st->owner = CHIP_SHARED;
++            st->slot = 0;
++            sB.hand[sB.handCount++] = FOLDER_STRUGGLE;
++            if (!sB.struggleLogged)
++                PKBN_LOG("folder used up: STRUGGLE chip");
++            sB.struggleLogged = TRUE;
++        }
++    }
+     for (i = 0; i < HAND_MAX; i++)
+         sB.picked[i] = FALSE;
+     sB.wildPicked = FALSE;
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 122c0bf..cf5b4e7 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -932,6 +932,8 @@ static void DrawChipInfo(u16 *fb)
+         }
+         if (ch->owner != CHIP_SHARED)
+             snprintf(line, sizeof(line), "PARTNER V%u", ch->slot);
++        else if (sB.hand[cur] == FOLDER_STRUGGLE)
++            snprintf(line, sizeof(line), "FOLDER USED UP - NO LIMIT");
+         else
+             snprintf(line, sizeof(line), "%s  x%u LEFT", gPkbnKindNames[gPkbnMoveInfo[ch->move].kind], CopiesLeft(ch->move));
+         Text(fb, ART_X, y + 13, line, RGB(22, 26, 31));
+diff --git a/src/pkbn/owtest.c b/src/pkbn/owtest.c
+index d4b41ae..5d463fa 100644
+--- a/src/pkbn/owtest.c
++++ b/src/pkbn/owtest.c
+@@ -3,13 +3,16 @@
+ // grass, story flags) without a save file or a person at the keyboard.
+ //
+ //   PKBN_OWTEST="group:num:x:y"        map (MAP_GROUP/MAP_NUM from include/constants/map_groups.h) and position
+-//   PKBN_OWTEST_PARTY="sp:lv[:m/m/m/m]|..."   numeric species / moves (tools: /tmp/ids.py style)
++//   PKBN_OWTEST_PARTY="sp:lv[:m/m/m/m]|..."   numeric species / moves (tools: /tmp/ids.py style); "e283:1:..." = an
++//                                      egg that hatches on the next step
+ //   PKBN_OWTEST_FLAGS="flag,flag,..."  extra flags to set (numbers)
+ //   PKBN_OWTEST_ITEMS="item:n,..."     bag items;  PKBN_OWTEST_MONEY=n
++//   PKBN_OWTEST_BOX="sp:lv,..."        Pokémon in box 1
+ //   PKBN_OWKEYS="W60,S,D,A,P,B,Q"      the script: Wn waits n frames; U D L R A B S(tart) E(select) < > press a key
+ //                                      (held 4 frames, then 6 frames released); Hn+key holds it n frames (H40R
+ //                                      walks right); Mn taps A for n frames; P dumps a frame now; Q quits.
+ //                                      Titem runs "additem item, 1" as a script.
++//                                      Y waits until the message box has finished printing (text speed varies).
+ //                                      Gsp:lv starts a wild battle (species / level numbers) as if met in grass.
+ //                                      J before G lets that battle bring a pack from the map's own grass table
+ //                                      (PKBN_TEST_PACK_EXTRA=n forces n extra Pokémon).
+@@ -33,13 +36,17 @@
+ #include "script.h"
+ #include "script_pokemon_util.h"
+ #include "constants/items.h"
++#include "text.h"
++#include "pokemon_storage_system.h"
++#include "daycare.h"
+ 
+ #ifdef PORTABLE
+ 
+ static const char *sScript;
+ static u32 sWait, sHold, sFrame, sMash;
+ static u16 sKey;
+-static bool8 sActive, sDumpNext;
++static bool8 sActive, sDumpNext, sUntilIdle;
++static u32 sIdle, sHoldBudget;
+ 
+ bool8 PkbnOwTest_Active(void)
+ {
+@@ -83,6 +90,14 @@ u16 PkbnOwTest_Keys(void)
+         sWait--;
+         return 0;
+     }
++    if (sUntilIdle)
++    {
++        // Y: wait until the message window (text printer 0) has finished printing for 20 frames (max 600)
++        sIdle = IsTextPrinterActive(0) ? 0 : sIdle + 1;
++        if (sIdle < 20 && ++sHoldBudget < 600)
++            return 0;
++        sUntilIdle = FALSE;
++    }
+     while (sScript && *sScript)
+     {
+         char c = *sScript++;
+@@ -133,6 +148,13 @@ u16 PkbnOwTest_Keys(void)
+             sMash = strtoul(sScript, (char **)&sScript, 10);
+             return 0;
+         }
++        if (c == 'Y')
++        {
++            sUntilIdle = TRUE;
++            sIdle = 0;
++            sHoldBudget = 0;
++            return 0;
++        }
+         if (c == 'P')
+         {
+             sDumpNext = TRUE;
+@@ -185,11 +207,25 @@ static void GiveParty(const char *spec)
+     s32 slot = 0;
+     while (spec && *spec && slot < PARTY_SIZE)
+     {
+-        u16 sp = (u16)strtol(spec, (char **)&spec, 10);
++        bool8 egg = (*spec == 'e');
++        u16 sp;
+         u8 lv = 5;
++        if (egg)
++            spec++;
++        sp = (u16)strtol(spec, (char **)&spec, 10);
+         if (*spec == ':')
+             lv = (u8)strtol(spec + 1, (char **)&spec, 10);
+-        CreateMon(&gPlayerParty[slot], sp, lv, 32, FALSE, 0, OT_ID_PLAYER_ID, 0);
++        if (egg)
++        {
++            // "e<species>:lv[:moves]": an egg about to hatch (0 egg cycles, the step counter one step short of
++            // TryProduceOrHatchEgg's 255, src/daycare.c:898)
++            u8 zero = 0;
++            CreateEgg(&gPlayerParty[slot], sp, FALSE);
++            SetMonData(&gPlayerParty[slot], MON_DATA_FRIENDSHIP, &zero);
++            gSaveBlock1Ptr->daycare.stepCounter = 254;
++        }
++        else
++            CreateMon(&gPlayerParty[slot], sp, lv, 32, FALSE, 0, OT_ID_PLAYER_ID, 0);
+         if (*spec == ':')
+         {
+             s32 m = 0;
+@@ -217,6 +253,12 @@ static void CB2_OwTestStart(void)
+     s32 group = 0, num = 0, x = -1, y = -1;
+     sscanf(getenv("PKBN_OWTEST"), "%d:%d:%d:%d", &group, &num, &x, &y);
+     NewGameInitData();
++    {
++        // a player name ("ASH" in the game charset: A=0xBB, S=0xCD, H=0xC2, EOS=0xFF) so "<player> booted up the PC"
++        // and other name texts print
++        static const u8 sName[] = { 0xBB, 0xCD, 0xC2, 0xFF };
++        memcpy(gSaveBlock2Ptr->playerName, sName, sizeof(sName));
++    }
+     FlagSet(FLAG_SYS_POKEMON_GET);
+     FlagSet(FLAG_SYS_POKEDEX_GET);
+     FlagSet(FLAG_SYS_B_DASH);
+@@ -229,6 +271,21 @@ static void CB2_OwTestStart(void)
+         }
+     ZeroPlayerPartyMons();
+     GiveParty(getenv("PKBN_OWTEST_PARTY"));
++    if ((t = getenv("PKBN_OWTEST_BOX")) != NULL)
++    {
++        // PKBN_OWTEST_BOX="sp:lv,sp:lv": Pokémon in box 1 from slot 0 (release tests)
++        s32 pos = 0;
++        while (*t && pos < IN_BOX_COUNT)
++        {
++            struct Pokemon mon;
++            u16 sp = (u16)strtol(t, (char **)&t, 10);
++            u8 lv = (*t == ':') ? (u8)strtol(t + 1, (char **)&t, 10) : 5;
++            CreateMon(&mon, sp, lv, 32, FALSE, 0, OT_ID_PLAYER_ID, 0);
++            SetBoxMonAt(0, pos++, &mon.box);
++            while (*t == ',')
++                t++;
++        }
++    }
+     if ((t = getenv("PKBN_OWTEST_ITEMS")) != NULL)
+         while (*t)
+         {
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index 6e88eaa..f194724 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -20,6 +20,7 @@
+ #include "battle_setup.h"
+ #include "pkbn/grid_battle.h"
+ #include "pkbn/render.h"
++#include "pokedex.h"
+ #include "pkbn/navicust.h"
+ #include "pkbn/chip_pack.h"
+ #include "party_menu.h"
+@@ -406,6 +407,35 @@ void Pkbn_SelfTestMaybeStart(void)
+             CreateTestMon(&gPlayerParty[i], members[i], SPECIES_TORCHIC, 7);
+         CreateTestMon(&gEnemyParty[0], enemyPart, SPECIES_ZIGZAGOON, 4);
+     }
++    // PKBN_TEST_SHINY=1: the enemy is shiny (same species, level and moves; a personality whose shiny value is 0
++    // against the player's ID, as IsMonShiny / IsShinyOtIdPersonality compute it)
++    if (getenv("PKBN_TEST_SHINY") != NULL)
++    {
++        struct Pokemon *e = &gEnemyParty[0];
++        u16 sp = GetMonData(e, MON_DATA_SPECIES), mv[MAX_MON_MOVES];
++        u8 lv = GetMonData(e, MON_DATA_LEVEL);
++        u32 otId = gSaveBlock2Ptr->playerTrainerId[0] | (gSaveBlock2Ptr->playerTrainerId[1] << 8)
++                 | (gSaveBlock2Ptr->playerTrainerId[2] << 16) | (gSaveBlock2Ptr->playerTrainerId[3] << 24);
++        u32 lo = 0x1234, pers = ((((otId >> 16) ^ (otId & 0xFFFF) ^ lo) & 0xFFFF) << 16) | lo;
++        s32 m;
++        for (m = 0; m < MAX_MON_MOVES; m++)
++            mv[m] = GetMonData(e, MON_DATA_MOVE1 + m);
++        CreateMon(e, sp, lv, 32, TRUE, pers, OT_ID_PLAYER_ID, 0);
++        for (m = 0; m < MAX_MON_MOVES; m++)
++            SetMonMoveSlot(e, mv[m], m);
++        printf("[pkbn-selftest] enemy made shiny: %u\n", IsMonShiny(e));
++    }
++    // PKBN_TEST_DEX_CAUGHT=n: national dex 1..n already caught (Pokédex milestone tests)
++    if (getenv("PKBN_TEST_DEX_CAUGHT") != NULL)
++    {
++        s32 n = atoi(getenv("PKBN_TEST_DEX_CAUGHT")), k;
++        for (k = 1; k <= n; k++)
++        {
++            GetSetPokedexFlag(k, FLAG_SET_SEEN);
++            GetSetPokedexFlag(k, FLAG_SET_CAUGHT);
++        }
++        printf("[pkbn-selftest] dex caught: %u\n", GetNationalPokedexCount(FLAG_GET_CAUGHT));
++    }
+     if (getenv("PKBN_TEST_PICKS") != NULL)
+     {
+         const char *t = getenv("PKBN_TEST_PICKS");
+-- 
+2.43.0
+

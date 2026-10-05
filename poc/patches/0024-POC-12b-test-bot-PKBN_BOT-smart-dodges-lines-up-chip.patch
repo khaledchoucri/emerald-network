@@ -1,0 +1,349 @@
+From 1dc33414e7b032523b00b6673d739ad467943644 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Mon, 5 Oct 2026 21:56:34 +0300
+Subject: [PATCH 24/24] POC-12b: test bot (PKBN_BOT=smart) - dodges, lines up
+ chips with their real shapes, picks chips by expected damage
+
+tools/bot_compare.py runs the same battles with the old autopilot and the bot. The old
+autopilot stays the default: regression logs identical.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/bot.h           |   7 ++
+ include/pkbn/grid_internal.h |   2 +
+ src/pkbn/bot.c               | 194 +++++++++++++++++++++++++++++++++++
+ src/pkbn/grid_moves.c        |  29 ++++++
+ src/pkbn/selftest.c          |  20 ++++
+ 5 files changed, 252 insertions(+)
+ create mode 100644 include/pkbn/bot.h
+ create mode 100644 src/pkbn/bot.c
+
+diff --git a/include/pkbn/bot.h b/include/pkbn/bot.h
+new file mode 100644
+index 0000000..eb40a7b
+--- /dev/null
++++ b/include/pkbn/bot.h
+@@ -0,0 +1,7 @@
++#ifndef GUARD_PKBN_BOT_H
++#define GUARD_PKBN_BOT_H
++// Test bot (POC-12): src/pkbn/bot.c. PKBN_BOT=smart in self-tests.
++#include "global.h"
++void PkbnBot_Custom(u16 *pressed);
++void PkbnBot_Fight(u16 *held, u16 *pressed);
++#endif // GUARD_PKBN_BOT_H
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 42975a0..8280337 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -300,6 +300,7 @@ void SyncActiveToParty(void);
+ void BeginTimeStop(u8 kind, u8 target, bool8 keepStages);
+ void OpenPicker(u8 purpose);
+ void BeginAssist(void);
++bool8 PkbnGrid_HandSelectable(u8 pos);
+ void Foe_Select(u8 i);
+ const struct Fighter *Foe_Get(u8 i);
+ s8 Foe_At(s8 x, s8 y, bool8 hittable);   // live foe standing on (x, y), or -1
+@@ -320,6 +321,7 @@ bool8 Moves_IsPositionFree(u8 kind);
+ void Moves_UsePA(u8 side, u8 paIndex, const struct BattlePokemon *user, const char *userName, u8 userSlot);
+ void Moves_ComboPanel(u8 type, s8 x, s8 y);
+ s32 Moves_EstimateDamage(u8 side, u16 move, u16 *eff);
++bool8 Moves_WouldHit(u8 kind, u16 move, s8 x, s8 y, s8 tx, s8 ty);
+ 
+ // grid_field.c
+ void Field_Init(void);
+diff --git a/src/pkbn/bot.c b/src/pkbn/bot.c
+new file mode 100644
+index 0000000..ab0200c
+--- /dev/null
++++ b/src/pkbn/bot.c
+@@ -0,0 +1,194 @@
++// Test bot (POC-12): a stand-in player for self-tests, so Busting Levels and win rates from test runs look like play.
++// PKBN_BOT=smart switches it on (src/pkbn/selftest.c); the old autopilot stays the default so the regression logs
++// keep their baselines.
++//
++// What it does (all TUNE, it is a test tool, not a rule of the game):
++//  - Custom: picks the chips worth most against the target - expected damage from Moves_EstimateDamage as a share
++//    of the target's HP, small fixed values for status / stats / healing - up to 3 per Custom.
++//  - Fight: steps off panels an enemy attack is about to hit, walks to a panel from which the next chip reaches the
++//    target (Moves_WouldHit, the real shapes), fires, and uses the buster when nothing is queued.
++//  - Opens the Custom screen only when its queue is empty (the old bot threw queued chips away).
++#include "pkbn/grid_internal.h"
++#include "pkbn/grid_battle.h"
++#include "pkbn/bot.h"
++#include "constants/battle_move_effects.h"
++#include "main.h"
++
++#ifdef PORTABLE
++
++#define BOT_MAX_PICKS 3
++#define BOT_GIVE_UP   150   // frames to wait for a good position before firing anyway
++
++static u16 sWaitFrames;
++static u8 sLastQueue;
++
++static s32 ChipScore(u8 handPos)
++{
++    const struct FolderChip *ch = &sB.folder.chips[sB.hand[handPos]];
++    const struct Fighter *me = &sB.f[SIDE_PLAYER];
++    const struct Fighter *t = &sB.f[SIDE_ENEMY];
++    u16 mv = ch->move, eff;
++    u8 kind = Moves_KindOf(mv);
++    s32 dmg;
++
++    if (ch->owner != CHIP_SHARED)
++        return 60;                                  // partner chips are strong by design
++    if (!Chip_CanUse(&me->bm, mv))
++        return 0;
++    switch (kind)
++    {
++    case GK_STATUS:
++        return t->bm.status1 ? 0 : 25;
++    case GK_STATS:
++        return 10;
++    case GK_SELF:
++        return (gBattleMoves[mv].effect == EFFECT_RESTORE_HP || gBattleMoves[mv].effect == EFFECT_REST)
++             ? (me->bm.hp * 2 < me->bm.maxHP ? 45 : 0) : 8;
++    case GK_BARRIER:
++        return 12;
++    case GK_PANEL:
++    case GK_CALL:
++        return 10;
++    case GK_WEATHER:
++        return sB.weatherTurns ? 0 : 6;
++    case GK_FIELD:
++        return 0;                                   // the user faints: never on purpose
++    case GK_BATON: case GK_ASSIST: case GK_NOTHING: case GK_NONE:
++        return 0;
++    }
++    dmg = Moves_EstimateDamage(SIDE_PLAYER, mv, &eff);
++    if (dmg <= 0 || t->bm.hp == 0)
++        return 0;
++    dmg = dmg * 100 / t->bm.hp;
++    return 15 + (dmg > 100 ? 100 : dmg);
++}
++
++static u8 PickedCount(void)
++{
++    s32 i, n = 0;
++    for (i = 0; i < sB.handCount; i++)
++        n += sB.picked[i];
++    return n;
++}
++
++void PkbnBot_Custom(u16 *pressed)
++{
++    s32 i, best = -1, bestScore = 0;
++    Foe_Select(Foe_PlayerTarget());
++    if (PickedCount() < BOT_MAX_PICKS)
++        for (i = 0; i < sB.handCount; i++)
++        {
++            s32 sc;
++            if (sB.picked[i] || !PkbnGrid_HandSelectable(i))
++                continue;
++            sc = ChipScore(i);
++            if (sc > bestScore)
++                best = i, bestScore = sc;
++        }
++    if (best < 0)
++    {
++        *pressed = START_BUTTON;
++        return;
++    }
++    if (sB.cursor == best)
++        *pressed = A_BUTTON;
++    else
++        *pressed = (sB.cursor > best && sB.cursor <= sB.handCount + 1) ? DPAD_UP : DPAD_DOWN;
++}
++
++static bool8 Safe(s8 x, s8 y)
++{
++    return Field_CanStand(SIDE_PLAYER, x, y) && !Moves_PanelThreatened(SIDE_ENEMY, x, y);
++}
++
++// One step from (px, py) toward (gx, gy), only through safe panels; 0 if already there or stuck.
++static u16 StepToward(s8 px, s8 py, s8 gx, s8 gy)
++{
++    if (py != gy && Safe(px, py + (gy > py ? 1 : -1)))
++        return gy > py ? DPAD_DOWN : DPAD_UP;
++    if (px != gx && Safe(px + (gx > px ? 1 : -1), py))
++        return gx > px ? DPAD_RIGHT : DPAD_LEFT;
++    return 0;
++}
++
++// The next queued chip: its kind and move.
++static void NextChip(u8 *kind, u16 *move)
++{
++    u8 q = sB.queue[0];
++    *move = MOVE_NONE;
++    if (q == FOLDER_QUEUE_WILD)
++        *kind = GK_BATON;
++    else if (q >= QUEUE_PA_BASE)
++        *kind = gPkbnProgramAdvances[sB.paQueue[q - QUEUE_PA_BASE].pa].kind;
++    else
++    {
++        const struct FolderChip *ch = &sB.folder.chips[q];
++        *move = ch->move;
++        *kind = (ch->owner != CHIP_SHARED && ch->owner != sB.active) ? GK_BATON : Moves_KindOf(ch->move);
++    }
++}
++
++void PkbnBot_Fight(u16 *held, u16 *pressed)
++{
++    const struct Fighter *p = &sB.f[SIDE_PLAYER];
++    const struct Fighter *t;
++    bool8 locked = p->lockout || p->stun || p->charging || (p->bm.status1 & (STATUS1_SLEEP | STATUS1_FREEZE));
++    s8 gx = p->x, gy = p->y;
++
++    *held = *pressed = 0;
++    Foe_Select(Foe_PlayerTarget());
++    t = &sB.f[SIDE_ENEMY];
++
++    if (sB.queueCount != sLastQueue)
++        sWaitFrames = 0;
++    sLastQueue = sB.queueCount;
++
++    if (sB.gauge >= CUSTOM_FRAMES && sB.queueCount == 0)
++    {
++        *pressed = L_BUTTON;
++        return;
++    }
++    // 1. get out of the way
++    if (Moves_PanelThreatened(SIDE_ENEMY, p->x, p->y))
++    {
++        static const s8 sDir[4][2] = { {0, -1}, {0, 1}, {-1, 0}, {1, 0} };
++        s32 d;
++        for (d = 0; d < 4; d++)
++            if (Safe(p->x + sDir[d][0], p->y + sDir[d][1]))
++            {
++                *held = sDir[d][1] < 0 ? DPAD_UP : sDir[d][1] > 0 ? DPAD_DOWN : sDir[d][0] < 0 ? DPAD_LEFT : DPAD_RIGHT;
++                return;
++            }
++    }
++    if (sB.queueCount > 0)
++    {
++        u8 kind;
++        u16 move;
++        s32 c, r, bestD = 99;
++        NextChip(&kind, &move);
++        if (Moves_WouldHit(kind, move, p->x, p->y, t->x, t->y) || ++sWaitFrames > BOT_GIVE_UP)
++        {
++            if (!locked)
++                *pressed = A_BUTTON;
++            return;
++        }
++        // 2. walk to the nearest safe panel the chip reaches the target from
++        for (r = 0; r < GRID_ROWS; r++)
++            for (c = 0; c < PLAYER_COLS; c++)
++                if (Safe(c, r) && Moves_WouldHit(kind, move, c, r, t->x, t->y))
++                {
++                    s32 dd = abs(c - p->x) + abs(r - p->y);
++                    if (dd < bestD)
++                        bestD = dd, gx = c, gy = r;
++                }
++        *held = StepToward(p->x, p->y, gx, gy);
++        return;
++    }
++    // 3. nothing queued: line up and use the buster
++    if (p->y != t->y)
++        *held = StepToward(p->x, p->y, p->x, t->y);
++    else
++        *held = B_BUTTON;
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 22b486c..7a9b6ee 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -1093,6 +1093,35 @@ static void BlastCells(u8 pattern, s8 cx, s8 cy, u8 cells[GRID_ROWS][GRID_COLS])
+         }
+ }
+ 
++// Test bot (POC-12): would the player's `move` (or a PA of `kind`) used from (x, y) reach the panel (tx, ty)?
++// Position-free kinds always do. Uses the real shapes (DirectCells, BlastCells).
++bool8 Moves_WouldHit(u8 kind, u16 move, s8 x, s8 y, s8 tx, s8 ty)
++{
++    struct Attack a;
++    u8 cells[GRID_ROWS][GRID_COLS];
++    memset(&a, 0, sizeof(a));
++    a.side = SIDE_PLAYER;
++    a.kind = kind;
++    if (move < MOVES_COUNT)
++        a.info = gPkbnMoveInfo[move];
++    switch (kind)
++    {
++    case GK_CANNON: case GK_AIRSHOT: case GK_SPREADER: case GK_VULCAN:
++    case GK_SWORD: case GK_LONGSWORD: case GK_WIDESWORD: case GK_LIFESWORD: case GK_LINE3:
++    case GK_DASH: case GK_CONE: case GK_TORNADO:
++        DirectCells(SIDE_PLAYER, &a, x, y, cells);
++        return cells[ty][tx] != 0;
++    case GK_BOMB:
++        BlastCells(a.info.pattern, x + GRENADE_RANGE, y, cells);
++        return InGrid(x + GRENADE_RANGE, y) && cells[ty][tx] != 0;
++    case GK_SHOCKWAVE: case GK_WAVE: case GK_BALL: case GK_DELAYED:
++        return ty == y || (a.info.rows == 3 && kind != GK_BALL && kind != GK_DELAYED);
++    case GK_AIRHOCKEY:
++        return TRUE;   // bounces around: close enough
++    }
++    return TRUE;
++}
++
+ static void EnemyAreaCells(u8 side, u8 cells[GRID_ROWS][GRID_COLS])
+ {
+     s32 r, c;
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index f194724..1564415 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -21,6 +21,7 @@
+ #include "pkbn/grid_battle.h"
+ #include "pkbn/render.h"
+ #include "pokedex.h"
++#include "pkbn/bot.h"
+ #include "pkbn/navicust.h"
+ #include "pkbn/chip_pack.h"
+ #include "party_menu.h"
+@@ -83,6 +84,15 @@ static void CB2_SelfTestDone(void)
+ static u8 sPicks[8], sPickIdx, sPicksLeft, sThrowsLeft;
+ static bool8 sPicksDone;
+ 
++// PKBN_BOT=smart: the test bot of src/pkbn/bot.c instead of this autopilot (which the regression baselines use)
++static bool8 SmartBot(void)
++{
++    static s8 sSmart = -1;
++    if (sSmart < 0)
++        sSmart = getenv("PKBN_BOT") != NULL && strcmp(getenv("PKBN_BOT"), "smart") == 0;
++    return sSmart;
++}
++
+ static void Autopilot(void)
+ {
+     struct PkbnGridDebug d;
+@@ -131,6 +141,11 @@ static void Autopilot(void)
+             if (edge) sPicksDone = FALSE;
+             break;
+         }
++        if (SmartBot())
++        {
++            PkbnBot_Custom(&pressed);
++            break;
++        }
+         if (d.cursorSelectable && !d.cursorIsWild)
+             pressed = A_BUTTON;
+         else if (d.anySelectable)
+@@ -142,6 +157,11 @@ static void Autopilot(void)
+         pressed = A_BUTTON; // first option
+         break;
+     case PKBN_GRID_FIGHT:
++        if (SmartBot())
++        {
++            PkbnBot_Fight(&held, &pressed);
++            break;
++        }
+         if (d.gaugeFull)
+             pressed = L_BUTTON;
+         else if (d.playerThreatened)
+-- 
+2.43.0
+
