@@ -1,0 +1,1415 @@
+From d83c032e126d6fce1682327bc42867c4566c304a Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Mon, 5 Oct 2026 15:20:39 +0300
+Subject: [PATCH] POC-10c: FOLDER screen, candy shop, move icons on chips, more
+ chip sources
+
+- Custom screen: shared chips show a BN-style icon of the move; only partner
+  switch chips show a Pokemon (Khaled, 2026-10-05)
+- START menu -> FOLDER: Folder / Pack / Candy pages. Edit the folder (saved in
+  pkbn.sav; SELECT = auto), PP Up (+1 copy) / PP Max (to the cap) on pack chips,
+  candy shop (level-gated by Pokemon you own, MB/4 candy, +2 for another code)
+- TMs/HMs bought or found give 2 copies; the Move Relearner gives a copy in a
+  code you lack; releasing gives candy; hatchlings bring egg moves; Pokedex
+  milestones (PP Up / 10 species, PP Max / 50); shiny catches give * copies
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/chip_pack.h     |  10 +
+ include/strings.h            |   1 +
+ src/egg_hatch.c              |   6 +
+ src/menu.c                   |   5 +
+ src/move_relearner.c         |   9 +
+ src/pkbn/folder.c            |  54 ++++
+ src/pkbn/folder_ui.c         | 598 +++++++++++++++++++++++++++++++++++
+ src/pkbn/grid_draw.c         | 126 +++++++-
+ src/pkbn/pkbn_save.c         |  84 +++++
+ src/pkbn/post_battle.c       |  40 ++-
+ src/pkbn/selftest.c          |  37 +++
+ src/pokemon_storage_system.c |  12 +
+ src/scrcmd.c                 |   7 +
+ src/shop.c                   |   6 +
+ src/start_menu.c             |  30 ++
+ src/strings.c                |   1 +
+ 16 files changed, 1019 insertions(+), 7 deletions(-)
+ create mode 100644 src/pkbn/folder_ui.c
+
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index 71e1713..a5921e6 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -8,6 +8,7 @@
+ //  - Learning a move (any way) gives 1 copy with the move's first code, once per move (PkbnPack_SyncLearned).
+ #include "global.h"
+ #include "battle.h"
++#include "main.h"
+ #include "pkbn/folder.h"
+ #include "pkbn/chip_data.h"
+ 
+@@ -23,6 +24,15 @@ void PkbnPack_SyncLearned(void);
+ void PkbnPack_SetGranted(u16 move);
+ // Self-tests: the pre-POC-10 folder order (party slot, move slot, copy) so scripted picks keep their meaning.
+ void PkbnFolder_SortForTests(struct Folder *folder, const struct BattlePokemon *party, u8 partyCount);
++u8 PkbnFolderEdit_Get(u16 *moves, u8 *letters);            // the FOLDER screen's folder; 0 = auto-build
++void PkbnFolderEdit_Set(const u16 *moves, const u8 *letters, u8 count);
++u8 PkbnFolder_PartyBattleMons(struct BattlePokemon *out);    // the party as BattlePokemon (species/moves/types)
++void PkbnFolderEdit_Open(MainCallback exitCallback);          // the FOLDER screen (src/pkbn/folder_ui.c)
++void PkbnDraw_ChipIcon(u16 *fb, s32 x, s32 y, u16 move, bool8 dim);   // 22x16 BN-style icon (grid_draw.c)
++void PkbnPack_GrantTM(u16 item, u16 count);
++void PkbnPack_GrantRelearned(u16 move);
++void PkbnCandy_GrantRelease(struct BoxPokemon *mon);
++void PkbnPack_GrantEggMoves(struct Pokemon *mon);
+ u16 PkbnCandy_Get(u8 type);
+ void PkbnCandy_Add(u8 type, s32 n);
+ 
+diff --git a/include/strings.h b/include/strings.h
+index e828380..cce6797 100755
+--- a/include/strings.h
++++ b/include/strings.h
+@@ -2149,6 +2149,7 @@ extern const u8 gText_Register[];
+ extern const u8 gText_Trade4[];
+ extern const u8 gText_Summary5[];
+ extern const u8 gText_PkbnNaviCust[];
++extern const u8 gText_PkbnFolder[];
+ extern const u8 gText_Switch2[];
+ extern const u8 gText_Item[];
+ extern const u8 gText_NotPkmnOtherTrainerWants[];
+diff --git a/src/egg_hatch.c b/src/egg_hatch.c
+index 8816d7a..4a1ba2d 100644
+--- a/src/egg_hatch.c
++++ b/src/egg_hatch.c
+@@ -1,4 +1,7 @@
+ #include "global.h"
++#ifdef PORTABLE
++#include "pkbn/chip_pack.h"
++#endif
+ #include "pokemon.h"
+ #include "egg_hatch.h"
+ #include "pokedex.h"
+@@ -367,6 +370,9 @@ static void AddHatchedMonToParty(u8 id)
+ 
+     CreateHatchedMon(mon, &gEnemyParty[0]);
+     SetMonData(mon, MON_DATA_IS_EGG, &isEgg);
++#ifdef PORTABLE
++    PkbnPack_GrantEggMoves(mon); // pkbn: hatchlings bring their egg moves as chips
++#endif
+ 
+     species = GetMonData(mon, MON_DATA_SPECIES);
+     GetSpeciesName(name, species);
+diff --git a/src/menu.c b/src/menu.c
+index 5a557ff..2858f75 100644
+--- a/src/menu.c
++++ b/src/menu.c
+@@ -490,7 +490,12 @@ u8 GetPlayerTextSpeedDelay(void)
+ u8 AddStartMenuWindow(u8 numActions)
+ {
+     if (sStartMenuWindowId == WINDOW_NONE)
++#ifdef PORTABLE
++        // pkbn: FOLDER makes a 9th entry; start the window one row higher so 9 still fit the screen
++        sStartMenuWindowId = AddWindowParameterized(0, 22, numActions >= 9 ? 0 : 1, 7, (numActions * 2) + 2, 15, 0x139);
++#else
+         sStartMenuWindowId = AddWindowParameterized(0, 22, 1, 7, (numActions * 2) + 2, 15, 0x139);
++#endif
+     return sStartMenuWindowId;
+ }
+ 
+diff --git a/src/move_relearner.c b/src/move_relearner.c
+index d5f6c08..9b80318 100644
+--- a/src/move_relearner.c
++++ b/src/move_relearner.c
+@@ -1,4 +1,7 @@
+ #include "global.h"
++#ifdef PORTABLE
++#include "pkbn/chip_pack.h"
++#endif
+ #include "main.h"
+ #include "battle.h"
+ #include "bg.h"
+@@ -522,6 +525,9 @@ static void DoMoveRelearnerMain(void)
+             {
+                 if (GiveMoveToMon(&gPlayerParty[sMoveRelearnerStruct->partyMon], GetCurrentSelectedMove()) != MON_HAS_MAX_MOVES)
+                 {
++#ifdef PORTABLE
++                    PkbnPack_GrantRelearned(GetCurrentSelectedMove()); // pkbn: the Heart Scale buys a chip too
++#endif
+                     PrintMessageWithPlaceholders(gText_MoveRelearnerPkmnLearnedMove);
+                     gSpecialVar_0x8004 = TRUE;
+                     sMoveRelearnerStruct->state = MENU_STATE_PRINT_TEXT_THEN_FANFARE;
+@@ -710,6 +716,9 @@ static void DoMoveRelearnerMain(void)
+                 StringCopy(gStringVar3, gMoveNames[move]);
+                 RemoveMonPPBonus(&gPlayerParty[sMoveRelearnerStruct->partyMon], sMoveRelearnerStruct->moveSlot);
+                 SetMonMoveSlot(&gPlayerParty[sMoveRelearnerStruct->partyMon], GetCurrentSelectedMove(), sMoveRelearnerStruct->moveSlot);
++#ifdef PORTABLE
++                PkbnPack_GrantRelearned(GetCurrentSelectedMove()); // pkbn: the Heart Scale buys a chip too
++#endif
+                 StringCopy(gStringVar2, gMoveNames[GetCurrentSelectedMove()]);
+                 PrintMessageWithPlaceholders(gText_MoveRelearnerAndPoof);
+                 sMoveRelearnerStruct->state = MENU_STATE_DOUBLE_FANFARE_FORGOT_MOVE;
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index 5cc5a76..cebf054 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -84,6 +84,28 @@ static u32 ChipValue(u16 move, const struct BattlePokemon *bm)
+     return v;
+ }
+ 
++u8 PkbnFolder_PartyBattleMons(struct BattlePokemon *out)
++{
++    s32 i, m, n = 0;
++    memset(out, 0, sizeof(struct BattlePokemon) * PKBN_PARTY_MAX);
++    for (i = 0; i < PARTY_SIZE; i++)
++    {
++        u16 sp = GetMonData(&gPlayerParty[i], MON_DATA_SPECIES);
++        if (sp == SPECIES_NONE)
++            break;
++        n = i + 1;
++        if (GetMonData(&gPlayerParty[i], MON_DATA_IS_EGG))
++            continue;
++        out[i].species = sp;
++        out[i].level = GetMonData(&gPlayerParty[i], MON_DATA_LEVEL);
++        out[i].types[0] = gSpeciesInfo[sp].types[0];
++        out[i].types[1] = gSpeciesInfo[sp].types[1];
++        for (m = 0; m < MAX_MON_MOVES; m++)
++            out[i].moves[m] = GetMonData(&gPlayerParty[i], MON_DATA_MOVE1 + m);
++    }
++    return n;
++}
++
+ // The folder (design 08 §11): the edited folder when there is one (FOLDER editor, later), otherwise auto-built
+ // from the pack: greedy, one copy at a time, favouring chips several party members can use and members that
+ // have little so far (tools/shared_folder_sim.py's "balanced" builder). BN6 copy caps by MB.
+@@ -104,6 +126,37 @@ void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party,
+             mons++;
+     size = Chip_FolderSize(mons);
+ 
++    {
++        // The FOLDER screen's folder: its chips in order, while the pack still has them, someone can use them, the
++        // copy caps hold and they fit (30 + 2 per extra Pokémon).
++        u16 em[PKBN_FOLDER_SLOTS];
++        u8 el[PKBN_FOLDER_SLOTS], ne = PkbnFolderEdit_Get(em, el), cnt[PACK_LETTERS];
++        if (ne > 0)
++        {
++            for (i = 0; i < ne && folder->count < size; i++)
++            {
++                s32 k, same = 0, sameCode = 0;
++                for (k = 0; k < folder->count; k++)
++                {
++                    same += folder->chips[k].move == em[i];
++                    sameCode += folder->chips[k].move == em[i] && folder->chips[k].letter == el[i];
++                }
++                for (p = 0; p < partyCount; p++)
++                    if (Chip_CanUse(&party[p], em[i]))
++                        break;
++                if (p == partyCount || same >= Chip_CopyCap(em[i]) || sameCode >= PkbnPack_Get(em[i], el[i]))
++                    continue;
++                folder->chips[folder->count].move = em[i];
++                folder->chips[folder->count].letter = el[i];
++                folder->chips[folder->count].owner = CHIP_SHARED;
++                folder->chips[folder->count].slot = 0;
++                folder->count++;
++            }
++            (void)cnt;
++            goto shuffle;
++        }
++    }
++
+     for (mv = 1; mv < MOVES_COUNT; mv++)
+     {
+         if (!PkbnFolder_MoveIsChip(mv) || PkbnPack_Total(mv) == 0)
+@@ -158,6 +211,7 @@ void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party,
+                 usable[p]++;
+     }
+ 
++shuffle:
+     for (p = 0; p < folder->count; p++)
+         folder->pile[p] = p;
+     folder->pileCount = folder->count;
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+new file mode 100644
+index 0000000..14984ec
+--- /dev/null
++++ b/src/pkbn/folder_ui.c
+@@ -0,0 +1,598 @@
++// The FOLDER screen (POC-10c): START menu -> FOLDER. Drawn on our 264x176 canvas.
++// docs/design/08-folder-memory.md §11-12, docs/design/10-catching-and-chips.md §10.
++//
++// Three pages (L / R):
++//   FOLDER  the chips battles draw from. A: take a chip out. SELECT: auto-build again. B: save and leave.
++//   PACK    every chip you own. A: put one in the folder. START: use a PP UP on it (+1 copy).
++//           SELECT: use a PP MAX on it (copies of that move up to its cap).
++//   CANDY   chips you can buy with type candy: moves of that type a Pokémon you own has reached by level-up
++//           (and at least the move's MB in level). A: buy (cost MB/4). SELECT: change the code (+2 candy).
++#include "pkbn/grid_vfx.h"   // first: it pulls in <stdlib.h> before global.h's macros
++#include "global.h"
++#include "battle_main.h"
++#include "data.h"
++#include "item.h"
++#include "main.h"
++#include "pokemon.h"
++#include "pokemon_storage_system.h"
++#include "sound.h"
++#include "constants/items.h"
++#include "constants/songs.h"
++#include "pkbn/chip_pack.h"
++#include "pkbn/move_table.h"
++#include "pkbn/render.h"
++#include "pkbn/gfx.h"
++
++#ifdef PORTABLE
++#include <stdio.h>
++#include <string.h>
++
++#define CW PKBN_CANVAS_W
++#define CH PKBN_CANVAS_H
++#define RGB PKBN_RGB
++#define LIST_X 4
++#define LIST_Y 24
++#define LIST_ROWS 12
++#define ROW_H 11
++#define PANEL_X 164
++
++enum { PAGE_FOLDER, PAGE_PACK, PAGE_CANDY, PAGE_COUNT };
++
++struct PackRow { u16 move; u8 letter; };
++struct CandyRow { u16 move; u8 letter; };
++
++static struct
++{
++    MainCallback exit;
++    u8 page;
++    u8 cursor[PAGE_COUNT], top[PAGE_COUNT];
++    u16 fMove[FOLDER_MAX];
++    u8 fLetter[FOLDER_MAX];
++    u8 fCount, fMax;
++    bool8 edited;
++    struct BattlePokemon party[PKBN_PARTY_MAX];
++    u8 partyCount;
++    u16 partyIcon[PKBN_PARTY_MAX][32 * 32];
++    struct PackRow pack[400];
++    u16 packCount;
++    struct CandyRow candy[300];
++    u16 candyCount;
++    char note[64];
++    u16 noteTimer;
++    u32 t;
++} sF;
++
++static s32 Text(u16 *fb, s32 x, s32 y, const char *s, u16 col)
++{
++    return Pkbn_DrawEmText(fb, x, y, s, PKBN_FONT_SMALL, col, RGB(2, 2, 5));
++}
++
++static void Note(const char *s)
++{
++    snprintf(sF.note, sizeof(sF.note), "%s", s);
++    sF.noteTimer = 120;
++}
++
++static void MoveName(char *dst, u32 size, u16 move)
++{
++    Pkbn_GameStringToAscii(dst, gMoveNames[move], size);
++}
++
++// ---- data -----------------------------------------------------------------------------------------------------
++
++static u8 InFolder(u16 move, s32 letter)   // letter < 0: any code
++{
++    s32 i, n = 0;
++    for (i = 0; i < sF.fCount; i++)
++        if (sF.fMove[i] == move && (letter < 0 || sF.fLetter[i] == letter))
++            n++;
++    return n;
++}
++
++static bool8 PartyCanUse(u16 move)
++{
++    s32 p;
++    for (p = 0; p < sF.partyCount; p++)
++        if (Chip_CanUse(&sF.party[p], move))
++            return TRUE;
++    return FALSE;
++}
++
++static void BuildPack(void)
++{
++    u16 mv;
++    u8 l, t;
++    sF.packCount = 0;
++    // by type, then name order of the move ids (Gen 3 order), so related chips sit together
++    for (t = 0; t < NUMBER_OF_MON_TYPES; t++)
++        for (mv = 1; mv < MOVES_COUNT; mv++)
++            if (gBattleMoves[mv].type == t)
++                for (l = 0; l < PACK_LETTERS; l++)
++                    if (PkbnPack_Get(mv, l) && sF.packCount < ARRAY_COUNT(sF.pack))
++                    {
++                        sF.pack[sF.packCount].move = mv;
++                        sF.pack[sF.packCount].letter = l;
++                        sF.packCount++;
++                    }
++}
++
++// Candy shop (design 10 §10.1): moves in the level-up learnset of a Pokémon you own, once it has reached
++// max(the level it learns the move at, the move's MB).
++static void ConsiderLearnset(u16 species, u8 level, bool8 *ok)
++{
++    const u16 *ls;
++    s32 i;
++    if (species == SPECIES_NONE || species >= NUM_SPECIES)
++        return;
++    ls = gLevelUpLearnsets[species];
++    for (i = 0; ls[i] != LEVEL_UP_END; i++)
++    {
++        u16 mv = ls[i] & LEVEL_UP_MOVE_ID;
++        u8 lv = ls[i] >> 9;
++        u8 need = lv > Chip_MB(mv) ? lv : Chip_MB(mv);
++        if (mv < MOVES_COUNT && level >= need && PkbnFolder_MoveIsChip(mv))
++            ok[mv] = TRUE;
++    }
++}
++
++static void BuildCandy(void)
++{
++    static bool8 ok[MOVES_COUNT];
++    s32 i, j;
++    u16 mv;
++    u8 t;
++    memset(ok, 0, sizeof(ok));
++    for (i = 0; i < PARTY_SIZE; i++)
++        if (!GetMonData(&gPlayerParty[i], MON_DATA_IS_EGG))
++            ConsiderLearnset(GetMonData(&gPlayerParty[i], MON_DATA_SPECIES), GetMonData(&gPlayerParty[i], MON_DATA_LEVEL), ok);
++    for (i = 0; i < TOTAL_BOXES_COUNT; i++)
++        for (j = 0; j < IN_BOX_COUNT; j++)
++            if (GetBoxMonDataAt(i, j, MON_DATA_SPECIES) && !GetBoxMonDataAt(i, j, MON_DATA_IS_EGG))
++            {
++                struct BoxPokemon *bm = GetBoxedMonPtr(i, j);
++                ConsiderLearnset(GetBoxMonData(bm, MON_DATA_SPECIES), GetLevelFromBoxMonExp(bm), ok);
++            }
++    sF.candyCount = 0;
++    for (j = 0; j < 2; j++)   // types you have candy for first
++    for (t = 0; t < NUMBER_OF_MON_TYPES; t++)
++        if ((PkbnCandy_Get(t) > 0) == (j == 0))
++        for (mv = 1; mv < MOVES_COUNT; mv++)
++            if (ok[mv] && gBattleMoves[mv].type == t && sF.candyCount < ARRAY_COUNT(sF.candy))
++            {
++                sF.candy[sF.candyCount].move = mv;
++                sF.candy[sF.candyCount].letter = gPkbnMoveInfo[mv].lanes[0];
++                sF.candyCount++;
++            }
++}
++
++static u16 CandyCost(u16 move, u8 letter)
++{
++    return (Chip_MB(move) + 3) / 4 + (letter != gPkbnMoveInfo[move].lanes[0] ? 2 : 0);
++}
++
++static void LoadFolder(void)
++{
++    struct Folder f;
++    s32 i;
++    sF.fCount = PkbnFolderEdit_Get(sF.fMove, sF.fLetter);
++    if (sF.fCount == 0)
++    {
++        // never edited: start from what the auto-builder would draw from
++        PkbnFolderEdit_Set(NULL, NULL, 0);
++        PkbnFolder_Build(&f, sF.party, sF.partyCount);
++        for (i = 0; i < f.count; i++)
++        {
++            sF.fMove[i] = f.chips[i].move;
++            sF.fLetter[i] = f.chips[i].letter;
++        }
++        sF.fCount = f.count;
++    }
++}
++
++// ---- drawing ---------------------------------------------------------------------------------------------------
++
++static u8 RowCount(void)
++{
++    return sF.page == PAGE_FOLDER ? sF.fCount : sF.page == PAGE_PACK ? sF.packCount : sF.candyCount;
++}
++
++static void RowChip(u8 row, u16 *move, u8 *letter)
++{
++    if (sF.page == PAGE_FOLDER)
++        *move = sF.fMove[row], *letter = sF.fLetter[row];
++    else if (sF.page == PAGE_PACK)
++        *move = sF.pack[row].move, *letter = sF.pack[row].letter;
++    else
++        *move = sF.candy[row].move, *letter = sF.candy[row].letter;
++}
++
++static void DrawTabs(u16 *fb)
++{
++    static const char *const names[PAGE_COUNT] = { "FOLDER", "PACK", "CANDY" };
++    s32 i, x = 4;
++    char line[32];
++    for (i = 0; i < PAGE_COUNT; i++)
++    {
++        s32 w = Pkbn_EmTextWidth(names[i], PKBN_FONT_NORMAL) + 10;
++        bool8 on = i == sF.page;
++        Pkbn_FillRect(fb, x, 2, w, 17, on ? RGB(6, 10, 22) : RGB(2, 3, 8));
++        Pkbn_FrameRect(fb, x, 2, w, 17, on ? RGB(31, 26, 6) : RGB(8, 10, 16));
++        Pkbn_DrawEmText(fb, x + 5, 0, names[i], PKBN_FONT_NORMAL, on ? RGB(31, 26, 6) : RGB(14, 16, 22), RGB(2, 2, 5));
++        x += w + 3;
++    }
++    snprintf(line, sizeof(line), "%u/%u CHIPS%s", sF.fCount, sF.fMax, sF.edited ? "" : " (AUTO)");
++    Text(fb, CW - 4 - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), 4, line, sF.fCount > sF.fMax ? RGB(31, 10, 8) : RGB(31, 31, 31));
++}
++
++static void DrawList(u16 *fb)
++{
++    s32 i, n = RowCount();
++    u8 *cur = &sF.cursor[sF.page], *top = &sF.top[sF.page];
++    if (*cur >= n && n > 0)
++        *cur = n - 1;
++    if (*cur < *top)
++        *top = *cur;
++    if (*cur >= *top + LIST_ROWS)
++        *top = *cur - LIST_ROWS + 1;
++    Pkbn_FillRect(fb, LIST_X - 2, LIST_Y - 2, PANEL_X - LIST_X - 2, LIST_ROWS * ROW_H + 4, RGB(2, 3, 8));
++    for (i = 0; i < LIST_ROWS && *top + i < n; i++)
++    {
++        u8 row = *top + i;
++        u16 mv;
++        u8 letter;
++        char nm[MOVE_NAME_LENGTH + 1], right[16];
++        s32 y = LIST_Y + i * ROW_H;
++        bool8 dim = FALSE;
++        u16 col = RGB(31, 31, 31);
++        RowChip(row, &mv, &letter);
++        MoveName(nm, sizeof(nm), mv);
++        if (sF.page == PAGE_FOLDER)
++        {
++            dim = !PartyCanUse(mv);
++            snprintf(right, sizeof(right), "MB%u", Chip_MB(mv));
++        }
++        else if (sF.page == PAGE_PACK)
++        {
++            u8 have = PkbnPack_Get(mv, letter), used = InFolder(mv, letter);
++            dim = !PartyCanUse(mv);
++            snprintf(right, sizeof(right), "%u/%u", used, have);
++            if (used >= have)
++                col = RGB(16, 18, 22);
++        }
++        else
++        {
++            u16 cost = CandyCost(mv, letter);
++            snprintf(right, sizeof(right), "%u", cost);
++            if (PkbnCandy_Get(gBattleMoves[mv].type) < cost)
++                col = RGB(16, 18, 22);
++        }
++        if (row == *cur)
++            Pkbn_FillRect(fb, LIST_X - 1, y - 1, PANEL_X - LIST_X - 4, ROW_H, RGB(8, 14, 28));
++        // small type-coloured chip mark + code letter
++        Pkbn_FillRect(fb, LIST_X, y + 1, 4, 8, Vfx_TypeColor(gBattleMoves[mv].type));
++        Text(fb, LIST_X + 7, y - 2, nm, dim ? RGB(14, 14, 16) : col);
++        {
++            char c[2] = { PkbnFolder_LetterChar(letter), 0 };
++            Text(fb, LIST_X + 92, y - 2, c, RGB(31, 26, 6));
++        }
++        Text(fb, PANEL_X - 8 - Pkbn_EmTextWidth(right, PKBN_FONT_SMALL), y - 2, right, dim ? RGB(14, 14, 16) : col);
++    }
++    if (n == 0)
++        Text(fb, LIST_X + 4, LIST_Y, sF.page == PAGE_CANDY ? "NOTHING TO BUY YET" : "NO CHIPS", RGB(16, 18, 22));
++    if (*top > 0)
++        Text(fb, PANEL_X - 14, LIST_Y - 12, "^", RGB(31, 26, 6));
++    if (*top + LIST_ROWS < n)
++        Text(fb, PANEL_X - 14, LIST_Y + LIST_ROWS * ROW_H - 4, "~", RGB(31, 26, 6));
++}
++
++static void DrawPanel(u16 *fb)
++{
++    s32 x = PANEL_X, y = 24, n = RowCount(), p;
++    u16 mv;
++    u8 letter;
++    char line[48], nm[MOVE_NAME_LENGTH + 1];
++    struct PkbnImage icon;
++    Pkbn_FillRect(fb, x - 2, 22, CW - x, 128, RGB(3, 5, 12));
++    Pkbn_FrameRect(fb, x - 2, 22, CW - x, 128, RGB(8, 12, 22));
++    if (n == 0)
++        return;
++    RowChip(sF.cursor[sF.page], &mv, &letter);
++    // the chip: BN-style icon, code, name
++    Pkbn_FillRect(fb, x + 2, y + 2, 26, 22, RGB(1, 2, 5));
++    PkbnDraw_ChipIcon(fb, x + 4, y + 4, mv, FALSE);
++    line[0] = PkbnFolder_LetterChar(letter), line[1] = '\0';
++    Pkbn_DrawEmText(fb, x + 34, y + 2, line, PKBN_FONT_NORMAL, RGB(31, 26, 6), RGB(2, 2, 5));
++    icon = Gfx_TypeIcon(gBattleMoves[mv].type);
++    Gfx_Draw(fb, &icon, x + 50, y + 6, 0, 0, 0);
++    MoveName(nm, sizeof(nm), mv);
++    Text(fb, x + 2, y + 25, nm, RGB(31, 31, 31));
++    if (gBattleMoves[mv].power > 1)
++        snprintf(line, sizeof(line), "%s  POW %u", gPkbnKindNames[gPkbnMoveInfo[mv].kind], gBattleMoves[mv].power);
++    else
++        snprintf(line, sizeof(line), "%s", gPkbnKindNames[gPkbnMoveInfo[mv].kind]);
++    Text(fb, x + 2, y + 36, line, RGB(22, 26, 31));
++    snprintf(line, sizeof(line), "MB %u  UP TO %u IN", Chip_MB(mv), Chip_CopyCap(mv));
++    Text(fb, x + 2, y + 47, line, RGB(22, 26, 31));
++    snprintf(line, sizeof(line), "OWN %u  IN FOLDER %u", PkbnPack_Total(mv), InFolder(mv, -1));
++    Text(fb, x + 2, y + 58, line, RGB(22, 26, 31));
++    if (sF.page == PAGE_CANDY)
++    {
++        char tn[16];
++        Pkbn_GameStringToAscii(tn, gTypeNames[gBattleMoves[mv].type], sizeof(tn));
++        snprintf(line, sizeof(line), "%s CANDY %u", tn, PkbnCandy_Get(gBattleMoves[mv].type));
++        Text(fb, x + 2, y + 69, line, RGB(31, 26, 6));
++    }
++    // who can use it (party icons, info only - chips themselves never show a Pokémon)
++    Text(fb, x + 2, y + 80, "USABLE BY", RGB(14, 16, 22));
++    for (p = 0; p < sF.partyCount; p++)
++    {
++        bool8 can = Chip_CanUse(&sF.party[p], mv);
++        if (sF.party[p].species)
++            Pkbn_BlitIcon(fb, sF.partyIcon[p], x - 6 + p * 16, y + 84, FALSE, can ? 0 : RGB(4, 4, 6));
++    }
++}
++
++static void DrawHints(u16 *fb)
++{
++    static const char *const hints[PAGE_COUNT] = {
++        "A:TAKE OUT  SELECT:AUTO  L/R:PAGE  B:DONE",
++        "A:ADD  START:PP UP  SELECT:PP MAX  B:DONE",
++        "A:BUY  SELECT:CODE (+2)  L/R:PAGE  B:DONE",
++    };
++    Pkbn_FillRect(fb, 0, CH - 24, CW, 24, RGB(1, 2, 5));
++    if (sF.noteTimer)
++        Text(fb, 4, CH - 24, sF.note, RGB(31, 26, 6));
++    Text(fb, 4, CH - 13, hints[sF.page], RGB(16, 18, 24));
++}
++
++static void Draw(u16 *fb)
++{
++    s32 i;
++    for (i = 0; i < CW * CH; i++)
++        fb[i] = RGB(1, 2, 6);
++    for (i = 0; i < CH; i += 16)
++        Gfx_FillBlend(fb, 0, (i + (s32)(sF.t / 4)) % CH, CW, 1, RGB(4, 12, 18), 4);
++    DrawTabs(fb);
++    DrawList(fb);
++    DrawPanel(fb);
++    DrawHints(fb);
++}
++
++// ---- input -----------------------------------------------------------------------------------------------------
++
++static void Save(void)
++{
++    if (sF.edited)
++        PkbnFolderEdit_Set(sF.fMove, sF.fLetter, sF.fCount);
++}
++
++static void Leave(void)
++{
++    Save();
++    gPkbnCanvasOverlay = NULL;
++    SetMainCallback2(sF.exit);
++}
++
++static void TakeOut(void)
++{
++    u8 i = sF.cursor[PAGE_FOLDER];
++    if (sF.fCount == 0)
++        return;
++    for (; i + 1 < sF.fCount; i++)
++        sF.fMove[i] = sF.fMove[i + 1], sF.fLetter[i] = sF.fLetter[i + 1];
++    sF.fCount--;
++    sF.edited = TRUE;
++    PlaySE(SE_SELECT);
++}
++
++static void AddToFolder(u16 mv, u8 letter)
++{
++    if (sF.fCount >= sF.fMax)
++        Note("THE FOLDER IS FULL");
++    else if (InFolder(mv, letter) >= PkbnPack_Get(mv, letter))
++        Note("ALL YOUR COPIES ARE IN ALREADY");
++    else if (InFolder(mv, -1) >= Chip_CopyCap(mv))
++        Note("NO MORE COPIES OF THIS MOVE (MB LIMIT)");
++    else if (!PartyCanUse(mv))
++        Note("NOBODY IN THE PARTY CAN USE IT");
++    else
++    {
++        sF.fMove[sF.fCount] = mv;
++        sF.fLetter[sF.fCount] = letter;
++        sF.fCount++;
++        sF.edited = TRUE;
++        PlaySE(SE_SELECT);
++        Note("ADDED TO THE FOLDER");
++        return;
++    }
++    PlaySE(SE_FAILURE);
++}
++
++static void UsePP(bool8 max)
++{
++    u16 item = max ? ITEM_PP_MAX : ITEM_PP_UP, mv;
++    u8 letter, add;
++    if (sF.packCount == 0)
++        return;
++    RowChip(sF.cursor[PAGE_PACK], &mv, &letter);
++    if (!CheckBagHasItem(item, 1))
++    {
++        Note(max ? "NO PP MAX IN THE BAG" : "NO PP UP IN THE BAG");
++        PlaySE(SE_FAILURE);
++        return;
++    }
++    // PP Up: +1 copy of this chip. PP Max: copies of this move up to its folder cap (at least +1). design 08 §12
++    add = 1;
++    if (max && PkbnPack_Total(mv) < Chip_CopyCap(mv))
++        add = Chip_CopyCap(mv) - PkbnPack_Total(mv);
++    RemoveBagItem(item, 1);
++    PkbnPack_Add(mv, letter, add);
++    PlaySE(SE_USE_ITEM);
++    {
++        char nm[MOVE_NAME_LENGTH + 1], line[64];
++        MoveName(nm, sizeof(nm), mv);
++        snprintf(line, sizeof(line), "%s %c: +%u COP%s", nm, PkbnFolder_LetterChar(letter), add, add == 1 ? "Y" : "IES");
++        Note(line);
++    }
++}
++
++static void Buy(void)
++{
++    struct CandyRow *r;
++    u16 cost;
++    u8 type;
++    if (sF.candyCount == 0)
++        return;
++    r = &sF.candy[sF.cursor[PAGE_CANDY]];
++    cost = CandyCost(r->move, r->letter);
++    type = gBattleMoves[r->move].type;
++    if (PkbnCandy_Get(type) < cost)
++    {
++        Note("NOT ENOUGH CANDY");
++        PlaySE(SE_FAILURE);
++        return;
++    }
++    PkbnCandy_Add(type, -(s32)cost);
++    PkbnPack_Add(r->move, r->letter, 1);
++    BuildPack();
++    PlaySE(SE_SHOP);
++    {
++        char nm[MOVE_NAME_LENGTH + 1], line[64];
++        MoveName(nm, sizeof(nm), r->move);
++        snprintf(line, sizeof(line), "GOT %s %c FOR %u CANDY", nm, PkbnFolder_LetterChar(r->letter), cost);
++        Note(line);
++    }
++}
++
++static void CycleCode(void)
++{
++    struct CandyRow *r;
++    const struct PkbnMoveInfo *info;
++    s32 i;
++    if (sF.candyCount == 0)
++        return;
++    r = &sF.candy[sF.cursor[PAGE_CANDY]];
++    info = &gPkbnMoveInfo[r->move];
++    for (i = 0; i < info->laneCount && info->lanes[i] != r->letter; i++)
++        ;
++    r->letter = info->lanes[(i + 1) % (info->laneCount ? info->laneCount : 1)];
++    PlaySE(SE_SELECT);
++}
++
++static void HandleInput(u16 keys)
++{
++    u8 n = RowCount(), *cur = &sF.cursor[sF.page];
++    if (keys & DPAD_UP)
++        *cur = n ? (*cur + n - 1) % n : 0;
++    if (keys & DPAD_DOWN)
++        *cur = n ? (*cur + 1) % n : 0;
++    if (keys & DPAD_LEFT)
++        *cur = *cur >= LIST_ROWS ? *cur - LIST_ROWS : 0;
++    if (keys & DPAD_RIGHT)
++        *cur = n ? (*cur + LIST_ROWS < n ? *cur + LIST_ROWS : n - 1) : 0;
++    if (keys & (L_BUTTON | R_BUTTON))
++    {
++        sF.page = (sF.page + ((keys & R_BUTTON) ? 1 : PAGE_COUNT - 1)) % PAGE_COUNT;
++        PlaySE(SE_SELECT);
++        return;
++    }
++    if (keys & B_BUTTON)
++    {
++        PlaySE(SE_SELECT);
++        Leave();
++        return;
++    }
++    switch (sF.page)
++    {
++    case PAGE_FOLDER:
++        if (keys & A_BUTTON)
++            TakeOut();
++        if (keys & SELECT_BUTTON)
++        {
++            sF.edited = FALSE;
++            PkbnFolderEdit_Set(NULL, NULL, 0);
++            LoadFolder();
++            PlaySE(SE_SELECT);
++            Note("AUTO-BUILT FROM YOUR PACK");
++        }
++        break;
++    case PAGE_PACK:
++        if ((keys & A_BUTTON) && sF.packCount)
++            AddToFolder(sF.pack[*cur].move, sF.pack[*cur].letter);
++        if (keys & START_BUTTON)
++            UsePP(FALSE);
++        if (keys & SELECT_BUTTON)
++            UsePP(TRUE);
++        break;
++    case PAGE_CANDY:
++        if (keys & A_BUTTON)
++            Buy();
++        if (keys & SELECT_BUTTON)
++            CycleCode();
++        break;
++    }
++}
++
++// Self-tests drive the screen with PKBN_TEST_FOLDER_KEYS = "U,D,L,R,A,B,S(tart),E(select),<,>" one per 4 frames.
++static const char *sKeys;
++static u32 sKeyClock;
++
++static void CB2_Folder(void)
++{
++    u16 keys = gMain.newKeys;
++    sF.t++;
++    if (sF.noteTimer)
++        sF.noteTimer--;
++    if (sKeys != NULL)
++    {
++        keys = 0;
++        if (++sKeyClock % 4 == 0)
++        {
++            switch (*sKeys)
++            {
++            case 'U': keys = DPAD_UP; break;
++            case 'D': keys = DPAD_DOWN; break;
++            case 'L': keys = DPAD_LEFT; break;
++            case 'R': keys = DPAD_RIGHT; break;
++            case 'A': keys = A_BUTTON; break;
++            case 'B': keys = B_BUTTON; break;
++            case 'S': keys = START_BUTTON; break;
++            case 'E': keys = SELECT_BUTTON; break;
++            case '<': keys = L_BUTTON; break;
++            case '>': keys = R_BUTTON; break;
++            case '.': break;
++            }
++            if (*sKeys)
++                sKeys++;
++            if (*sKeys == ',')
++                sKeys++;
++        }
++    }
++    HandleInput(keys);
++}
++
++void PkbnFolderEdit_Open(MainCallback exitCallback)
++{
++    s32 i;
++    memset(&sF, 0, sizeof(sF));
++    sF.exit = exitCallback;
++    PkbnPack_SyncLearned();
++    sF.partyCount = PkbnFolder_PartyBattleMons(sF.party);
++    {
++        u8 mons = 0;
++        for (i = 0; i < sF.partyCount; i++)
++            if (sF.party[i].species)
++                mons++, Pkbn_DecodeMonIcon(sF.partyIcon[i], sF.party[i].species, GetMonData(&gPlayerParty[i], MON_DATA_PERSONALITY), 0);
++        sF.fMax = Chip_FolderSize(mons);
++    }
++    sF.edited = PkbnFolderEdit_Get(sF.fMove, sF.fLetter) > 0;
++    LoadFolder();
++    BuildPack();
++    BuildCandy();
++    sKeys = getenv("PKBN_TEST_FOLDER_KEYS");
++    sKeyClock = 0;
++    gPkbnCanvasOverlay = Draw;
++    SetMainCallback2(CB2_Folder);
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 17c3ce7..30eaf71 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -691,6 +691,114 @@ static void BlitIconCropped(u16 *fb, const u16 *icon, s32 x, s32 y, bool8 dim)
+         }
+ }
+ 
++// BN-style chip icon (POC-10c): the move's own effect, drawn once on a dark tile and shrunk 3:1 into 22x16.
++// Shared chips show this; only partner switch chips show a Pokémon (Khaled, 2026-10-05).
++#define CHIP_ICON_W 22
++#define CHIP_ICON_H 16
++static u16 sIconScratch[264 * 176];
++static struct { u16 move; u16 px[CHIP_ICON_W * CHIP_ICON_H]; } sIconCache[24];
++static u8 sIconNext;
++
++static const u16 *ChipIconPixels(u16 move)
++{
++    enum { AW = 122, AH = 56 };   // the big chip-art box: render there, then fit the drawn part into the icon
++    static u16 sMerged[AW * AH];
++    static const u8 sTimes[] = { 6, 12, 18, 26 };
++    s32 i, x, y, x0 = AW, y0 = AH, x1 = -1, y1 = -1;
++    u32 k, scale;
++    for (i = 0; i < (s32)ARRAY_COUNT(sIconCache); i++)
++        if (sIconCache[i].move == move && move != MOVE_NONE)
++            return sIconCache[i].px;
++    i = sIconNext;
++    sIconNext = (sIconNext + 1) % ARRAY_COUNT(sIconCache);
++    // several animation frames merged (brightest pixel wins) so short effects still show
++    memset(sMerged, 0, sizeof(sMerged));
++    for (k = 0; k < ARRAY_COUNT(sTimes); k++)
++    {
++        memset(sIconScratch, 0, sizeof(sIconScratch));
++        Gfx_ClipRect(0, 0, AW, AH);
++        Vfx_DrawChipArt(sIconScratch, AW / 2, 32, move, gPkbnMoveInfo[move].kind, gBattleMoves[move].type, sTimes[k]);
++        Gfx_ClipNone();
++        for (y = 0; y < AH; y++)
++            for (x = 0; x < AW; x++)
++            {
++                u16 c = sIconScratch[y * gPkbnFbW + x], *m = &sMerged[y * AW + x];
++                if ((c & 31) + ((c >> 5) & 31) + ((c >> 10) & 31) > (*m & 31) + ((*m >> 5) & 31) + ((*m >> 10) & 31))
++                    *m = c;
++            }
++    }
++    for (y = 0; y < AH; y++)
++        for (x = 0; x < AW; x++)
++            if (sMerged[y * AW + x])
++            {
++                if (x < x0) x0 = x;
++                if (x > x1) x1 = x;
++                if (y < y0) y0 = y;
++                if (y > y1) y1 = y;
++            }
++    if (x1 < 0)
++        x0 = 0, y0 = 0, x1 = AW - 1, y1 = AH - 1;
++    // fit the drawn box (8.8 fixed scale, at least 2:1 so icons stay crisp, at most the whole box)
++    scale = ((x1 - x0 + 1) << 8) / CHIP_ICON_W;
++    if ((((u32)(y1 - y0 + 1)) << 8) / CHIP_ICON_H > scale)
++        scale = (((u32)(y1 - y0 + 1)) << 8) / CHIP_ICON_H;
++    if (scale < (2 << 8))
++        scale = 2 << 8;
++    {
++        s32 cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
++        for (y = 0; y < CHIP_ICON_H; y++)
++            for (x = 0; x < CHIP_ICON_W; x++)
++            {
++                s32 sx0 = cx + (((x - CHIP_ICON_W / 2) * (s32)scale) >> 8), sy0 = cy + (((y - CHIP_ICON_H / 2) * (s32)scale) >> 8);
++                s32 n = (scale >> 8), dx, dy;
++                u32 r = 0, g = 0, b = 0, cnt = 0;
++                for (dy = 0; dy < n; dy++)
++                    for (dx = 0; dx < n; dx++)
++                    {
++                        s32 sx = sx0 + dx, sy = sy0 + dy;
++                        u16 c = (sx >= 0 && sx < AW && sy >= 0 && sy < AH) ? sMerged[sy * AW + sx] : 0;
++                        if (c)
++                            r += c & 31, g += (c >> 5) & 31, b += (c >> 10) & 31, cnt++;
++                    }
++                // a pixel is "art" when at least a third of its block is drawn
++                if (cnt * 3 >= (u32)(n * n))
++                    sIconCache[i].px[y * CHIP_ICON_W + x] = PKBN_RGB(r / cnt, g / cnt, b / cnt);
++                else
++                    sIconCache[i].px[y * CHIP_ICON_W + x] = 0;
++            }
++    }
++    sIconCache[i].move = move;
++    return sIconCache[i].px;
++}
++
++static void DrawChipIcon(u16 *fb, s32 x, s32 y, u16 move, bool8 dim)
++{
++    const u16 *px = ChipIconPixels(move);
++    s32 i, j;
++    for (j = 0; j < CHIP_ICON_H; j++)
++        for (i = 0; i < CHIP_ICON_W; i++)
++        {
++            u16 c = px[j * CHIP_ICON_W + i];
++            if (c == 0)
++                c = Gfx_Blend(Vfx_TypeColor(gBattleMoves[move].type), PKBN_RGB(1, 2, 5), 5 + (j * 6) / CHIP_ICON_H);
++            Pkbn_FillRect(fb, x + i, y + j, 1, 1, dim ? Gfx_Blend(c, COL_BLACK, 9) : c);
++        }
++}
++
++void PkbnDraw_ChipIcon(u16 *fb, s32 x, s32 y, u16 move, bool8 dim)
++{
++    DrawChipIcon(fb, x, y, move, dim);
++}
++
++// A chip's picture in a slot: partner switch chips show their Pokémon, everything else the move's icon.
++static void DrawChipFace(u16 *fb, const struct FolderChip *ch, s32 x, s32 y, bool8 dim)
++{
++    if (ch->owner != CHIP_SHARED)
++        BlitIconCropped(fb, sB.party[ch->owner].icon[0], x - 1, y - 2, dim);
++    else
++        DrawChipIcon(fb, x, y + 1, ch->move, dim);
++}
++
+ static void DrawSlotFrame(u16 *fb, s32 x, s32 y, s32 w, s32 h, u16 base, bool8 dim)
+ {
+     u16 top = dim ? Gfx_Blend(base, COL_BLACK, 10) : base;
+@@ -733,13 +841,19 @@ static void DrawChipArt(u16 *fb, u32 t)
+         const struct FolderChip *ch = &sB.folder.chips[sB.hand[cur]];
+         const struct PartyMember *pm = &sB.party[ChipUserSlot(ch)];
+         const struct PkbnMonPic *pic = (ChipUserSlot(ch) == sB.active) ? &sB.f[SIDE_PLAYER].pic : &pm->pic;
+-        struct PkbnImage img = Gfx_MonImage(pic, 0);
+         u8 type = gBattleMoves[ch->move].type;
+         DrawArtBackground(fb, Vfx_TypeColor(type), t);
+         Gfx_ClipRect(ART_X, ART_Y, ART_X + ART_W, ART_Y + ART_H);
+-        Gfx_Ellipse(fb, ART_X + 34, ART_Y + ART_H - 5, 16, 3, COL_BLACK, 8);
+-        Gfx_Draw(fb, &img, ART_X + 34, ART_Y + ART_H - 4, GFX_FLIPX, 0, 0);
+-        Vfx_DrawChipArt(fb, ART_X + 92, ART_Y + 32, ch->move, gPkbnMoveInfo[ch->move].kind, type, t);
++        if (ch->owner != CHIP_SHARED)
++        {
++            // partner switch chip: its Pokémon on the left, the move on the right
++            struct PkbnImage img = Gfx_MonImage(pic, 0);
++            Gfx_Ellipse(fb, ART_X + 34, ART_Y + ART_H - 5, 16, 3, COL_BLACK, 8);
++            Gfx_Draw(fb, &img, ART_X + 34, ART_Y + ART_H - 4, GFX_FLIPX, 0, 0);
++            Vfx_DrawChipArt(fb, ART_X + 92, ART_Y + 32, ch->move, gPkbnMoveInfo[ch->move].kind, type, t);
++        }
++        else
++            Vfx_DrawChipArt(fb, ART_X + ART_W / 2, ART_Y + 32, ch->move, gPkbnMoveInfo[ch->move].kind, type, t);
+         Gfx_ClipNone();
+         // the code letter, BN style, in the corner
+         snprintf(line, sizeof(line), "%c", PkbnFolder_LetterChar(ch->letter));
+@@ -837,7 +951,7 @@ static void DrawSlots(u16 *fb, u32 t)
+             u8 order = sB.picked[i] ? QueueOrder(sB.hand[i]) : 0;
+             DrawSlotFrame(fb, x, y, SLOT_W - 2, SLOT_H, Vfx_TypeColor(gBattleMoves[ch->move].type), !ok && !order);
+             if (!order)
+-                BlitIconCropped(fb, sB.party[ChipUserSlot(ch)].icon[0], x - 1, y - 2, !ok);
++                DrawChipFace(fb, ch, x, y, !ok);
+             snprintf(line, sizeof(line), "%c", PkbnFolder_LetterChar(ch->letter));
+             if (order)
+             {
+@@ -879,7 +993,7 @@ static void DrawSlots(u16 *fb, u32 t)
+                 }
+                 else
+                 {
+-                    BlitIconCropped(fb, sB.party[ChipUserSlot(ch)].icon[0], x - 1, y - 2, !ok2);
++                    DrawChipFace(fb, ch, x, y, !ok2);
+                     snprintf(line, sizeof(line), "%c", PkbnFolder_LetterChar(ch->letter));
+                     Pkbn_FillRect(fb, x + 6, y + SLOT_H - 9, 10, 8, RGB(1, 2, 5));
+                     Text(fb, x + 8, y + SLOT_H - 12, line, ok2 ? COL_CODE : COL_DIM);
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index 5bb5df0..24ebaf1 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -10,6 +10,8 @@
+ #include "pkbn/navicust.h"
+ #include "pkbn/chip_pack.h"
+ #include "pkbn/move_table.h"
++#include "party_menu.h"
++#include "constants/items.h"
+ 
+ #ifdef PORTABLE
+ #include <stdio.h>
+@@ -222,6 +224,88 @@ void PkbnPack_SyncLearned(void)
+                     GrantLearned(GetBoxMonDataAt(i, j, MON_DATA_MOVE1 + m));
+ }
+ 
++// The FOLDER screen's folder (0 chips = auto-build)
++u8 PkbnFolderEdit_Get(u16 *moves, u8 *letters)
++{
++    u8 n = sSave.folderCount > PKBN_FOLDER_SLOTS ? PKBN_FOLDER_SLOTS : sSave.folderCount;
++    memcpy(moves, sSave.folderMove, n * sizeof(u16));
++    memcpy(letters, sSave.folderLetter, n);
++    return n;
++}
++
++void PkbnFolderEdit_Set(const u16 *moves, const u8 *letters, u8 count)
++{
++    if (count > PKBN_FOLDER_SLOTS)
++        count = PKBN_FOLDER_SLOTS;
++    memset(sSave.folderMove, 0, sizeof(sSave.folderMove));
++    memset(sSave.folderLetter, 0, sizeof(sSave.folderLetter));
++    memcpy(sSave.folderMove, moves, count * sizeof(u16));
++    memcpy(sSave.folderLetter, letters, count);
++    sSave.folderCount = count;
++}
++
++// ---- Other chip sources (POC-10c, design 08 §12 / design 10 §10) ----------------------------------------------
++
++// TMs and HMs are chips (everyone who can learn the move can use it): each one bought or found gives 2 copies
++// (TUNE) with the move's first code. Hooked into the shop and the scripts' additem, not the PC item storage.
++void PkbnPack_GrantTM(u16 item, u16 count)
++{
++    u16 move;
++    if (item < ITEM_TM01 || item > ITEM_HM08)
++        return;
++    move = ItemIdToBattleMoveId(item);
++    if (!PkbnFolder_MoveIsChip(move))
++        return;
++    PkbnPack_Add(move, gPkbnMoveInfo[move].lanes[0], 2 * count);
++}
++
++// Move Relearner (a Heart Scale): +1 copy of the move, with a code you don't own yet for it when there is one.
++void PkbnPack_GrantRelearned(u16 move)
++{
++    const struct PkbnMoveInfo *info;
++    s32 i;
++    if (!PkbnFolder_MoveIsChip(move))
++        return;
++    info = &gPkbnMoveInfo[move];
++    for (i = 0; i < info->laneCount; i++)
++        if (PkbnPack_Get(move, info->lanes[i]) == 0)
++        {
++            PkbnPack_Add(move, info->lanes[i], 1);
++            return;
++        }
++    PkbnPack_Add(move, info->lanes[0], 1);
++}
++
++// Releasing a Pokémon: 1 candy of each of its types, +1 at level 30 or more (design 10 §10.1).
++void PkbnCandy_GrantRelease(struct BoxPokemon *mon)
++{
++    u16 species = GetBoxMonData(mon, MON_DATA_SPECIES);
++    u8 n;
++    if (species == SPECIES_NONE || species >= NUM_SPECIES || GetBoxMonData(mon, MON_DATA_IS_EGG))
++        return;
++    n = 1 + (GetLevelFromBoxMonExp(mon) >= 30 ? 1 : 0);
++    PkbnCandy_Add(gSpeciesInfo[species].types[0], n);
++    if (gSpeciesInfo[species].types[1] != gSpeciesInfo[species].types[0])
++        PkbnCandy_Add(gSpeciesInfo[species].types[1], n);
++}
++
++// A hatched Pokémon brings its egg moves as chips: +1 copy of each egg move it knows (design 10 §8).
++extern const u16 gEggMoves[];
++void PkbnPack_GrantEggMoves(struct Pokemon *mon)
++{
++    u16 species = GetMonData(mon, MON_DATA_SPECIES);
++    s32 i, m;
++    for (i = 0; gEggMoves[i] != 0xFFFF; i++)
++        if (gEggMoves[i] == species + 20000)   // EGG_MOVES_SPECIES_OFFSET (src/data/pokemon/egg_moves.h)
++            break;
++    if (gEggMoves[i] == 0xFFFF)
++        return;
++    for (i++; gEggMoves[i] != 0xFFFF && gEggMoves[i] < 20000; i++)
++        for (m = 0; m < MAX_MON_MOVES; m++)
++            if (GetMonData(mon, MON_DATA_MOVE1 + m) == gEggMoves[i] && PkbnFolder_MoveIsChip(gEggMoves[i]))
++                PkbnPack_Add(gEggMoves[i], gPkbnMoveInfo[gEggMoves[i]].lanes[0], 1);
++}
++
+ u16 PkbnCandy_Get(u8 type)
+ {
+     return type < NUMBER_OF_MON_TYPES ? sSave.candy[type] : 0;
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index c94fd40..cd6f3a2 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -39,6 +39,7 @@
+ #include "pkbn/battle_stub.h"
+ #include "pkbn/render.h"
+ #include "pkbn/chip_pack.h"
++#include "constants/items.h"
+ #include "pkbn/grid_battle.h"
+ 
+ #ifdef PORTABLE
+@@ -60,6 +61,7 @@ enum
+     PB_EVO_NEXT,
+     PB_EXIT,
+     PB_CANDY,         // type candy from a catch (POC-10, design 10 §10.1)
++    PB_BONUS,         // Pokédex milestone, shiny chips
+     PB_BUSTING,       // Busting Level + reward (POC-10b, design 09)
+     PB_CAPTURE,       // Capture Grade + reward (POC-10b, design 10 §1)
+     PB_CLEAR_GRADE_EXP,
+@@ -81,6 +83,7 @@ struct PostBattle
+     u8 nick[POKEMON_NAME_LENGTH + 1];
+     bool8 autopilot;
+     char candyMsg[64];
++    char bonusMsg[128];      // Pokédex milestone / shiny chips (POC-10c)
+     char bigGrade[4];        // shown big while the Busting Level / Capture Grade text is up
+     bool8 bigCapture;
+ };
+@@ -91,6 +94,7 @@ static struct PostBattle sPB;
+ 
+ static void CB2_PkbnPostBattle(void);
+ static void GrantCatchCandy(u16 species, bool8 first);
++static void CatchBonuses(struct Pokemon *mon, bool8 first);
+ 
+ // ---- text ----------------------------------------------------------------------------------------
+ 
+@@ -333,10 +337,12 @@ static void StepStart(void)
+         {
+             GrantCatchCandy(species, TRUE);
+             HandleSetPokedexFlag(SpeciesToNationalPokedexNum(species), FLAG_SET_CAUGHT, GetMonData(mon, MON_DATA_PERSONALITY));
++            CatchBonuses(mon, TRUE);
+             Say(PB_CANDY, "%s'S DATA WAS ADDED TO THE POKEDEX.", name); // sText_PkmnDataAddedToDex
+             return;
+         }
+         GrantCatchCandy(species, FALSE);
++        CatchBonuses(mon, FALSE);
+         sPB.step = PB_CANDY;
+         return;
+     }
+@@ -368,6 +374,35 @@ static void GrantCatchCandy(u16 species, bool8 first)
+     PKBN_LOG("candy: %s (first catch %d, catch rate %u)", sPB.candyMsg, first, si->catchRate);
+ }
+ 
++// Pokédex milestones (design 10 §3): every 10 species caught a PP UP, every 50 a PP MAX. Shiny catches give a
++// `*` copy of every move it knew (design 10 §9).
++static void CatchBonuses(struct Pokemon *mon, bool8 first)
++{
++    sPB.bonusMsg[0] = '\0';
++    if (first)
++    {
++        u16 caught = GetNationalPokedexCount(FLAG_GET_CAUGHT);
++        if (caught && caught % 50 == 0 && AddBagItem(ITEM_PP_MAX, 1))
++            snprintf(sPB.bonusMsg, sizeof(sPB.bonusMsg), "%u SPECIES CAUGHT! GOT A PP MAX. ", caught);
++        else if (caught && caught % 10 == 0 && AddBagItem(ITEM_PP_UP, 1))
++            snprintf(sPB.bonusMsg, sizeof(sPB.bonusMsg), "%u SPECIES CAUGHT! GOT A PP UP. ", caught);
++    }
++    if (IsMonShiny(mon))
++    {
++        s32 m, n = 0;
++        for (m = 0; m < MAX_MON_MOVES; m++)
++        {
++            u16 mv = GetMonData(mon, MON_DATA_MOVE1 + m);
++            if (PkbnFolder_MoveIsChip(mv))
++                PkbnPack_Add(mv, LETTER_WILD, 1), n++;
++        }
++        snprintf(sPB.bonusMsg + strlen(sPB.bonusMsg), sizeof(sPB.bonusMsg) - strlen(sPB.bonusMsg),
++                 "IT'S SHINY! GOT %d * CHIPS OF ITS MOVES!", (int)n);
++    }
++    if (sPB.bonusMsg[0])
++        PKBN_LOG("catch bonus: %s", sPB.bonusMsg);
++}
++
+ static void StepGiveCaught(void)
+ {
+     struct Pokemon *mon = &gEnemyParty[sB.enemySlot];
+@@ -527,7 +562,10 @@ static void CB2_PkbnPostBattle(void)
+             sPB.step = sPB.next;
+         break;
+     case PB_CANDY:
+-        Say(PB_CAPTURE, "%s", sPB.candyMsg);
++        Say(sPB.bonusMsg[0] ? PB_BONUS : PB_CAPTURE, "%s", sPB.candyMsg);
++        break;
++    case PB_BONUS:
++        Say(PB_CAPTURE, "%s", sPB.bonusMsg);
+         break;
+     case PB_CLEAR_GRADE_EXP:
+     case PB_CLEAR_GRADE_NICK:
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index bf5c53c..64e0fac 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -21,6 +21,7 @@
+ #include "pkbn/render.h"
+ #include "pkbn/navicust.h"
+ #include "pkbn/chip_pack.h"
++#include "party_menu.h"
+ #include "pkbn/move_table.h"
+ 
+ #ifdef PORTABLE
+@@ -236,6 +237,12 @@ static void SeedTestPack(void)
+                     PkbnPack_Add(mv, info->lanes[k % info->laneCount], 1);
+                 PkbnPack_SetGranted(mv);
+             }
++    if ((t = getenv("PKBN_TEST_GRANT_TM")) != NULL)
++    {
++        u16 item = (u16)atoi(t), mv = ItemIdToBattleMoveId(item);
++        PkbnPack_GrantTM(item, 1);
++        printf("[pkbn-selftest] TM item %u -> move %u, pack copies now %u\n", item, mv, PkbnPack_Total(mv));
++    }
+     if ((t = getenv("PKBN_TEST_PACK")) != NULL)
+         while (*t)
+         {
+@@ -498,6 +505,36 @@ void Pkbn_SelfTestMaybeStart(void)
+         }
+     }
+     printf("[pkbn-selftest] started\n");
++    // PKBN_TEST_CANDY="type:n,..." and PKBN_TEST_ITEMS="item:n,..." (bag) for the FOLDER screen tests
++    {
++        const char *t;
++        if ((t = getenv("PKBN_TEST_CANDY")) != NULL)
++            while (*t)
++            {
++                u8 type = (u8)strtol(t, (char **)&t, 10);
++                u16 n = (*t == ':') ? (u16)strtol(t + 1, (char **)&t, 10) : 1;
++                PkbnCandy_Add(type, n);
++                while (*t == ',')
++                    t++;
++            }
++        if ((t = getenv("PKBN_TEST_ITEMS")) != NULL)
++            while (*t)
++            {
++                u16 item = (u16)strtol(t, (char **)&t, 10);
++                u16 n = (*t == ':') ? (u16)strtol(t + 1, (char **)&t, 10) : 1;
++                AddBagItem(item, n);
++                while (*t == ',')
++                    t++;
++            }
++    }
++    if (getenv("PKBN_TEST_FOLDER_KEYS") != NULL)
++    {
++        // open the FOLDER screen first, drive it with the scripted keys, then fight
++        PkbnFolderEdit_Open(CB2_SelfTestEditorDone);
++        sInnerOverlay = gPkbnCanvasOverlay;
++        gPkbnCanvasOverlay = WrappedEditorOverlay;
++        return;
++    }
+     if (getenv("PKBN_TEST_NCP_KEYS") != NULL)
+     {
+         // open the NaviCust editor on party slot 0 first, drive it with the scripted keys, then fight
+diff --git a/src/pokemon_storage_system.c b/src/pokemon_storage_system.c
+index 316d7a4..6d2be45 100644
+--- a/src/pokemon_storage_system.c
++++ b/src/pokemon_storage_system.c
+@@ -1,4 +1,7 @@
+ #include "global.h"
++#ifdef PORTABLE
++#include "pkbn/chip_pack.h"
++#endif
+ #include "malloc.h"
+ #include "bg.h"
+ #include "data.h"
+@@ -6482,6 +6485,15 @@ static void ReleaseMon(void)
+     u8 boxId;
+ 
+     DestroyReleaseMonIcon();
++#ifdef PORTABLE
++    // pkbn: releasing gives type candy (design 10 §10.1)
++    if (sIsMonBeingMoved)
++        PkbnCandy_GrantRelease(&sStorage->movingMon.box);
++    else if (sCursorArea == CURSOR_AREA_IN_PARTY)
++        PkbnCandy_GrantRelease(&gPlayerParty[sCursorPosition].box);
++    else
++        PkbnCandy_GrantRelease(GetBoxedMonPtr(StorageGetCurrentBox(), sCursorPosition));
++#endif
+     if (sIsMonBeingMoved)
+     {
+         sIsMonBeingMoved = FALSE;
+diff --git a/src/scrcmd.c b/src/scrcmd.c
+index 6a91453..d3400ed 100644
+--- a/src/scrcmd.c
++++ b/src/scrcmd.c
+@@ -1,4 +1,7 @@
+ #include "global.h"
++#ifdef PORTABLE
++#include "pkbn/chip_pack.h"
++#endif
+ #include "frontier_util.h"
+ #include "battle_setup.h"
+ #include "berry.h"
+@@ -495,6 +498,10 @@ bool8 ScrCmd_additem(struct ScriptContext *ctx)
+     u32 quantity = VarGet(ScriptReadHalfword(ctx));
+ 
+     gSpecialVar_Result = AddBagItem(itemId, (u8)quantity);
++#ifdef PORTABLE
++    if (gSpecialVar_Result)
++        PkbnPack_GrantTM(itemId, (u8)quantity); // pkbn: found or given TMs are chips too
++#endif
+     return FALSE;
+ }
+ 
+diff --git a/src/shop.c b/src/shop.c
+index 61642da..5549de0 100644
+--- a/src/shop.c
++++ b/src/shop.c
+@@ -1,4 +1,7 @@
+ #include "global.h"
++#ifdef PORTABLE
++#include "pkbn/chip_pack.h"
++#endif
+ #include "bg.h"
+ #include "data.h"
+ #include "decompress.h"
+@@ -1098,6 +1101,9 @@ static void BuyMenuTryMakePurchase(u8 taskId)
+     {
+         if (AddBagItem(tItemId, tItemCount) == TRUE)
+         {
++#ifdef PORTABLE
++            PkbnPack_GrantTM(tItemId, tItemCount); // pkbn: a TM is a chip (design 08 §12)
++#endif
+             BuyMenuDisplayMessage(taskId, gText_HereYouGoThankYou, BuyMenuSubtractMoney);
+             RecordItemPurchase(taskId);
+         }
+diff --git a/src/start_menu.c b/src/start_menu.c
+index bf25b07..fd92ab2 100644
+--- a/src/start_menu.c
++++ b/src/start_menu.c
+@@ -1,4 +1,7 @@
+ #include "global.h"
++#ifdef PORTABLE
++#include "pkbn/chip_pack.h"
++#endif
+ #include "battle_pike.h"
+ #include "battle_pyramid.h"
+ #include "battle_pyramid_bag.h"
+@@ -62,6 +65,9 @@ enum
+     MENU_ACTION_PLAYER_LINK,
+     MENU_ACTION_REST_FRONTIER,
+     MENU_ACTION_RETIRE_FRONTIER,
++#ifdef PORTABLE
++    MENU_ACTION_FOLDER,          // pkbn (POC-10c): the chip folder
++#endif
+     MENU_ACTION_PYRAMID_BAG
+ };
+ 
+@@ -93,6 +99,9 @@ EWRAM_DATA static u8 sSaveInfoWindowId = 0;
+ // Menu action callbacks
+ static bool8 StartMenuPokedexCallback(void);
+ static bool8 StartMenuPokemonCallback(void);
++#ifdef PORTABLE
++static bool8 StartMenuFolderCallback(void);
++#endif
+ static bool8 StartMenuBagCallback(void);
+ static bool8 StartMenuPokeNavCallback(void);
+ static bool8 StartMenuPlayerNameCallback(void);
+@@ -193,6 +202,9 @@ static const struct MenuAction sStartMenuItems[] =
+     [MENU_ACTION_PLAYER_LINK]     = {gText_MenuPlayer,  {.u8_void = StartMenuLinkModePlayerNameCallback}},
+     [MENU_ACTION_REST_FRONTIER]   = {gText_MenuRest,    {.u8_void = StartMenuSaveCallback}},
+     [MENU_ACTION_RETIRE_FRONTIER] = {gText_MenuRetire,  {.u8_void = StartMenuBattlePyramidRetireCallback}},
++#ifdef PORTABLE
++    [MENU_ACTION_FOLDER]          = {gText_PkbnFolder,  {.u8_void = StartMenuFolderCallback}},
++#endif
+     [MENU_ACTION_PYRAMID_BAG]     = {gText_MenuBag,     {.u8_void = StartMenuBattlePyramidBagCallback}}
+ };
+ 
+@@ -321,6 +333,9 @@ static void BuildNormalStartMenu(void)
+     if (FlagGet(FLAG_SYS_POKEMON_GET) == TRUE)
+     {
+         AddStartMenuAction(MENU_ACTION_POKEMON);
++#ifdef PORTABLE
++        AddStartMenuAction(MENU_ACTION_FOLDER);
++#endif
+     }
+ 
+     AddStartMenuAction(MENU_ACTION_BAG);
+@@ -667,6 +682,21 @@ static bool8 StartMenuPokemonCallback(void)
+     return FALSE;
+ }
+ 
++#ifdef PORTABLE
++static bool8 StartMenuFolderCallback(void)
++{
++    if (!gPaletteFade.active)
++    {
++        PlayRainStoppingSoundEffect();
++        RemoveExtraStartMenuWindows();
++        CleanupOverworldWindowsAndTilemaps();
++        PkbnFolderEdit_Open(CB2_ReturnToFieldWithOpenMenu);
++        return TRUE;
++    }
++    return FALSE;
++}
++#endif
++
+ static bool8 StartMenuBagCallback(void)
+ {
+     if (!gPaletteFade.active)
+diff --git a/src/strings.c b/src/strings.c
+index acd757a..171a880 100644
+--- a/src/strings.c
++++ b/src/strings.c
+@@ -366,6 +366,7 @@ const u8 gText_SendOut[] = _("SEND OUT");
+ const u8 gText_Switch2[] = _("SWITCH");
+ const u8 gText_Summary5[] = _("SUMMARY");
+ const u8 gText_PkbnNaviCust[] = _("NAVICUST");
++const u8 gText_PkbnFolder[] = _("FOLDER");
+ const u8 gText_Moves[] = _("MOVES"); // Unused
+ const u8 gText_Enter[] = _("ENTER");
+ const u8 gText_NoEntry[] = _("NO ENTRY");
+-- 
+2.43.0
+

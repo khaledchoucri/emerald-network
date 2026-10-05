@@ -3,6 +3,7 @@
 **Patches:** on top of 0001–0011.
 - `poc/patches/0012-POC-10a-shared-chip-folder-chip-pack-type-candy.patch`
 - `poc/patches/0013-POC-10b-Busting-Level-Capture-Grade-rewards.patch`
+- `poc/patches/0014-POC-10c-FOLDER-screen-candy-shop-chip-sources.patch`
 
 **Design:**
 - `docs/design/08-folder-memory.md` §11–12
@@ -72,15 +73,42 @@
 
   Lower grades give extra candy instead, and S gives +2 candy.
 
-## Not in yet (next: POC-10c)
+## 10c — FOLDER screen, candy shop, more chip sources
 
-- A **FOLDER** screen to edit the folder and see the pack and candy.
-- **Spending candy:** the candy shop with level gating.
-- **Other chip sources:** PP Up / PP Max on chips, TMs as chips, Heart Scale at the Move Relearner, Mart chip shelves.
-- **Smaller pieces:** candy for releasing, Pokédex milestones, egg moves, shiny `*` copies.
-- **Choosing a code:** "Your choice" for Ultra and Master Balls auto-picks the code you own most of, until there's a
-  picker.
+- **Chip pictures:** on the Custom screen chips show a BN-style **icon of the move**: its effect, shrunk onto a
+  type-coloured tile. Only partner switch chips will show a Pokémon (Khaled's note). The big chip-art box shows the
+  move alone.
+- **START menu → FOLDER** (`src/pkbn/folder_ui.c`). The start menu window moves up one row so 9 entries fit.
+
+  | page | what you can do |
+  |---|---|
+  | FOLDER | the chips battles draw from. A takes one out; SELECT goes back to auto-build. The folder is saved in `pkbn.sav`. |
+  | PACK | everything you own, with in-folder / owned counts. A puts a copy in (checks the folder size, copies owned, MB cap, and that someone can use it). START uses a **PP UP**: +1 copy of that chip. SELECT uses a **PP MAX**: copies of that move up to its cap. |
+  | CANDY | the candy shop. Moves of a type become buyable once a Pokémon you own (party or PC) has reached them by level-up, and is at least the move's MB in level. Price MB/4, rounded up; +2 to pick another code (SELECT cycles it). Types you have candy for are listed first. |
+
+  The right-hand panel shows the chip icon, code, type, power, MB, cap, owned / in folder, and which party members
+  can use it (their icons, as information).
+- **More chip sources:**
+
+  | source | gives |
+  |---|---|
+  | **TMs / HMs** | 2 copies each, when bought (`shop.c`) or found / given (`scrcmd.c` additem). Taking one out of the PC item storage gives nothing. |
+  | **Move Relearner** (Heart Scale) | +1 copy in a code you don't own yet for that move (`move_relearner.c`) |
+  | **Releasing** | 1 candy of each type, +1 at level 30 or above (`pokemon_storage_system.c`) |
+  | **Hatching** | +1 copy of each egg move the hatchling knows (`egg_hatch.c`) |
+  | **Pokédex milestones** | a PP UP every 10 species caught, a PP MAX every 50 |
+  | **Shiny catch** | a `*` copy of every move it knew |
+
+## Not in yet
+
+- **Mart chip shelves.** For now the Lilycove TM shelves act as the chip shop, since TMs are chips.
+- **A code picker** for Ultra / Master Ball rewards (they take the code you own most of).
 - **Story partner chips.**
+- **Unverified at runtime** (built, and each hook is a few lines):
+  - the START menu entry in the overworld;
+  - the hooks for TMs from scripts, the relearner, releasing, hatching, milestones and shiny catches.
+
+  The FOLDER screen itself and the TM grant are tested through the self-test path.
 
 ## Tests
 
@@ -103,6 +131,15 @@
 The busting levels in the bot tests run high (S/9/10), because the bots never move and rarely get hit. Real play will
 show lower levels, so the numbers are TUNE.
 
+**FOLDER screen test** (key script):
+- open FOLDER;
+- PACK: PP UP on Ember, so 4 → 5 copies;
+- CANDY: cycle Ember's code to O, buy it for 5 Fire candy;
+- FOLDER: take a chip out;
+- leave.
+
+The battle then uses the edited folder (21 chips).
+
 **Self-test switches:**
 
 | switch | what it does |
@@ -111,3 +148,7 @@ show lower levels, so the numbers are TUNE.
 | `PKBN_TEST_PACK="move:L:n,..."` | add copies to the pack |
 | `PKBN_TEST_SIDECAR_READ=<navi id>` | load `pkbn.sav` from the working directory and report what came back |
 | `PKBN_BUST_CLOCK=seconds` | score time by BN6's seconds instead of turns |
+| `PKBN_TEST_FOLDER_KEYS` | key script for the FOLDER screen |
+| `PKBN_TEST_CANDY="type:n"` | add candy |
+| `PKBN_TEST_ITEMS="item:n"` | add bag items |
+| `PKBN_TEST_GRANT_TM=item` | run the TM grant |
