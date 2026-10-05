@@ -4,6 +4,7 @@
 - `poc/patches/0012-POC-10a-shared-chip-folder-chip-pack-type-candy.patch`
 - `poc/patches/0013-POC-10b-Busting-Level-Capture-Grade-rewards.patch`
 - `poc/patches/0014-POC-10c-FOLDER-screen-candy-shop-chip-sources.patch`
+- `poc/patches/0015-POC-10d-FOLDER-screen-fixes.patch`
 
 **Design:**
 - `docs/design/08-folder-memory.md` §11–12
@@ -99,7 +100,16 @@
   | **Pokédex milestones** | a PP UP every 10 species caught, a PP MAX every 50 |
   | **Shiny catch** | a `*` copy of every move it knew |
 
-## Not in yet
+## 10d — fixes from play-testing (2026-10-05)
+
+- **Copy limit visible.** Every page has a LIMIT column: that move's copies in the folder against its MB limit, e.g.
+  `3/4`, orange when full. The panel says `LIMIT 4 (MB 26)`. Adding past the limit explains why.
+- **Folder page grouped.** One row per chip (move + code) with a quantity (`EMBER S x3`), sorted by type.
+- **Candy unlock rule fixed.** A move unlocks at the level the Pokémon learns it.
+  - Only an **evolved form's level-1 moves** (Raichu's Thunderbolt) still need the move's MB in level.
+  - The old rule (always the MB in level) hid Water Gun from a level-5 Wingull.
+  - Moves your Pokémon will learn later are listed greyed with "LVn" and which Pokémon learns them.
+
 
 - **Mart chip shelves.** For now the Lilycove TM shelves act as the chip shop, since TMs are chips.
 - **A code picker** for Ultra / Master Ball rewards (they take the code you own most of).

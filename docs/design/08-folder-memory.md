@@ -512,7 +512,7 @@ The items and NPCs below already exist in Emerald. PP is gone (§11), so the PP 
 | **Move Relearner** (Fallarbor) | 1 Heart Scale → 1 copy of **any level-up move a party member can learn**, **code of your choice** from its lanes | choice + code | Already takes a Heart Scale (`FallarborTown_MoveRelearnersHouse/scripts.inc:15,38`). Heart Scales are Luvdisc's held item (`species_info.h:9076`) |
 | **Busting drops** (design 09) | a copy of one of the **wild Pokémon's own moves** | volume, but targeted: hunt Slugma for Ember | new |
 | **Mart chip shelves** | fixed (move, code) stock per town, 60 × MB ₽ | choice | new shelf in each Poké Mart |
-| **Mastery** (optional) | every 10 uses of a move in battle → +1 copy, random lane code | volume, earned by playing | new counter in `pkbn.sav` |
+| ~~Mastery~~ (dropped 2026-10-05) | every 10 uses of a move in battle → +1 copy, random lane code | volume, earned by playing | new counter in `pkbn.sav` |
 | **Chip Trader** (later) | 3 copies → 1 random copy | turns spares into something | new |
 
 ### 12.1 Is that enough? (rough maths, TUNE)
@@ -529,7 +529,7 @@ of the game reshaping it.
     hour**. That fills a 30-chip folder in 2–3 hours of play, which is roughly Mauville.
 - **Choice sources** (PP Up, TMs, Heart Scales, shelves) are fewer: maybe 20–30 over the whole game. That's the right
   rarity for "make my folder *this* folder".
-- **Mastery:** a heavily used move gets about +1 copy per 3–4 battles at 2–3 uses per battle. Self-correcting: the
+- ~~**Mastery:**~~ (dropped; candy, design 10 §10.1, fills this role) a heavily used move gets about +1 copy per 3–4 battles at 2–3 uses per battle. Self-correcting: the
   moves you actually use get copies.
 
 ### 12.2 Code choice
