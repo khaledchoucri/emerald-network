@@ -1,0 +1,2792 @@
+From 4d1e802f8729bc56bd571a09d57889e9141d8bef Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Mon, 5 Oct 2026 12:19:34 +0300
+Subject: [PATCH] POC-9: NaviCust for every Pokemon (5x4 board, 48 programs,
+ bugs, pkbn.sav sidecar)
+
+Every Pokemon gets its own BN6-style NaviCust: the ability is a built-in
+program, program colours are types (own types never bug), Pokeblock
+conditions compress programs, active Pokerus softens bugs. Programs and
+bugs act in grid battles. Layouts live in pkbn.sav, keyed by a Navi ID in
+BoxPokemon.unknown. Also fixes POC-7 trainer prize money (loop variable
+reuse: Roxanne pays 1500).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/folder.h        |   3 +-
+ include/pkbn/grid_internal.h |  18 +-
+ include/pkbn/navicust.h      | 108 ++++++
+ include/pkbn/ncp_table.h     |  68 ++++
+ include/strings.h            |   1 +
+ src/data/party_menu.h        |   3 +
+ src/new_game.c               |   6 +
+ src/party_menu.c             |  35 +-
+ src/pkbn/grid_battle.c       |  84 ++++-
+ src/pkbn/grid_draw.c         |  63 +++-
+ src/pkbn/grid_field.c        |  79 ++++-
+ src/pkbn/grid_moves.c        |  97 +++++-
+ src/pkbn/navicust.c          | 394 ++++++++++++++++++++++
+ src/pkbn/navicust_ui.c       | 624 +++++++++++++++++++++++++++++++++++
+ src/pkbn/ncp_table.c         | 241 ++++++++++++++
+ src/pkbn/pkbn_save.c         | 151 +++++++++
+ src/pkbn/post_battle.c       |  16 +-
+ src/pkbn/render.c            |   6 +
+ src/pkbn/selftest.c          | 177 +++++++++-
+ src/save.c                   |   8 +
+ src/strings.c                |   1 +
+ 21 files changed, 2138 insertions(+), 45 deletions(-)
+ create mode 100644 include/pkbn/navicust.h
+ create mode 100644 include/pkbn/ncp_table.h
+ create mode 100644 src/pkbn/navicust.c
+ create mode 100644 src/pkbn/navicust_ui.c
+ create mode 100644 src/pkbn/ncp_table.c
+ create mode 100644 src/pkbn/pkbn_save.c
+
+diff --git a/include/pkbn/folder.h b/include/pkbn/folder.h
+index 9b582cc..a6e36e8 100644
+--- a/include/pkbn/folder.h
++++ b/include/pkbn/folder.h
+@@ -16,7 +16,8 @@
+ //    (our change: BN never reshuffles, but early-game folders are tiny).
+ 
+ #define FOLDER_MAX 30
+-#define HAND_SIZE 5
++#define HAND_SIZE 5   // BN's base hand
++#define HAND_MAX 8    // with Custom programs (BN6 caps the Custom level at 8)
+ #define PKBN_PARTY_MAX 6
+ #define LETTER_WILD 26
+ 
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index aadbb5c..c5db9c4 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -21,6 +21,7 @@
+ #include "pkbn/folder.h"
+ #include "pkbn/move_table.h"
+ #include "pkbn/gfx.h"
++#include "pkbn/navicust.h"
+ 
+ #define PKBN_LOG(...) do { printf("[pkbn f%u] ", (unsigned)sB.frame); printf(__VA_ARGS__); printf("\n"); fflush(stdout); } while (0)
+ 
+@@ -124,6 +125,12 @@ struct Fighter
+     u16 icon[2][32 * 32];
+     struct PkbnMonPic pic;
+     char name[POKEMON_NAME_LENGTH + 1];
++    // NaviCust (POC-9): the compiled programs of whoever is in, and its bug timers
++    struct PkbnNaviStats navi;
++    u8 busterShots;      // shots since the last charged one (Charge level)
++    u16 bugHpTimer;      // HP bug drain
++    u16 bugMoveTimer;    // move bug random step
++    u16 bugStatusTimer;  // status bug: frames until the battle-start status wears off
+ };
+ 
+ struct PartyMember
+@@ -133,6 +140,9 @@ struct PartyMember
+     struct PkbnMonPic pic;
+     char name[POKEMON_NAME_LENGTH + 1];
+     bool8 participated;
++    struct PkbnNaviStats navi;   // its NaviCust, compiled at battle start (POC-9)
++    u16 hpBonus;                 // HP+ programs: extra max HP for this battle (taken off again at the end)
++    bool8 enteredOnce;           // FirstBarrier / status bug apply on its first entry only
+ };
+ 
+ // An attack in flight / winding up / ticking.
+@@ -177,12 +187,13 @@ struct GridBattle
+     u8 partyCount;
+     u8 active;
+     struct Folder folder;
+-    u8 hand[HAND_SIZE];
++    u8 hand[HAND_MAX];
+     u8 handCount;
+-    bool8 picked[HAND_SIZE];
++    u8 handSize;               // this Custom's hand: 5 + Custom programs - custom bug (POC-9)
++    bool8 picked[HAND_MAX];
+     bool8 wildPicked;          // the always-available wildcard Switch slot
+     u8 cursor;                 // 0..handCount-1 = hand, handCount = wildcard slot
+-    u8 queue[HAND_SIZE + 1];   // folder chip indices; QUEUE_WILD = the wildcard slot
++    u8 queue[HAND_MAX + 1];   // folder chip indices; QUEUE_WILD = the wildcard slot
+     u8 queueCount;
+     u16 gauge, gaugeSub;
+     u16 turnClock;
+@@ -299,6 +310,7 @@ u8 Field_ApplyStatStage(u8 side, u8 stat, s8 delta, bool8 fromFoe);
+ void Field_ResetFighterConditions(struct Fighter *f);
+ void Field_PushBack(u8 side, u8 panels);
+ const char *Field_StatName(u8 stat);
++void Field_NaviStatusBug(u8 side);
+ 
+ // grid_catch.c
+ u16 Catch_NextBall(u16 from, s8 dir);
+diff --git a/include/pkbn/navicust.h b/include/pkbn/navicust.h
+new file mode 100644
+index 0000000..d0334d4
+--- /dev/null
++++ b/include/pkbn/navicust.h
+@@ -0,0 +1,108 @@
++#ifndef GUARD_PKBN_NAVICUST_H
++#define GUARD_PKBN_NAVICUST_H
++
++// NaviCust for every Pokémon (POC-9). docs/design/07-navicust.md.
++//
++// Board: BN6's middle board, 5 wide x 4 tall (byte_813B2CD, bn6f data/dat36.s:1340), the command line is its 3rd row
++// (row y=3 of BN6's 7x7 space, asm/asm37_0.s:732) and an overhang frame rings it (cells there cause a bug,
++// asm/asm37_0.s:1890). Programs: src/pkbn/ncp_table.c (tools/navicust_curated.py).
++//
++// Storage: each Pokémon carries a "Navi ID" in BoxPokemon.unknown (MON_DATA_ENCRYPT_SEPARATOR: unencrypted and
++// outside the checksum, src/pokemon.c:2790/3827); its layout lives in the sidecar save pkbn.sav (src/pkbn/pkbn_save.c).
++#include "global.h"
++#include "main.h"
++#include "pkbn/ncp_table.h"
++
++#define NAVI_W        5
++#define NAVI_H        4
++#define NAVI_CMD_ROW  2       // the command line
++#define NAVI_MAX_PARTS 20
++#define NAVI_MAX      600     // layouts kept in pkbn.sav (party + 14 boxes x 30 = 426, plus room)
++#define NAVI_BUG_TYPES 13     // BN6 bug types 1..12 (index 0 unused)
++#define NCP_COMPRESS_AT 80    // TUNE: a condition this high (Pokéblocks) compresses the matching programs
++#define NCP_OWNED_TEST  9     // "everything unlocked for now": 9 of each (BN6's max per program, asm/asm03_1_1.s:8326)
++
++struct PkbnNaviPart
++{
++    u8 prog;      // index into gPkbnNcps
++    u8 type;      // colour variant (TYPE_*)
++    s8 x, y;      // board cell of the shape's top-left corner (can be -1 / past the edge: the overhang frame)
++    u8 rot;       // 0-3 quarter turns clockwise
++};
++
++struct PkbnNavi
++{
++    u16 id;       // 0 = free slot
++    u8 count;
++    u8 pad;
++    struct PkbnNaviPart parts[NAVI_MAX_PARTS];
++};
++
++// What a layout compiles to (BN6's "RUN"): the abilities a battle uses.
++struct PkbnNaviStats
++{
++    u8 flags;                 // NCPF_*
++    bool8 firstBarrier;
++    bool8 bugStop;
++    u8 hand;                  // extra chips in the Custom hand (0-3)
++    u8 busterAtk, busterSpeed, busterCharge;   // BN6 levels 1-5 (base 1)
++    u8 hpPct;                 // max HP bonus in battle, %
++    u8 statPct[NUM_BATTLE_STATS];
++    u8 typePct[NUMBER_OF_MON_TYPES];
++    u8 quickClaw, kingsRock, scopeLens, brightPowder, leftovers, shellBell, focusBand, choiceBand;
++    u8 luckyEgg, amuletCoin;
++    u8 bug[NAVI_BUG_TYPES];   // bug levels 0-3 by BN6 bug type
++    u8 colours;               // distinct colours that count toward BN6's colour limit
++    bool8 pokerus;            // active Pokérus softened the bugs
++    u8 programsRun;
++};
++
++// One cell of the compiled board, for the editor.
++enum { NCELL_EMPTY, NCELL_ABILITY, NCELL_PART };
++
++struct PkbnNaviBoard
++{
++    u8 cell[NAVI_H + 2][NAVI_W + 2];   // [y+1][x+1]: NCELL_*  (frame included)
++    u8 part[NAVI_H + 2][NAVI_W + 2];   // part index for NCELL_PART
++    u8 abilityCells;
++    bool8 partRuns[NAVI_MAX_PARTS];
++    bool8 partBugged[NAVI_MAX_PARTS];
++    bool8 partCompressed[NAVI_MAX_PARTS];
++};
++
++// Who the board belongs to (taken from a Pokémon).
++struct PkbnNaviOwner
++{
++    u16 species;
++    u8 ability;
++    u8 types[2];
++    u8 cond[NCP_COND_COUNT];  // cool, beauty, cute, smart, tough
++    u8 pokerus;               // MON_DATA_POKERUS byte
++};
++
++void Navi_OwnerFromMon(struct PkbnNaviOwner *owner, struct Pokemon *mon);
++// The cells (board coordinates relative to the shape origin) of a program, rotated; returns the count.
++u8 Navi_ShapeCells(u8 prog, bool8 compressed, u8 rot, s8 *dx, s8 *dy);
++bool8 Navi_IsCompressed(u8 prog, const struct PkbnNaviOwner *owner);
++// Can `part` go on `navi` (ignoring part index `skip`, e.g. the one being moved)? Fills nothing.
++bool8 Navi_CanPlace(const struct PkbnNavi *navi, const struct PkbnNaviOwner *owner, const struct PkbnNaviPart *part, s32 skip);
++void Navi_Compile(const struct PkbnNavi *navi, const struct PkbnNaviOwner *owner, struct PkbnNaviStats *out, struct PkbnNaviBoard *board);
++// The layout of a Pokémon; create = give it a Navi ID (and an empty layout) when it has none. NULL if none.
++struct PkbnNavi *Navi_ForMon(struct Pokemon *mon, bool8 create);
++void Navi_StatsForMon(struct Pokemon *mon, struct PkbnNaviStats *out);
++u8 Navi_ProgramsInUse(u8 prog);        // copies placed on all Pokémon
++u8 Navi_ProgramsOwned(u8 prog);
++const char *Navi_BugName(u8 bugType);
++const char *Navi_BugShort(u8 bugType);
++
++// Sidecar save (src/pkbn/pkbn_save.c)
++void PkbnSave_Reset(void);
++void PkbnSave_Read(void);
++void PkbnSave_Write(void);
++struct PkbnNavi *PkbnSave_FindNavi(u16 id);
++struct PkbnNavi *PkbnSave_NewNavi(void);
++
++// Editor (src/pkbn/navicust_ui.c): opens for a party slot, returns to `exitCallback`.
++void PkbnNaviCust_Open(u8 partySlot, MainCallback exitCallback);
++
++#endif // GUARD_PKBN_NAVICUST_H
+diff --git a/include/pkbn/ncp_table.h b/include/pkbn/ncp_table.h
+new file mode 100644
+index 0000000..6e59c5a
+--- /dev/null
++++ b/include/pkbn/ncp_table.h
+@@ -0,0 +1,68 @@
++// GENERATED by tools/gen_navicust.py from tools/navicust_curated.py - do not edit.
++#ifndef GUARD_PKBN_NCP_TABLE_H
++#define GUARD_PKBN_NCP_TABLE_H
++
++#include "global.h"
++
++enum PkbnNcpEffect
++{
++    NCPE_NONE,
++    NCPE_SUPER_ARMOR,
++    NCPE_HAND,
++    NCPE_FIRST_BARRIER,
++    NCPE_FLOAT_SHOES,
++    NCPE_AIR_SHOES,
++    NCPE_UNDER_SHIRT,
++    NCPE_BUG_STOP,
++    NCPE_BUST_PACK,
++    NCPE_BUSTER_ATK,
++    NCPE_BUSTER_SPEED,
++    NCPE_BUSTER_CHARGE,
++    NCPE_HP_PCT,
++    NCPE_STAT_PCT,
++    NCPE_QUICK_CLAW,
++    NCPE_KINGS_ROCK,
++    NCPE_SCOPE_LENS,
++    NCPE_BRIGHT_POWDER,
++    NCPE_LEFTOVERS,
++    NCPE_SHELL_BELL,
++    NCPE_FOCUS_BAND,
++    NCPE_CHOICE_BAND,
++    NCPE_LUCKY_EGG,
++    NCPE_AMULET_COIN,
++    NCPE_TYPE_BOOST,
++    NCPE_COUNT
++};
++
++enum { NCP_COND_COOL, NCP_COND_BEAUTY, NCP_COND_CUTE, NCP_COND_SMART, NCP_COND_TOUGH, NCP_COND_COUNT };
++
++// Program effects an ability grants (BN-style twins), and flags in compiled results.
++#define NCPF_SUPER_ARMOR (1 << 0)
++#define NCPF_FLOAT_SHOES (1 << 1)
++#define NCPF_AIR_SHOES   (1 << 2)
++#define NCPF_UNDER_SHIRT (1 << 3)
++
++struct PkbnNcpShape { u8 w, h; u8 rows[5]; }; // rows[y] bit x = cell
++
++struct PkbnNcp
++{
++    const char *name;
++    const char *desc;
++    u8 effect;        // NCPE_*
++    u8 arg;           // STAT_* for STAT_PCT, TYPE_* for TYPE_BOOST
++    s16 value;
++    bool8 plus;       // plus part: must not touch the command line
++    u8 group;         // exclusive group (0 = none)
++    u8 bug;           // bug type it causes
++    u8 cond;          // NCP_COND_*: the Pokéblock condition that compresses it
++    u8 typeCount;
++    u8 types[3];      // colour variants
++    struct PkbnNcpShape shape, cshape;
++};
++
++#define NCP_COUNT 48
++extern const struct PkbnNcp gPkbnNcps[NCP_COUNT];
++extern const u8 gPkbnAbilityCells[];   // 1..3 cells of the fixed ability program, by ABILITY_*
++extern const u8 gPkbnAbilityGrants[];  // NCPF_* an ability grants
++
++#endif // GUARD_PKBN_NCP_TABLE_H
+diff --git a/include/strings.h b/include/strings.h
+index 5c6229c..e828380 100755
+--- a/include/strings.h
++++ b/include/strings.h
+@@ -2148,6 +2148,7 @@ extern const u8 gText_Store[];
+ extern const u8 gText_Register[];
+ extern const u8 gText_Trade4[];
+ extern const u8 gText_Summary5[];
++extern const u8 gText_PkbnNaviCust[];
+ extern const u8 gText_Switch2[];
+ extern const u8 gText_Item[];
+ extern const u8 gText_NotPkmnOtherTrainerWants[];
+diff --git a/src/data/party_menu.h b/src/data/party_menu.h
+index aa564ec..f11bd4d 100644
+--- a/src/data/party_menu.h
++++ b/src/data/party_menu.h
+@@ -676,6 +676,9 @@ struct
+     [MENU_TRADE1] = {gText_Trade4, CursorCb_Trade1},
+     [MENU_TRADE2] = {gText_Trade4, CursorCb_Trade2},
+     [MENU_TOSS] = {gMenuText_Toss, CursorCb_Toss},
++#ifdef PORTABLE
++    [MENU_NAVICUST] = {gText_PkbnNaviCust, CursorCb_NaviCust},
++#endif
+     [MENU_FIELD_MOVES + FIELD_MOVE_CUT] = {gMoveNames[MOVE_CUT], CursorCb_FieldMove},
+     [MENU_FIELD_MOVES + FIELD_MOVE_FLASH] = {gMoveNames[MOVE_FLASH], CursorCb_FieldMove},
+     [MENU_FIELD_MOVES + FIELD_MOVE_ROCK_SMASH] = {gMoveNames[MOVE_ROCK_SMASH], CursorCb_FieldMove},
+diff --git a/src/new_game.c b/src/new_game.c
+index 7a21537..c686641 100644
+--- a/src/new_game.c
++++ b/src/new_game.c
+@@ -1,4 +1,7 @@
+ #include "global.h"
++#ifdef PORTABLE
++#include "pkbn/navicust.h"
++#endif
+ #include "new_game.h"
+ #include "random.h"
+ #include "pokemon.h"
+@@ -164,6 +167,9 @@ void NewGameInitData(void)
+ 
+     gDifferentSaveFile = TRUE;
+     gSaveBlock2Ptr->encryptionKey = 0;
++#ifdef PORTABLE
++    PkbnSave_Reset();   // pkbn: a new game starts a new sidecar save
++#endif
+     ZeroPlayerPartyMons();
+     ZeroEnemyPartyMons();
+     ResetPokedex();
+diff --git a/src/party_menu.c b/src/party_menu.c
+index 7f2abb4..787e3c6 100644
+--- a/src/party_menu.c
++++ b/src/party_menu.c
+@@ -1,4 +1,7 @@
+ #include "global.h"
++#ifdef PORTABLE
++#include "pkbn/navicust.h"
++#endif
+ #include "malloc.h"
+ #include "battle.h"
+ #include "battle_anim.h"
+@@ -93,6 +96,7 @@ enum {
+     MENU_TRADE1,
+     MENU_TRADE2,
+     MENU_TOSS,
++    MENU_NAVICUST,      // pkbn (POC-9): our NaviCust editor
+     MENU_FIELD_MOVES
+ };
+ 
+@@ -193,7 +197,7 @@ struct PartyMenuInternal
+     u32 spriteIdCancelPokeball:7;
+     u32 messageId:14;
+     u8 windowId[3];
+-    u8 actions[8];
++    u8 actions[9];   // pkbn: +1 for NAVICUST
+     u8 numActions;
+     // In vanilla Emerald, only the first 0xB0 hwords (0x160 bytes) are actually used.
+     // However, a full 0x100 hwords (0x200 bytes) are allocated.
+@@ -476,6 +480,9 @@ static void CursorCb_Trade1(u8);
+ static void CursorCb_Trade2(u8);
+ static void CursorCb_Toss(u8);
+ static void CursorCb_FieldMove(u8);
++#ifdef PORTABLE
++static void CursorCb_NaviCust(u8);
++#endif
+ static bool8 SetUpFieldMove_Surf(void);
+ static bool8 SetUpFieldMove_Fly(void);
+ static bool8 SetUpFieldMove_Waterfall(void);
+@@ -2612,6 +2619,11 @@ static void SetPartyMonFieldSelectionActions(struct Pokemon *mons, u8 slotId)
+ 
+     sPartyMenuInternal->numActions = 0;
+     AppendToList(sPartyMenuInternal->actions, &sPartyMenuInternal->numActions, MENU_SUMMARY);
++#ifdef PORTABLE
++    // pkbn (POC-9): every Pokémon is a Navi with its own NaviCust
++    if (!GetMonData(&mons[slotId], MON_DATA_IS_EGG) && !InBattlePike())
++        AppendToList(sPartyMenuInternal->actions, &sPartyMenuInternal->numActions, MENU_NAVICUST);
++#endif
+ 
+     // Add field moves to action list
+     for (i = 0; i < MAX_MON_MOVES; i++)
+@@ -2789,6 +2801,27 @@ static void CB2_ShowPokemonSummaryScreen(void)
+     }
+ }
+ 
++#ifdef PORTABLE
++// pkbn (POC-9): the NaviCust editor, opened and closed like the summary screen
++static void CB2_ReturnToPartyMenuFromNaviCust(void)
++{
++    gPaletteFade.bufferTransferDisabled = TRUE;
++    InitPartyMenu(gPartyMenu.menuType, KEEP_PARTY_LAYOUT, gPartyMenu.action, TRUE, PARTY_MSG_DO_WHAT_WITH_MON, Task_TryCreateSelectionWindow, gPartyMenu.exitCallback);
++}
++
++static void CB2_ShowNaviCust(void)
++{
++    PkbnNaviCust_Open(gPartyMenu.slotId, CB2_ReturnToPartyMenuFromNaviCust);
++}
++
++static void CursorCb_NaviCust(u8 taskId)
++{
++    PlaySE(SE_SELECT);
++    sPartyMenuInternal->exitCallback = CB2_ShowNaviCust;
++    Task_ClosePartyMenu(taskId);
++}
++#endif
++
+ static void CB2_ReturnToPartyMenuFromSummaryScreen(void)
+ {
+     gPaletteFade.bufferTransferDisabled = TRUE;
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 255886f..d5480b5 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -138,6 +138,17 @@ static void LoadActiveFromParty(u8 slot)
+     memcpy(p->name, sB.party[slot].name, sizeof(p->name));
+     Field_ResetFighterConditions(p);
+     p->lastMove = MOVE_NONE;
++    p->navi = sB.party[slot].navi;
++    p->busterShots = 0;
++    p->bugHpTimer = p->bugMoveTimer = 0;
++    if (!sB.party[slot].enteredOnce)
++    {
++        sB.party[slot].enteredOnce = TRUE;
++        if (p->navi.firstBarrier)
++            p->barrier = TRUE;                     // FstBarr: start behind a Barrier
++        if (p->navi.bug[11] || p->navi.bug[12])    // 5+ colours: a status at battle start (BN6 sub_8013E58)
++            Field_NaviStatusBug(SIDE_PLAYER);
++    }
+     sB.active = slot;
+     sB.party[slot].participated = TRUE;
+     sB.sentIn |= 1 << slot; // Cmd_getexp: everyone sent in against the current opponent shares its EXP
+@@ -285,6 +296,22 @@ static void EndTimeStop(void)
+ 
+ // ---- Setup / teardown -----------------------------------------------------------------
+ 
++// HP+ and stat programs change the battle copy only; Finish() takes the HP bonus off again.
++static void ApplyNaviToBattleMon(struct BattlePokemon *bm, const struct PkbnNaviStats *n, u16 *hpBonus)
++{
++    *hpBonus = bm->maxHP * n->hpPct / 100;
++    bm->maxHP += *hpBonus;
++    if (bm->hp)
++        bm->hp += *hpBonus;
++    bm->attack  += bm->attack  * n->statPct[STAT_ATK] / 100;
++    bm->defense += bm->defense * n->statPct[STAT_DEF] / 100;
++    bm->spAttack  += bm->spAttack  * n->statPct[STAT_SPATK] / 100;
++    bm->spDefense += bm->spDefense * n->statPct[STAT_SPDEF] / 100;
++    bm->speed   += bm->speed   * n->statPct[STAT_SPEED] / 100;
++    if (n->choiceBand)
++        bm->attack += bm->attack * n->choiceBand / 100;   // Choice Band x1.5
++}
++
+ static void LoadPartyMember(u8 slot, struct Pokemon *mon)
+ {
+     struct PartyMember *pm = &sB.party[slot];
+@@ -293,6 +320,14 @@ static void LoadPartyMember(u8 slot, struct Pokemon *mon)
+     Pkbn_DecodeMonIcon(pm->icon[0], pm->bm.species, pm->bm.personality, 0);
+     Pkbn_DecodeMonIcon(pm->icon[1], pm->bm.species, pm->bm.personality, 1);
+     Gfx_LoadMonPic(&pm->pic, pm->bm.species, pm->bm.personality, pm->bm.otId);
++    // NaviCust (POC-9): compile this Pokémon's programs once per battle
++    Navi_StatsForMon(mon, &pm->navi);
++    ApplyNaviToBattleMon(&pm->bm, &pm->navi, &pm->hpBonus);
++    if (pm->navi.programsRun || pm->navi.flags)
++        PKBN_LOG("navicust %s: %u programs, hand+%u buster %u/%u/%u HP+%u%% flags %x bugs HP%u BUS%u CUS%u MOV%u PAN%u ST%u/%u",
++                 pm->name, pm->navi.programsRun, pm->navi.hand, pm->navi.busterAtk, pm->navi.busterSpeed,
++                 pm->navi.busterCharge, pm->navi.hpPct, pm->navi.flags, pm->navi.bug[9], pm->navi.bug[7],
++                 pm->navi.bug[4], pm->navi.bug[1], pm->navi.bug[3], pm->navi.bug[11], pm->navi.bug[12]);
+ }
+ 
+ static void LoadEnemy(struct Pokemon *mon)
+@@ -313,27 +348,49 @@ static void Overlay(u16 *fb)
+     Draw_Overlay(fb);
+ }
+ 
++// Hand size: BN's 5, + Custom programs, - the custom bug (BN6 sub_802A40C: from turn N on, the draw count drops
++// by turn - N + 1, never below 2; N = 4/3/2 for bug level 1/2/3, asm/asm37_0.s:2988).
++static u8 HandSizeNow(void)
++{
++    const struct PkbnNaviStats *n = &sB.f[SIDE_PLAYER].navi;
++    s32 size = HAND_SIZE + n->hand;
++    if (n->bug[4])
++    {
++        s32 from = 5 - n->bug[4];
++        if ((s32)sB.turn + 1 >= from)
++            size -= (s32)sB.turn + 1 - from + 1;
++        if (size < 2)
++            size = 2;
++    }
++    if (size > HAND_MAX)
++        size = HAND_MAX;
++    return size;
++}
++
+ // BN keeps unselected chips in the hand and tops it up from the folder.
+ static void RefillHand(void)
+ {
+-    u8 keep[HAND_SIZE];
++    u8 keep[HAND_MAX];
+     s32 i, n = 0;
+     for (i = 0; i < sB.handCount; i++)
+         if (!sB.picked[i])
+             keep[n++] = sB.hand[i];
+     memcpy(sB.hand, keep, n);
+     sB.handCount = n;
+-    while (sB.handCount < HAND_SIZE)
++    sB.handSize = HandSizeNow();
++    while (sB.handCount < sB.handSize)
+     {
+         u8 idx;
+         if (!PkbnFolder_Draw(&sB.folder, &idx))
+             break;
+         sB.hand[sB.handCount++] = idx;
+     }
+-    for (i = 0; i < HAND_SIZE; i++)
++    for (i = 0; i < HAND_MAX; i++)
+         sB.picked[i] = FALSE;
+     sB.wildPicked = FALSE;
+     sB.cursor = 0;
++    if (sB.handSize != HAND_SIZE)
++        PKBN_LOG("custom hand: %u chips (NaviCust)", sB.handSize);
+ }
+ 
+ static void OpenCustom(void)
+@@ -453,6 +510,14 @@ static void Finish(void)
+     {
+         u32 hp = sB.party[i].bm.hp;
+         u32 status = hp ? sB.party[i].bm.status1 : 0;
++        // HP+ programs only last the battle: take the bonus off, never fainting a Pokémon that is still up
++        if (hp && sB.party[i].hpBonus)
++        {
++            u32 realMax = GetMonData(&gPlayerParty[i], MON_DATA_MAX_HP);
++            hp = hp > sB.party[i].hpBonus ? hp - sB.party[i].hpBonus : 1;
++            if (hp > realMax)
++                hp = realMax;
++        }
+         if (sB.party[i].bm.species == SPECIES_NONE)
+             continue;
+         SetMonData(&gPlayerParty[i], MON_DATA_HP, &hp);
+@@ -521,6 +586,8 @@ bool8 PkbnGrid_HandSelectable(u8 pos)
+     s32 i;
+     if (sB.f[SIDE_PLAYER].recharge)
+         return FALSE; // review: Hyper Beam & co. - no chips this Custom
++    if (sB.f[SIDE_PLAYER].navi.choiceBand && sB.queueCount >= 1)
++        return FALSE; // ChoiceBd program: one chip per Custom
+     if (pos > sB.handCount)
+         return FALSE;
+     if (pos < sB.handCount ? sB.picked[pos] : sB.wildPicked)
+@@ -622,7 +689,7 @@ static void UpdateCustom(void)
+             sB.throwShakes = Catch_Throw(sB.ballItem);
+             PKBN_LOG("threw ball %u: %u shakes%s", sB.ballItem, sB.throwShakes > 3 ? 3 : sB.throwShakes,
+                      sB.throwShakes == 4 ? " - CAUGHT" : "");
+-            for (i = 0; i < HAND_SIZE; i++)
++            for (i = 0; i < HAND_MAX; i++)
+                 sB.picked[i] = FALSE;
+             sB.wildPicked = FALSE;
+             sB.gauge = 0;
+@@ -678,14 +745,14 @@ static void UpdateCustom(void)
+     }
+     if (keys & (START_BUTTON | R_BUTTON))
+     {
+-        u8 keep[HAND_SIZE];
++        u8 keep[HAND_MAX];
+         s32 i, n = 0;
+         for (i = 0; i < sB.handCount; i++)
+             if (!sB.picked[i])
+                 keep[n++] = sB.hand[i];
+         memcpy(sB.hand, keep, n);
+         sB.handCount = n;
+-        for (i = 0; i < HAND_SIZE; i++)
++        for (i = 0; i < HAND_MAX; i++)
+             sB.picked[i] = FALSE;
+         sB.wildPicked = FALSE;
+         FormProgramAdvances();
+@@ -929,7 +996,8 @@ static void UpdatePlayer(void)
+     else if ((held & B_BUTTON) && sB.busterCd == 0)
+     {
+         Moves_ApplyBuster(SIDE_PLAYER);
+-        sB.busterCd = BUSTER_COOLDOWN;
++        // Speed+ programs: 3 frames quicker per level (BN6 buster speed 1-5; TUNE)
++        sB.busterCd = BUSTER_COOLDOWN - 3 * ((p->navi.busterSpeed ? p->navi.busterSpeed : 1) - 1);
+     }
+ }
+ 
+@@ -1152,6 +1220,8 @@ static void AwardExpForFaintedEnemy(void)
+             gain += shareExp;
+         if (hold == HOLD_EFFECT_LUCKY_EGG)
+             gain = gain * 150 / 100;
++        else if (sB.party[i].navi.luckyEgg)
++            gain = gain * (100 + sB.party[i].navi.luckyEgg) / 100;   // LuckyEgg program (not stacking with the item)
+         if (sB.trainer)
+             gain = gain * 150 / 100;
+         if (IsTradedMon(&gPlayerParty[i]))
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 4d36da1..66d054f 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -844,11 +844,39 @@ static void DrawSlots(u16 *fb, u32 t)
+         if (sB.cursor == i && i < sB.handCount)
+             DrawCursorFrame(fb, x, y, SLOT_W - 2, SLOT_H, t);
+     }
+-    // row 2: the wildcard Switch, the Poké Ball, OK (START)
++    // row 2: chips 6-8 (Custom programs), the wildcard Switch, the Poké Ball, OK (START). The ball slot narrows and
++    // OK goes (START still works) when extra chips need the room.
+     {
+-        s32 x = 6, y = ROW2_Y;
++        s32 extra = sB.handSize > HAND_SIZE ? sB.handSize - HAND_SIZE : 0;
++        s32 x = 6, y = ROW2_Y, ballW = 3 - extra < 1 ? 1 : 3 - extra;
+         u8 order = sB.wildPicked ? QueueOrder(FOLDER_QUEUE_WILD) : 0;
+         bool8 ok = PkbnGrid_HandSelectable(sB.handCount);
++        for (i = HAND_SIZE; i < HAND_SIZE + extra; i++, x += SLOT_W)
++        {
++            if (i < sB.handCount)
++            {
++                const struct FolderChip *ch = &sB.folder.chips[sB.hand[i]];
++                bool8 ok2 = PkbnGrid_HandSelectable(i);
++                u8 ord = sB.picked[i] ? QueueOrder(sB.hand[i]) : 0;
++                DrawSlotFrame(fb, x, y, SLOT_W - 2, SLOT_H, Vfx_TypeColor(gBattleMoves[ch->move].type), !ok2 && !ord);
++                if (ord)
++                {
++                    snprintf(line, sizeof(line), "%u", ord);
++                    TextBig(fb, x + 7, y + 4, line, COL_GAUGE_FULL);
++                }
++                else
++                {
++                    BlitIconCropped(fb, sB.party[ch->owner].icon[0], x - 1, y - 2, !ok2);
++                    snprintf(line, sizeof(line), "%c", PkbnFolder_LetterChar(ch->letter));
++                    Pkbn_FillRect(fb, x + 6, y + SLOT_H - 9, 10, 8, RGB(1, 2, 5));
++                    Text(fb, x + 8, y + SLOT_H - 12, line, ok2 ? COL_CODE : COL_DIM);
++                }
++                if (sB.cursor == i)
++                    DrawCursorFrame(fb, x, y, SLOT_W - 2, SLOT_H, t);
++            }
++            else
++                DrawSlotFrame(fb, x, y, SLOT_W - 2, SLOT_H, RGB(6, 8, 14), TRUE);
++        }
+         DrawSlotFrame(fb, x, y, SLOT_W - 2, SLOT_H, RGB(8, 22, 10), !ok && !order);
+         if (order)
+         {
+@@ -863,26 +891,33 @@ static void DrawSlots(u16 *fb, u32 t)
+         if (sB.cursor == sB.handCount)
+             DrawCursorFrame(fb, x, y, SLOT_W - 2, SLOT_H, t);
+ 
+-        x = 6 + SLOT_W;
++        x += SLOT_W;
+         {
+             bool8 usable = !sB.trainer && sB.ballItem && sB.queueCount == 0;
+-            DrawSlotFrame(fb, x, y, SLOT_W * 3 - 2, SLOT_H, RGB(24, 6, 8), !usable);
++            DrawSlotFrame(fb, x, y, SLOT_W * ballW - 2, SLOT_H, RGB(24, 6, 8), !usable);
+             if (sB.ballItem)
+             {
+-                Vfx_DrawBall(fb, sB.ballItem, x + 12, y + 12, 99);
+-                snprintf(line, sizeof(line), "x%u", CountTotalItemQuantityInBag(sB.ballItem));
+-                Text(fb, x + 24, y + 4, line, usable ? COL_WHITE : COL_DIM);
+-                Text(fb, x + SLOT_W * 3 - 18, y + 4, "<>", usable ? COL_GAUGE_FULL : COL_DIM);
++                Vfx_DrawBall(fb, sB.ballItem, x + 11, y + 12, 99);
++                if (ballW >= 2)
++                {
++                    snprintf(line, sizeof(line), "x%u", CountTotalItemQuantityInBag(sB.ballItem));
++                    Text(fb, x + 22, y + 4, line, usable ? COL_WHITE : COL_DIM);
++                }
++                if (ballW >= 3)
++                    Text(fb, x + SLOT_W * 3 - 18, y + 4, "[]", usable ? COL_GAUGE_FULL : COL_DIM);
+             }
+             else
+-                Text(fb, x + 6, y + 6, "NO BALLS", COL_DIM);
++                Text(fb, x + 3, y + 6, ballW >= 3 ? "NO BALLS" : "-", COL_DIM);
+             if (sB.cursor == sB.handCount + 1)
+-                DrawCursorFrame(fb, x, y, SLOT_W * 3 - 2, SLOT_H, t);
++                DrawCursorFrame(fb, x, y, SLOT_W * ballW - 2, SLOT_H, t);
++            x += SLOT_W * ballW;
++        }
++        if (x + SLOT_W <= CUS_W)
++        {
++            DrawSlotFrame(fb, x, y, SLOT_W - 2, SLOT_H, RGB(28, 22, 4), FALSE);
++            TextBig(fb, x + 2, y + 5, "OK", ((t / 16) & 1) ? COL_WHITE : RGB(6, 4, 0));
+         }
+-        x = 6 + SLOT_W * 4;
+-        DrawSlotFrame(fb, x, y, SLOT_W - 2, SLOT_H, RGB(28, 22, 4), FALSE);
+-        TextBig(fb, x + 2, y + 5, "OK", ((t / 16) & 1) ? COL_WHITE : RGB(6, 4, 0));
+-        Text(fb, x - 1, y + SLOT_H, "START", COL_DIM);
++        Text(fb, CUS_W - 30, CH - 11, "START", COL_DIM);
+     }
+ }
+ 
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index f2ca18a..21a5bb4 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -70,6 +70,8 @@ bool8 Field_CanStand(u8 side, s8 x, s8 y)
+         return FALSE;
+     if (side == SIDE_PLAYER ? x >= PLAYER_COLS : x < PLAYER_COLS)
+         return FALSE;
++    if (sB.panel[y][x] == PANEL_BROKEN && (sB.f[side].navi.flags & NCPF_AIR_SHOES))
++        return TRUE;   // AirShoes program: holes don't matter (BN6)
+     return sB.panel[y][x] != PANEL_BROKEN;
+ }
+ 
+@@ -77,14 +79,15 @@ bool8 Field_CanStand(u8 side, s8 x, s8 y)
+ void Field_Step(u8 side, s8 nx, s8 ny)
+ {
+     struct Fighter *f = &sB.f[side];
+-    if (sB.panel[f->y][f->x] == PANEL_CRACKED && (nx != f->x || ny != f->y))
++    bool8 floats = (f->navi.flags & NCPF_FLOAT_SHOES) != 0;   // FlotShoe program: panels do nothing (BN6)
++    if (sB.panel[f->y][f->x] == PANEL_CRACKED && (nx != f->x || ny != f->y) && !floats)
+     {
+         Field_SetPanel(f->x, f->y, PANEL_BROKEN);
+         PlaySE(SE_BREAKABLE_DOOR);
+     }
+     // BN6 ice panel: anything that isn't Aqua keeps sliding the way it came (asm00_2.s:16535);
+     // here Water types don't slide.
+-    if (sB.panel[ny][nx] == PANEL_ICE && !HasType(f, TYPE_WATER) && (nx != f->x || ny != f->y))
++    if (sB.panel[ny][nx] == PANEL_ICE && !HasType(f, TYPE_WATER) && (nx != f->x || ny != f->y) && !floats)
+     {
+         f->slideDx = nx - f->x;
+         f->slideDy = ny - f->y;
+@@ -95,6 +98,10 @@ void Field_Step(u8 side, s8 nx, s8 ny)
+     }
+     f->x = nx;
+     f->y = ny;
++    // NaviCust panel bug (BN6 sub_8013CC4, asm/asm00_2.s:11084): with probability 2/8, 3/8, 4/8 by bug level the
++    // panel you step onto cracks
++    if (f->navi.bug[3] && sB.panel[ny][nx] == PANEL_NORMAL && Random() % 8 < (u32)(f->navi.bug[3] + 1))
++        Field_SetPanel(nx, ny, PANEL_CRACKED);
+ }
+ 
+ void Field_PushBack(u8 side, u8 panels)
+@@ -106,6 +113,8 @@ void Field_PushBack(u8 side, u8 panels)
+         SetMsg("IT ANCHORED ITSELF!", 40);
+         return;
+     }
++    if (f->navi.flags & NCPF_SUPER_ARMOR)
++        return;   // SuprArmr program: no knock-back
+     while (panels-- && Field_CanStand(side, f->x + back, f->y))
+         Field_Step(side, f->x + back, f->y);
+ }
+@@ -315,6 +324,64 @@ static void TickFighterTimers(struct Fighter *f)
+         f->invulnKind = INVULN_NONE;
+ }
+ 
++// NaviCust bugs that run on the clock (player side only has a NaviCust).
++static void NaviBugsTick(u8 side)
++{
++    struct Fighter *f = &sB.f[side];
++    // HP bug: lose 1 HP every N frames. BN6 byte_80102A4 = {40, 35, 30, ...} by level (asm/asm00_2.s:3018);
++    // Pokémon have a tenth of a Navi's HP or less, so ours waits 4x as long (TUNE).
++    if (f->navi.bug[9])
++    {
++        static const u16 sEvery[4] = {0, 160, 140, 120};
++        if (++f->bugHpTimer >= sEvery[f->navi.bug[9]])
++        {
++            f->bugHpTimer = 0;
++            if (f->bm.hp > 1)
++                Moves_DamageFighter(side, 1, NULL);
++        }
++    }
++    // Move bug ("Panel Skip", BN6 bug type 1; its exact BN6 behaviour is UNVERIFIED): a random step every
++    // 300 / 240 / 180 frames (TUNE)
++    if (f->navi.bug[1] && f->moveCd == 0 && !f->hold)
++    {
++        static const u16 sEvery[4] = {0, 300, 240, 180};
++        if (++f->bugMoveTimer >= sEvery[f->navi.bug[1]])
++        {
++            static const s8 sDx[4] = {0, 0, -1, 1}, sDy[4] = {-1, 1, 0, 0};
++            u8 d = Random() % 4;
++            f->bugMoveTimer = 0;
++            if (Field_CanStand(side, f->x + sDx[d], f->y + sDy[d]))
++                Field_Step(side, f->x + sDx[d], f->y + sDy[d]);
++        }
++    }
++    // Status bug: the battle-start status wears off after 300 / 600 frames (BN6 sub_8013E58)
++    if (f->bugStatusTimer && --f->bugStatusTimer == 0)
++    {
++        f->bm.status1 &= ~(STATUS1_PARALYSIS | STATUS1_POISON | STATUS1_BURN);
++        f->confTurns = 0;
++    }
++}
++
++// Status bug at battle start (5 colours: 300 frames, 6+: 600; BN6 asm/asm00_2.s:11273): one of our statuses.
++void Field_NaviStatusBug(u8 side)
++{
++    struct Fighter *f = &sB.f[side];
++    static const char *const sWhat[4] = {"IS PARALYZED! (BUG)", "IS POISONED! (BUG)", "IS BURNED! (BUG)", "IS CONFUSED! (BUG)"};
++    u8 k = Random() % 4;
++    char line[48];
++    switch (k)
++    {
++    case 0: f->bm.status1 |= STATUS1_PARALYSIS; break;
++    case 1: f->bm.status1 |= STATUS1_POISON; break;
++    case 2: f->bm.status1 |= STATUS1_BURN; break;
++    case 3: f->confTurns = 5; break;
++    }
++    f->bugStatusTimer = f->navi.bug[12] ? 600 : 300;
++    snprintf(line, sizeof(line), "%s %s", f->name, sWhat[k]);
++    SetMsg(line, 60);
++    PKBN_LOG("%s", line);
++}
++
+ void Field_Update(void)
+ {
+     s32 r, c, s;
+@@ -341,7 +408,10 @@ void Field_Update(void)
+         }
+         // BN6 poison panel: 1 damage every 7 frames while standing on it (sub_801A186).
+         // Pokémon HP is far lower than a Navi's, so one "damage" here is maxHP/128 (TUNE).
+-        if (sB.panel[f->y][f->x] == PANEL_POISON && !f->invuln
++        NaviBugsTick(s);
++        if (f->bm.hp == 0)
++            continue;
++        if (sB.panel[f->y][f->x] == PANEL_POISON && !f->invuln && !(f->navi.flags & NCPF_FLOAT_SHOES)
+          && !HasType(f, TYPE_POISON) && !HasType(f, TYPE_STEEL))
+         {
+             if (sB.poisonTick[s] == 0)
+@@ -406,6 +476,9 @@ void Field_EndTurn(void)
+         struct Fighter *o = &sB.f[s ^ 1];
+         if (f->bm.hp == 0)
+             continue;
++        // Leftovrs program (Gen 3 Leftovers: 1/16 each turn)
++        if (f->navi.leftovers)
++            Heal(f, Frac(f, f->navi.leftovers));
+         // Ingrain (Gen 3: 1/16) - only while rooted on its grass.
+         if (f->rooted && sB.panel[f->y][f->x] == PANEL_GRASS)
+             Heal(f, Frac(f, 16));
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index c8b1212..aea286d 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -130,6 +130,18 @@ static const struct PkbnProgramAdvance *PAOf(const struct Attack *a)
+     return a->pa ? &gPkbnProgramAdvances[a->pa - 1] : NULL;
+ }
+ 
++// NaviCust (POC-9): the compiled programs behind an attack (player side: the Pokémon that used it).
++static const struct PkbnNaviStats *AttackNavi(const struct Attack *a)
++{
++    return (a->side == SIDE_PLAYER && a->userSlot < PKBN_PARTY_MAX) ? &sB.party[a->userSlot].navi : NULL;
++}
++
++// QuickClw program: recover faster after a chip.
++static u16 ChipLockout(const struct Fighter *me)
++{
++    return CHIP_LOCKOUT * (100 - me->navi.quickClaw) / 100;
++}
++
+ s32 Moves_EffectiveSpeed(const struct Fighter *f)
+ {
+     u8 st = f->bm.statStages[STAT_SPEED];
+@@ -148,6 +160,8 @@ static u16 ScaleByAccuracy(u16 frames, u8 atkSide, const struct BattlePokemon *u
+     if (stage < 0) stage = 0;
+     if (stage > 12) stage = 12;
+     out = (u32)frames * sAccRatio[stage][1] / sAccRatio[stage][0];
++    if (def->navi.brightPowder)
++        out = out * (100 + def->navi.brightPowder) / 100;   // BrtPowdr program: warnings last longer
+     if (out < 4) out = 4;
+     if (out > 180) out = 180;
+     return out;
+@@ -523,6 +537,8 @@ static s32 CalcHitDamage(struct Attack *a, u8 defSide, u16 *eff, bool8 *crit)
+         u16 c = 2 * (a->info.flags & 0x80 ? 1 : 0) // focus energy captured at launch (bit 7)
+               + (e == EFFECT_HIGH_CRITICAL) + (e == EFFECT_SKY_ATTACK)
+               + (e == EFFECT_BLAZE_KICK) + (e == EFFECT_POISON_TAIL);
++        if (AttackNavi(a))
++            c += AttackNavi(a)->scopeLens;   // ScopLens program: +1 stage, like the item (Cmd_critcalc)
+         if (c >= ARRAY_COUNT(sCritChance))
+             c = ARRAY_COUNT(sCritChance) - 1;
+         gCritMultiplier = (def.ability != ABILITY_BATTLE_ARMOR && def.ability != ABILITY_SHELL_ARMOR
+@@ -582,6 +598,9 @@ static s32 CalcHitDamage(struct Attack *a, u8 defSide, u16 *eff, bool8 *crit)
+     // in battle we give half that: x1.5 (TUNE).
+     if (a->combo && (sB.comboMask & COMBO_DMG))
+         dmg = dmg * 15 / 10;
++    // type programs (Charcoal & co.): +10% each, like Gen 3's type items (src/pokemon.c:3173)
++    if (AttackNavi(a) && AttackNavi(a)->typePct[type])
++        dmg = dmg * (100 + AttackNavi(a)->typePct[type]) / 100;
+     return dmg;
+ }
+ 
+@@ -590,7 +609,7 @@ static s32 CalcHitDamage(struct Attack *a, u8 defSide, u16 *eff, bool8 *crit)
+ static void Flinch(u8 side)
+ {
+     struct Fighter *f = &sB.f[side];
+-    if (f->bm.ability == ABILITY_INNER_FOCUS || f->bm.hp == 0)
++    if (f->bm.ability == ABILITY_INNER_FOCUS || f->bm.hp == 0 || (f->navi.flags & NCPF_SUPER_ARMOR))
+         return;
+     f->stun = FLINCH_FRAMES;
+     if (f->charging)
+@@ -792,6 +811,20 @@ static void ApplyHit(struct Attack *a, bool8 last)
+         dmg = def->bm.hp - 1;
+     if (dmg > def->bm.hp)
+         dmg = def->bm.hp;
++    // NaviCust: UnderSht (BN6: survive at 1 HP when above 1 HP) and FocsBand (Gen 3 Focus Band: 10%)
++    if (dmg >= def->bm.hp && def->bm.hp > 1)
++    {
++        if (def->navi.flags & NCPF_UNDER_SHIRT)
++        {
++            dmg = def->bm.hp - 1;
++            SayFighter(def, "HUNG ON! (UNDERSHIRT)", 50);
++        }
++        else if (def->navi.focusBand && Random() % 100 < def->navi.focusBand)
++        {
++            dmg = def->bm.hp - 1;
++            SayFighter(def, "HUNG ON USING ITS FOCUS BAND!", 50);
++        }
++    }
+ 
+     // Bide stores what it takes
+     if (def->bideFrames)
+@@ -826,6 +859,14 @@ static void ApplyHit(struct Attack *a, bool8 last)
+     // drain (Absorb family, Dream Eater): half the damage (Gen 3)
+     if ((EffectOf(a) == EFFECT_ABSORB || EffectOf(a) == EFFECT_DREAM_EATER) && me)
+         Heal(me, dmg / 2 ? dmg / 2 : 1);
++    // NaviCust: ShelBell heals 1/8 of the damage (Gen 3 Shell Bell), KingRock flinches 10% (King's Rock)
++    if (AttackNavi(a) && me && dmg > 0)
++    {
++        if (AttackNavi(a)->shellBell)
++            Heal(me, dmg / AttackNavi(a)->shellBell ? dmg / AttackNavi(a)->shellBell : 1);
++        if (AttackNavi(a)->kingsRock && def->bm.hp && Random() % 100 < AttackNavi(a)->kingsRock)
++            Flinch(defSide);
++    }
+     if (a->pa)
+     {
+         const struct PkbnProgramAdvance *pa = PAOf(a);
+@@ -1505,7 +1546,39 @@ void Moves_ApplyBuster(u8 side)
+     u8 cells[GRID_ROWS][GRID_COLS];
+     struct Fighter *me = &sB.f[side];
+     struct Fighter *opp = &sB.f[side ^ 1];
+-    s32 c;
++    s32 c, dmg = BUSTER_DAMAGE;
++    bool8 charged = FALSE;
++
++    // NaviCust buster bug (BN6 sub_8013D5E, asm/asm00_2.s:11150): a 16-slot table with 6/10/13 slots of misfire 1
++    // and 1/2/3 of misfire 2 by bug level, one picked per shot. Ours: 1 = the shot fizzles, 2 = it also jams the
++    // buster for a moment (what BN6's two misfires do is UNVERIFIED).
++    if (me->navi.bug[7])
++    {
++        static const u8 sOnes[4] = {0, 6, 10, 13}, sTwos[4] = {0, 1, 2, 3};
++        u8 roll = Random() % 16;
++        if (roll < sOnes[me->navi.bug[7]] + sTwos[me->navi.bug[7]])
++        {
++            if (roll >= sOnes[me->navi.bug[7]])
++                me->lockout = 20;
++            PKBN_LOG("%s: buster misfire (bug)", me->name);
++            return;
++        }
++    }
++    // Buster Attack (BN6 levels 1-5): damage x level. Charge (design): our buster fires while B is held, so instead of
++    // BN's hold-to-charge, every 8th / 6th / 5th / 4th shot at Charge 2 / 3 / 4 / 5 is a x10 charged shot.
++    if (me->navi.busterAtk > 1)
++        dmg *= me->navi.busterAtk;
++    if (me->navi.busterCharge > 1)
++    {
++        static const u8 sEvery[6] = {0, 0, 8, 6, 5, 4};
++        if (++me->busterShots >= sEvery[me->navi.busterCharge])
++        {
++            me->busterShots = 0;
++            charged = TRUE;
++            dmg *= 10;   // BN's charged shot is 10x the buster (TUNE)
++        }
++    }
++
+     memset(cells, 0, sizeof(cells));
+     for (c = me->x + Facing(side); c >= 0 && c < GRID_COLS; c += Facing(side))
+     {
+@@ -1514,7 +1587,7 @@ void Moves_ApplyBuster(u8 side)
+             break;
+     }
+     sVisBusterSide = side;
+-    FlashCells(cells, 3);
++    FlashCells(cells, charged ? 10 : 3);
+     sVisBusterSide = 0xFF;
+     if (!cells[opp->y][opp->x] || opp->iframes || opp->invuln || opp->bm.hp == 0)
+         return;
+@@ -1524,10 +1597,14 @@ void Moves_ApplyBuster(u8 side)
+         SetMsg("BARRIER BLOCKED IT!", 50);
+         return;
+     }
+-    if (opp->bm.hp > BUSTER_DAMAGE)
+-        opp->bm.hp -= BUSTER_DAMAGE;
++    if (dmg >= opp->bm.hp && opp->bm.hp > 1 && (opp->navi.flags & NCPF_UNDER_SHIRT))
++        dmg = opp->bm.hp - 1;
++    if (opp->bm.hp > dmg)
++        opp->bm.hp -= dmg;
+     else
+         opp->bm.hp = 0;
++    if (charged)
++        PKBN_LOG("%s: charged shot, %d dmg", me->name, (int)dmg);
+     opp->hurtFlash = 4;
+     opp->lastHitFrame = sB.frame;
+     Field_WakeOnHit(side ^ 1);
+@@ -2127,7 +2204,7 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+         ;
+     else if (!Field_CanAct(side, TRUE))
+     {
+-        me->lockout = CHIP_LOCKOUT;
++        me->lockout = ChipLockout(me);
+         return;
+     }
+ 
+@@ -2136,7 +2213,7 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+         Pkbn_GameStringToAscii(line, gMoveNames[move], sizeof(line));
+         PKBN_LOG("%s uses %s (%s)", userName, line, gPkbnKindNames[kind]);
+     }
+-    me->lockout = CHIP_LOCKOUT;
++    me->lockout = ChipLockout(me);
+     if (kind != GK_CALL)
+         me->lastMove = move;
+ 
+@@ -2331,7 +2408,7 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+         me->charging = a->timer;
+         me->chargeMove = move;
+         me->focusBroken = FALSE;
+-        me->lockout = a->timer + CHIP_LOCKOUT;
++        me->lockout = a->timer + ChipLockout(me);
+         SayFighter(me, "IS CHARGING UP!", 40);
+         return;
+     }
+@@ -2371,7 +2448,7 @@ void Moves_UsePA(u8 side, u8 paIndex, const struct BattlePokemon *user, const ch
+     sB.nextCombo = FALSE;
+     if (!Field_CanAct(side, TRUE))
+     {
+-        me->lockout = CHIP_LOCKOUT;
++        me->lockout = ChipLockout(me);
+         return;
+     }
+     PKBN_LOG("%s unleashes PROGRAM ADVANCE %s (%s, type %u, power %u)", userName, pa->name, gPkbnKindNames[pa->kind],
+@@ -2393,7 +2470,7 @@ void Moves_UsePA(u8 side, u8 paIndex, const struct BattlePokemon *user, const ch
+     a->user = *user;
+     a->userSlot = userSlot;
+     strncpy(a->userName, userName, sizeof(a->userName) - 1);
+-    me->lockout = CHIP_LOCKOUT;
++    me->lockout = ChipLockout(me);
+     me->lastMove = a->move;
+     me->lastKind = a->kind;
+     a->phase = PH_CHARGE;
+diff --git a/src/pkbn/navicust.c b/src/pkbn/navicust.c
+new file mode 100644
+index 0000000..16fd814
+--- /dev/null
++++ b/src/pkbn/navicust.c
+@@ -0,0 +1,394 @@
++// NaviCust for every Pokémon: shapes, placement, and BN6's compile step ("RUN"). See include/pkbn/navicust.h.
++//
++// The compile follows BN6's sub_813BBD4 (bn6f asm/asm37_0.s:702) and applyNavicustPrograms_813C684 (:2012):
++//   - a plus part touching the command line: a bug of its type (:773)
++//   - a normal part not touching the command line: a bug, and it doesn't run (:839)
++//   - two parts of the same colour touching: a bug each (:889-1076)
++//   - 5 colours: bug 11 +1; 6 or more: bug 12 +2 (:1098)
++//   - a part on the overhang frame: a bug (:1890)
++//   - bug levels cap at 3 (:1158); BugStop clears them (:2782)
++//   - normal parts run from the command line right to left, one per exclusive group (:2018-2052); plus parts run
++//     wherever they are (:2055-2093)
++// Our changes (design, 2026-10-05):
++//   - colours are Pokémon types; the owner's own types never bug when touching and don't count toward the colour
++//     limit
++//   - the owner's ability is a fixed program at the left end of the command line (1-3 cells, its first type)
++//   - a high Emerald condition (Pokéblocks) compresses the programs of that condition (BN6 uses button codes)
++//   - active Pokérus: every bug one level lower and one more colour allowed (a "good bug")
++#include "global.h"
++#include "pokemon.h"
++#include "constants/abilities.h"
++#include "constants/pokemon.h"
++#include "pkbn/navicust.h"
++
++#ifdef PORTABLE
++#include <string.h>
++
++void Navi_OwnerFromMon(struct PkbnNaviOwner *o, struct Pokemon *mon)
++{
++    u16 species = GetMonData(mon, MON_DATA_SPECIES);
++    memset(o, 0, sizeof(*o));
++    o->species = species;
++    o->ability = GetAbilityBySpecies(species, GetMonData(mon, MON_DATA_ABILITY_NUM));
++    o->types[0] = gSpeciesInfo[species].types[0];
++    o->types[1] = gSpeciesInfo[species].types[1];
++    o->cond[NCP_COND_COOL] = GetMonData(mon, MON_DATA_COOL);
++    o->cond[NCP_COND_BEAUTY] = GetMonData(mon, MON_DATA_BEAUTY);
++    o->cond[NCP_COND_CUTE] = GetMonData(mon, MON_DATA_CUTE);
++    o->cond[NCP_COND_SMART] = GetMonData(mon, MON_DATA_SMART);
++    o->cond[NCP_COND_TOUGH] = GetMonData(mon, MON_DATA_TOUGH);
++    o->pokerus = GetMonData(mon, MON_DATA_POKERUS);
++}
++
++bool8 Navi_IsCompressed(u8 prog, const struct PkbnNaviOwner *owner)
++{
++    return owner->cond[gPkbnNcps[prog].cond] >= NCP_COMPRESS_AT;
++}
++
++// Pokérus byte: high nibble strain, low nibble days left; days == 0 with a strain = cured (pokemon.c CheckPartyPokerus)
++static bool8 PokerusActive(u8 pokerus)
++{
++    return (pokerus & 0xF) != 0;
++}
++
++static bool8 OwnType(const struct PkbnNaviOwner *o, u8 type)
++{
++    return type == o->types[0] || type == o->types[1];
++}
++
++u8 Navi_ShapeCells(u8 prog, bool8 compressed, u8 rot, s8 *dx, s8 *dy)
++{
++    const struct PkbnNcpShape *s = compressed ? &gPkbnNcps[prog].cshape : &gPkbnNcps[prog].shape;
++    u8 n = 0;
++    s32 x, y;
++    for (y = 0; y < s->h; y++)
++        for (x = 0; x < s->w; x++)
++            if (s->rows[y] & (1 << x))
++            {
++                s32 rx = x, ry = y, t;
++                u8 r;
++                for (r = 0; r < (rot & 3); r++)
++                {
++                    // quarter turn clockwise inside the shape's box (w,h swap each turn)
++                    s32 h = (r & 1) ? s->w : s->h;
++                    t = rx;
++                    rx = h - 1 - ry;
++                    ry = t;
++                }
++                dx[n] = rx;
++                dy[n] = ry;
++                n++;
++            }
++    return n;
++}
++
++static void AbilityCells(const struct PkbnNaviOwner *o, u8 *n, s8 *x, s8 *y)
++{
++    u8 size = (o->ability && o->ability < ABILITIES_COUNT) ? gPkbnAbilityCells[o->ability] : 0;
++    *n = 0;
++    if (size >= 1) { x[*n] = 0; y[*n] = NAVI_CMD_ROW; (*n)++; }
++    if (size >= 2) { x[*n] = 1; y[*n] = NAVI_CMD_ROW; (*n)++; }
++    if (size >= 3) { x[*n] = 0; y[*n] = NAVI_CMD_ROW - 1; (*n)++; }
++}
++
++static bool8 OnBoard(s32 x, s32 y)
++{
++    return x >= 0 && x < NAVI_W && y >= 0 && y < NAVI_H;
++}
++
++static bool8 OnFrame(s32 x, s32 y)
++{
++    // the ring around the board, without its corners (byte_813B2CD's 3-cells)
++    if (OnBoard(x, y))
++        return FALSE;
++    if (x >= 0 && x < NAVI_W && (y == -1 || y == NAVI_H))
++        return TRUE;
++    if (y >= 0 && y < NAVI_H && (x == -1 || x == NAVI_W))
++        return TRUE;
++    return FALSE;
++}
++
++bool8 Navi_CanPlace(const struct PkbnNavi *navi, const struct PkbnNaviOwner *owner, const struct PkbnNaviPart *part, s32 skip)
++{
++    s8 dx[25], dy[25], ax[3], ay[3];
++    u8 n = Navi_ShapeCells(part->prog, Navi_IsCompressed(part->prog, owner), part->rot, dx, dy), an, i, j, k;
++    bool8 any = FALSE;
++    AbilityCells(owner, &an, ax, ay);
++    for (i = 0; i < n; i++)
++    {
++        s32 x = part->x + dx[i], y = part->y + dy[i];
++        if (!OnBoard(x, y) && !OnFrame(x, y))
++            return FALSE;     // sub_813BAEC: no cell on a 0-cell
++        if (OnBoard(x, y))
++            any = TRUE;
++        for (k = 0; k < an; k++)
++            if (ax[k] == x && ay[k] == y)
++                return FALSE;
++        for (j = 0; j < navi->count; j++)
++        {
++            s8 ex[25], ey[25];
++            u8 m, q;
++            if ((s32)j == skip)
++                continue;
++            m = Navi_ShapeCells(navi->parts[j].prog, Navi_IsCompressed(navi->parts[j].prog, owner), navi->parts[j].rot, ex, ey);
++            for (q = 0; q < m; q++)
++                if (navi->parts[j].x + ex[q] == x && navi->parts[j].y + ey[q] == y)
++                    return FALSE; // sub_813BB68: overlap
++        }
++    }
++    return any;               // at least one cell on the board
++}
++
++static void AddBug(struct PkbnNaviStats *s, u8 type, u8 amount)
++{
++    if (type && type < NAVI_BUG_TYPES)
++        s->bug[type] += amount;
++}
++
++#define CAP(v, m) do { if ((v) > (m)) (v) = (m); } while (0)
++
++static void Apply(struct PkbnNaviStats *s, const struct PkbnNcp *p)
++{
++    switch (p->effect)
++    {
++    case NCPE_SUPER_ARMOR:   s->flags |= NCPF_SUPER_ARMOR; break;
++    case NCPE_FLOAT_SHOES:   s->flags |= NCPF_FLOAT_SHOES; break;
++    case NCPE_AIR_SHOES:     s->flags |= NCPF_AIR_SHOES; break;
++    case NCPE_UNDER_SHIRT:   s->flags |= NCPF_UNDER_SHIRT; break;
++    case NCPE_FIRST_BARRIER: s->firstBarrier = TRUE; break;
++    case NCPE_BUG_STOP:      s->bugStop = TRUE; break;
++    case NCPE_HAND:          s->hand += p->value; break;
++    case NCPE_BUST_PACK:     s->busterAtk += p->value; s->busterSpeed += p->value; s->busterCharge += p->value; break;
++    case NCPE_BUSTER_ATK:    s->busterAtk += p->value; break;
++    case NCPE_BUSTER_SPEED:  s->busterSpeed += p->value; break;
++    case NCPE_BUSTER_CHARGE: s->busterCharge += p->value; break;
++    case NCPE_HP_PCT:        s->hpPct += p->value; break;
++    case NCPE_STAT_PCT:      s->statPct[p->arg] += p->value; break;
++    case NCPE_TYPE_BOOST:    s->typePct[p->arg] += p->value; break;
++    case NCPE_QUICK_CLAW:    s->quickClaw = p->value; break;
++    case NCPE_KINGS_ROCK:    s->kingsRock = p->value; break;
++    case NCPE_SCOPE_LENS:    s->scopeLens += p->value; break;
++    case NCPE_BRIGHT_POWDER: s->brightPowder = p->value; break;
++    case NCPE_LEFTOVERS:     s->leftovers = p->value; break;
++    case NCPE_SHELL_BELL:    s->shellBell = p->value; break;
++    case NCPE_FOCUS_BAND:    s->focusBand = p->value; break;
++    case NCPE_CHOICE_BAND:   s->choiceBand = p->value; break;
++    case NCPE_LUCKY_EGG:     s->luckyEgg = p->value; break;
++    case NCPE_AMULET_COIN:   s->amuletCoin = p->value; break;
++    }
++}
++
++void Navi_Compile(const struct PkbnNavi *navi, const struct PkbnNaviOwner *owner, struct PkbnNaviStats *s, struct PkbnNaviBoard *b)
++{
++    struct PkbnNaviBoard local;
++    s8 cx[NAVI_MAX_PARTS][25], cy[NAVI_MAX_PARTS][25], ax[3], ay[3];
++    u8 cn[NAVI_MAX_PARTS], an;
++    bool8 onLine[NAVI_MAX_PARTS];
++    bool8 groupUsed[16];
++    u32 colourMask = 0;
++    s32 i, j, k, x, y, colours = 0;
++
++    if (b == NULL)
++        b = &local;
++    memset(s, 0, sizeof(*s));
++    memset(b, 0, sizeof(*b));
++    memset(groupUsed, 0, sizeof(groupUsed));
++
++    // the fixed ability program
++    AbilityCells(owner, &an, ax, ay);
++    b->abilityCells = an;
++    for (k = 0; k < an; k++)
++        b->cell[ay[k] + 1][ax[k] + 1] = NCELL_ABILITY;
++    if (owner->ability < ABILITIES_COUNT)
++        s->flags |= gPkbnAbilityGrants[owner->ability];
++
++    // lay the parts down
++    for (i = 0; i < navi->count; i++)
++    {
++        const struct PkbnNaviPart *p = &navi->parts[i];
++        b->partCompressed[i] = Navi_IsCompressed(p->prog, owner);
++        cn[i] = Navi_ShapeCells(p->prog, b->partCompressed[i], p->rot, cx[i], cy[i]);
++        onLine[i] = FALSE;
++        for (k = 0; k < cn[i]; k++)
++        {
++            x = p->x + cx[i][k];
++            y = p->y + cy[i][k];
++            if (y == NAVI_CMD_ROW && OnBoard(x, y))
++                onLine[i] = TRUE;
++            if (x >= -1 && x <= NAVI_W && y >= -1 && y <= NAVI_H)
++            {
++                b->cell[y + 1][x + 1] = NCELL_PART;
++                b->part[y + 1][x + 1] = i;
++            }
++        }
++        if (!OwnType(owner, p->type) && !(colourMask & (1u << p->type)))
++        {
++            colourMask |= 1u << p->type;
++            colours++;
++        }
++    }
++    s->colours = colours;
++
++    // bugs (sub_813BBD4)
++    for (i = 0; i < navi->count; i++)
++    {
++        const struct PkbnNaviPart *p = &navi->parts[i];
++        const struct PkbnNcp *ncp = &gPkbnNcps[p->prog];
++        bool8 bugged = FALSE;
++        if (ncp->plus && onLine[i])
++            bugged = TRUE;            // plus part on the command line
++        if (!ncp->plus && !onLine[i])
++            bugged = TRUE;            // normal part off the command line
++        for (k = 0; k < cn[i]; k++)
++            if (OnFrame(p->x + cx[i][k], p->y + cy[i][k]))
++                bugged = TRUE;        // on the overhang frame
++        if (bugged)
++            AddBug(s, ncp->bug, 1);
++        b->partBugged[i] = bugged;
++    }
++    // same colour touching (not the owner's own types)
++    for (i = 0; i < navi->count; i++)
++    {
++        const struct PkbnNaviPart *p = &navi->parts[i];
++        bool8 touching = FALSE;
++        if (OwnType(owner, p->type))
++            continue;
++        for (j = 0; j < navi->count && !touching; j++)
++        {
++            s32 a, c;
++            if (j == i || navi->parts[j].type != p->type)
++                continue;
++            for (a = 0; a < cn[i] && !touching; a++)
++                for (c = 0; c < cn[j] && !touching; c++)
++                {
++                    s32 ddx = (p->x + cx[i][a]) - (navi->parts[j].x + cx[j][c]);
++                    s32 ddy = (p->y + cy[i][a]) - (navi->parts[j].y + cy[j][c]);
++                    if ((ddx == 0 && (ddy == 1 || ddy == -1)) || (ddy == 0 && (ddx == 1 || ddx == -1)))
++                        touching = TRUE;
++                }
++        }
++        if (touching)
++        {
++            AddBug(s, gPkbnNcps[p->prog].bug, 1);
++            b->partBugged[i] = TRUE;
++        }
++    }
++    // colour count (sub_813BEA8): 4 is fine; active Pokérus allows one more
++    {
++        s32 limit = 4 + (PokerusActive(owner->pokerus) ? 1 : 0);
++        if (colours == limit + 1)
++            AddBug(s, 11, 1);
++        else if (colours > limit + 1)
++            AddBug(s, 12, 2);
++    }
++    for (k = 0; k < NAVI_BUG_TYPES; k++)
++    {
++        if (PokerusActive(owner->pokerus) && s->bug[k])
++        {
++            s->bug[k]--;
++            s->pokerus = TRUE;
++        }
++        CAP(s->bug[k], 3);   // sub_813BF0C
++    }
++
++    // run (applyNavicustPrograms_813C684): command line right to left, one per group, then plus parts
++    for (x = NAVI_W - 1; x >= 0; x--)
++    {
++        if (b->cell[NAVI_CMD_ROW + 1][x + 1] != NCELL_PART)
++            continue;
++        i = b->part[NAVI_CMD_ROW + 1][x + 1];
++        if (b->partRuns[i] || gPkbnNcps[navi->parts[i].prog].plus)
++            continue;
++        if (gPkbnNcps[navi->parts[i].prog].group)
++        {
++            if (groupUsed[gPkbnNcps[navi->parts[i].prog].group])
++                continue;
++            groupUsed[gPkbnNcps[navi->parts[i].prog].group] = TRUE;
++        }
++        b->partRuns[i] = TRUE;
++        Apply(s, &gPkbnNcps[navi->parts[i].prog]);
++        s->programsRun++;
++    }
++    for (i = 0; i < navi->count; i++)
++        if (gPkbnNcps[navi->parts[i].prog].plus)
++        {
++            b->partRuns[i] = TRUE;
++            Apply(s, &gPkbnNcps[navi->parts[i].prog]);
++            s->programsRun++;
++        }
++
++    // BN6 caps (asm/asm37_0.s:2180-2780) and ours (TUNE)
++    CAP(s->hand, 3);                       // Custom: hand 5 -> 8 at most (BN6 CustomLevel caps at 8)
++    s->busterAtk += 1; s->busterSpeed += 1; s->busterCharge += 1;
++    CAP(s->busterAtk, 5); CAP(s->busterSpeed, 5); CAP(s->busterCharge, 5);   // BN6 levels 1-5 (cap 4 extra)
++    CAP(s->hpPct, 50);
++    for (k = 0; k < NUM_BATTLE_STATS; k++)
++        CAP(s->statPct[k], 30);
++    for (k = 0; k < NUMBER_OF_MON_TYPES; k++)
++        CAP(s->typePct[k], 30);
++    CAP(s->scopeLens, 2);
++    if (s->bugStop)
++        memset(s->bug, 0, sizeof(s->bug));
++}
++
++struct PkbnNavi *Navi_ForMon(struct Pokemon *mon, bool8 create)
++{
++    u32 id;
++    struct PkbnNavi *n;
++    if (GetMonData(mon, MON_DATA_SPECIES) == SPECIES_NONE || GetMonData(mon, MON_DATA_IS_EGG))
++        return NULL;
++    id = GetMonData(mon, MON_DATA_ENCRYPT_SEPARATOR);
++    n = PkbnSave_FindNavi(id);
++    if (n != NULL || !create)
++        return n;
++    n = PkbnSave_NewNavi();
++    if (n != NULL)
++    {
++        id = n->id;
++        SetMonData(mon, MON_DATA_ENCRYPT_SEPARATOR, &id);
++    }
++    return n;
++}
++
++void Navi_StatsForMon(struct Pokemon *mon, struct PkbnNaviStats *out)
++{
++    struct PkbnNaviOwner owner;
++    struct PkbnNavi empty;
++    struct PkbnNavi *n = Navi_ForMon(mon, FALSE);
++    Navi_OwnerFromMon(&owner, mon);
++    if (n == NULL)
++    {
++        memset(&empty, 0, sizeof(empty));
++        n = &empty;
++    }
++    Navi_Compile(n, &owner, out, NULL);
++}
++
++const char *Navi_BugShort(u8 t)
++{
++    switch (t)
++    {
++    case 1: return "MOV"; case 3: return "PNL"; case 4: return "CUS"; case 6: return "COL";
++    case 7: return "BUS"; case 9: return "HP"; case 11: return "ST"; case 12: return "ST+";
++    }
++    return "?";
++}
++
++const char *Navi_BugName(u8 t)
++{
++    // what each bug does in our battles (BN6 byte_813CC18 types, asm/asm37_0.s:2819)
++    switch (t)
++    {
++    case 1:  return "MOVE BUG";     // panel skip: you step by yourself
++    case 3:  return "PANEL BUG";    // panels crack under you
++    case 4:  return "CUSTOM BUG";   // fewer chips from a later turn
++    case 6:  return "COLLECT BUG";  // smaller rewards
++    case 7:  return "BUSTER BUG";   // the buster misfires
++    case 9:  return "HP BUG";       // HP drains
++    case 11: return "STATUS BUG";   // a status at battle start
++    case 12: return "STATUS BUG+";
++    }
++    return "BUG";
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/navicust_ui.c b/src/pkbn/navicust_ui.c
+new file mode 100644
+index 0000000..d1ac3d4
+--- /dev/null
++++ b/src/pkbn/navicust_ui.c
+@@ -0,0 +1,624 @@
++// The NaviCust editor (POC-9): opened from the party menu ("NAVICUST"). Drawn on our 264x176 canvas.
++//
++// Controls (BN6's NaviCust, adapted to a list on the right):
++//   program list:  Up/Down choose, A pick the program up, LEFT go to the board, START run, B leave
++//   placing:       D-pad move, L/R turn, SELECT change colour (type), A put it down, B cancel
++//   board:         D-pad move the cursor, A pick a placed program up again, RIGHT/B back to the list
++#include "pkbn/grid_vfx.h"   // first: it pulls in <stdlib.h> before global.h's macros
++#include "global.h"
++#include "battle_main.h"
++#include "data.h"
++#include "main.h"
++#include "pokemon.h"
++#include "sound.h"
++#include "constants/abilities.h"
++#include "constants/songs.h"
++#include "pkbn/navicust.h"
++#include "pkbn/render.h"
++#include "pkbn/gfx.h"
++
++#ifdef PORTABLE
++#include <stdio.h>
++#include <string.h>
++
++#define CW PKBN_CANVAS_W
++#define CH PKBN_CANVAS_H
++#define RGB PKBN_RGB
++#define CELL 20
++#define BOARD_X 28     // left edge of board cell (0,0)
++#define BOARD_Y 38
++#define LIST_X 152
++#define LIST_Y 18
++#define LIST_ROWS 10
++#define ROW_H 11
++
++enum { M_LIST, M_PLACE, M_BOARD, M_RESULT };
++
++static struct
++{
++    u8 slot;
++    MainCallback exit;
++    struct PkbnNavi *navi;
++    struct PkbnNaviOwner owner;
++    struct PkbnMonPic pic;
++    u8 mode;
++    u8 listCursor, listTop;
++    struct PkbnNaviPart ghost;
++    bool8 moving;                 // ghost is a placed part picked up again
++    struct PkbnNaviPart movedFrom;
++    s8 bx, by;                    // board cursor
++    u32 t;
++    char name[POKEMON_NAME_LENGTH + 1];
++    struct PkbnNaviStats stats;
++    struct PkbnNaviBoard board;
++    char note[64];
++    u16 noteTimer;
++} sN;
++
++// ---- text helpers ---------------------------------------------------------------------------------------------
++
++static s32 Text(u16 *fb, s32 x, s32 y, const char *s, u16 col)
++{
++    return Pkbn_DrawEmText(fb, x, y, s, PKBN_FONT_SMALL, col, RGB(2, 2, 5));
++}
++
++// Word-wrap `s` into at most `lines` lines of `width` pixels, starting at (x, y), 10 px apart.
++static void TextWrap(u16 *fb, s32 x, s32 y, s32 width, s32 lines, const char *s, u16 col)
++{
++    char line[96];
++    while (*s && lines-- > 0)
++    {
++        s32 n = 0, lastSpace = -1;
++        while (s[n])
++        {
++            char tmp[96];
++            memcpy(tmp, s, n + 1);
++            tmp[n + 1] = '\0';
++            if (Pkbn_EmTextWidth(tmp, PKBN_FONT_SMALL) > width)
++                break;
++            if (s[n] == ' ')
++                lastSpace = n;
++            n++;
++        }
++        if (s[n] && lastSpace > 0)
++            n = lastSpace;
++        memcpy(line, s, n);
++        line[n] = '\0';
++        Text(fb, x, y, line, col);
++        y += 10;
++        s += n;
++        while (*s == ' ')
++            s++;
++    }
++}
++
++static void Hint(u16 *fb, s32 y, const char *s)
++{
++    Text(fb, LIST_X - 10 - Pkbn_EmTextWidth(s, PKBN_FONT_SMALL), y, s, RGB(14, 16, 20));
++}
++
++static void Note(const char *s)
++{
++    snprintf(sN.note, sizeof(sN.note), "%s", s);
++    sN.noteTimer = 90;
++}
++
++static u8 Available(u8 prog)
++{
++    u8 owned = Navi_ProgramsOwned(prog), used = Navi_ProgramsInUse(prog);
++    return owned > used ? owned - used : 0;
++}
++
++static void Recompile(void)
++{
++    Navi_Compile(sN.navi, &sN.owner, &sN.stats, &sN.board);
++}
++
++// ---- drawing ------------------------------------------------------------------------------------------------
++
++static void CellRect(s32 x, s32 y, s32 *px, s32 *py)
++{
++    *px = BOARD_X + x * CELL;
++    *py = BOARD_Y + y * CELL;
++}
++
++static void DrawCellFill(u16 *fb, s32 x, s32 y, u16 col, u8 alpha16)
++{
++    s32 px, py;
++    CellRect(x, y, &px, &py);
++    if (alpha16 >= 16)
++    {
++        Pkbn_FillRect(fb, px + 1, py + 1, CELL - 2, CELL - 2, col);
++        Pkbn_FillRect(fb, px + 1, py + 1, CELL - 2, 2, Gfx_Blend(col, RGB(31, 31, 31), 7));      // bevel light
++        Pkbn_FillRect(fb, px + 1, py + 1, 2, CELL - 2, Gfx_Blend(col, RGB(31, 31, 31), 5));
++        Pkbn_FillRect(fb, px + 1, py + CELL - 3, CELL - 2, 2, Gfx_Blend(col, RGB(0, 0, 0), 7));  // bevel dark
++        Pkbn_FillRect(fb, px + CELL - 3, py + 1, 2, CELL - 2, Gfx_Blend(col, RGB(0, 0, 0), 6));
++    }
++    else
++        Gfx_FillBlend(fb, px + 1, py + 1, CELL - 2, CELL - 2, col, alpha16);
++}
++
++static bool8 OnFrame(s32 x, s32 y)
++{
++    if (x >= 0 && x < NAVI_W && y >= 0 && y < NAVI_H)
++        return FALSE;
++    return (x >= 0 && x < NAVI_W && (y == -1 || y == NAVI_H)) || (y >= 0 && y < NAVI_H && (x == -1 || x == NAVI_W));
++}
++
++static void DrawBoard(u16 *fb)
++{
++    s32 x, y, i;
++    struct PkbnImage img = Gfx_MonImage(&sN.pic, 0);
++    // the Navi behind its board, dimmed (BN6 shows the Navi on the NaviCust screen)
++    Gfx_ClipRect(BOARD_X - CELL, BOARD_Y - CELL, BOARD_X + (NAVI_W + 1) * CELL, BOARD_Y + (NAVI_H + 1) * CELL);
++    Gfx_Draw(fb, &img, BOARD_X + NAVI_W * CELL / 2, BOARD_Y + NAVI_H * CELL + 6, GFX_TINT, RGB(4, 6, 14), 11);
++    Gfx_ClipNone();
++
++    for (y = -1; y <= NAVI_H; y++)
++        for (x = -1; x <= NAVI_W; x++)
++        {
++            s32 px, py;
++            CellRect(x, y, &px, &py);
++            if (OnFrame(x, y))
++            {
++                // the overhang frame: usable, but a program here bugs (BN6's 3-cells)
++                Gfx_FillBlend(fb, px, py, CELL, CELL, RGB(10, 4, 6), 8);
++                for (i = 0; i < CELL; i += 4)
++                    Gfx_FillBlend(fb, px + i, py, 1, CELL, RGB(20, 8, 10), 6);
++            }
++            else if (x >= 0 && x < NAVI_W && y >= 0 && y < NAVI_H)
++            {
++                Gfx_FillBlend(fb, px, py, CELL, CELL, RGB(3, 6, 16), 12);
++                Pkbn_FrameRect(fb, px, py, CELL, CELL, RGB(8, 14, 26));
++            }
++        }
++    // the command line (BN6: row 3 of the 7x7 space, the 3rd row of this board)
++    {
++        s32 px, py;
++        CellRect(-1, NAVI_CMD_ROW, &px, &py);
++        Gfx_FillBlend(fb, px, py + CELL / 2 - 2, (NAVI_W + 2) * CELL, 4, RGB(31, 26, 6), 10);
++    }
++    // ability (fixed) and placed parts
++    for (y = -1; y <= NAVI_H; y++)
++        for (x = -1; x <= NAVI_W; x++)
++        {
++            u8 c = sN.board.cell[y + 1][x + 1];
++            if (c == NCELL_ABILITY)
++            {
++                s32 px, py;
++                DrawCellFill(fb, x, y, Vfx_TypeColor(sN.owner.types[0]), 16);
++                CellRect(x, y, &px, &py);
++                for (i = 2; i < CELL - 2; i += 4)  // a "locked" hatching
++                    Gfx_FillBlend(fb, px + i, py + 2, 1, CELL - 4, RGB(0, 0, 0), 5);
++            }
++            else if (c == NCELL_PART)
++            {
++                u8 p = sN.board.part[y + 1][x + 1];
++                const struct PkbnNaviPart *part = &sN.navi->parts[p];
++                u16 col = Vfx_TypeColor(part->type);
++                s32 px, py;
++                DrawCellFill(fb, x, y, col, 16);
++                CellRect(x, y, &px, &py);
++                if (sN.board.partBugged[p] && ((sN.t / 8) & 1))
++                    Pkbn_FrameRect(fb, px + 1, py + 1, CELL - 2, CELL - 2, RGB(31, 4, 4));
++                // joins: no inner border between two cells of the same part
++                if (x + 1 <= NAVI_W && sN.board.cell[y + 1][x + 2] == NCELL_PART && sN.board.part[y + 1][x + 2] == p)
++                    Pkbn_FillRect(fb, px + CELL - 3, py + 3, 4, CELL - 6, col);
++                if (y + 1 <= NAVI_H && sN.board.cell[y + 2][x + 1] == NCELL_PART && sN.board.part[y + 2][x + 1] == p)
++                    Pkbn_FillRect(fb, px + 3, py + CELL - 3, CELL - 6, 4, col);
++            }
++        }
++    // a label on each part's first cell
++    for (i = 0; i < sN.navi->count; i++)
++    {
++        s8 dx[25], dy[25];
++        const struct PkbnNaviPart *part = &sN.navi->parts[i];
++        u8 n = Navi_ShapeCells(part->prog, sN.board.partCompressed[i], part->rot, dx, dy);
++        s32 px, py;
++        char tag[4];
++        if (n == 0)
++            continue;
++        CellRect(part->x + dx[0], part->y + dy[0], &px, &py);
++        snprintf(tag, sizeof(tag), "%.2s", gPkbnNcps[part->prog].name);
++        Text(fb, px + 3, py + 2, tag, sN.board.partRuns[i] ? RGB(31, 31, 31) : RGB(14, 14, 16));
++        if (sN.board.partCompressed[i])
++            Text(fb, px + 12, py + 7, "c", RGB(31, 31, 20));
++    }
++    // the ability's label
++    if (sN.board.abilityCells)
++    {
++        s32 px, py;
++        CellRect(0, NAVI_CMD_ROW, &px, &py);
++        Text(fb, px + 3, py + 2, "AB", RGB(31, 31, 31));
++    }
++}
++
++static void DrawGhost(u16 *fb)
++{
++    s8 dx[25], dy[25];
++    u8 n = Navi_ShapeCells(sN.ghost.prog, Navi_IsCompressed(sN.ghost.prog, &sN.owner), sN.ghost.rot, dx, dy), i;
++    bool8 ok = Navi_CanPlace(sN.navi, &sN.owner, &sN.ghost, -1);
++    u16 col = ok ? Vfx_TypeColor(sN.ghost.type) : RGB(31, 4, 4);
++    for (i = 0; i < n; i++)
++    {
++        s32 px, py;
++        CellRect(sN.ghost.x + dx[i], sN.ghost.y + dy[i], &px, &py);
++        Gfx_FillBlend(fb, px + 2, py + 2, CELL - 4, CELL - 4, col, (sN.t & 8) ? 13 : 9);
++        Pkbn_FrameRect(fb, px + 1, py + 1, CELL - 2, CELL - 2, ok ? RGB(31, 31, 31) : RGB(31, 10, 10));
++    }
++}
++
++static void DrawList(u16 *fb)
++{
++    s32 i;
++    char line[24];
++    Draw_Box(fb, LIST_X - 4, LIST_Y - 2, CW - LIST_X + 2, LIST_ROWS * ROW_H + 4, RGB(3, 5, 12), RGB(20, 24, 31), 14);
++    for (i = 0; i < LIST_ROWS && sN.listTop + i < NCP_COUNT; i++)
++    {
++        u8 prog = sN.listTop + i;
++        s32 y = LIST_Y + i * ROW_H;
++        u8 avail = Available(prog);
++        bool8 cur = prog == sN.listCursor;
++        if (cur)
++            Gfx_FillBlend(fb, LIST_X - 2, y, CW - LIST_X - 2, ROW_H, RGB(31, 26, 6), (sN.mode == M_LIST) ? 8 : 4);
++        Pkbn_FillRect(fb, LIST_X, y + 2, 6, 7, Vfx_TypeColor(gPkbnNcps[prog].types[0]));
++        Text(fb, LIST_X + 9, y - 2, gPkbnNcps[prog].name, avail ? RGB(31, 31, 31) : RGB(14, 14, 16));
++        snprintf(line, sizeof(line), "x%u", avail);
++        Text(fb, CW - 18, y - 2, line, avail ? RGB(31, 27, 8) : RGB(14, 14, 16));
++    }
++    // scroll marks
++    if (sN.listTop > 0)
++        Text(fb, CW - 30, LIST_Y - 14, "^", RGB(31, 31, 31));
++    if (sN.listTop + LIST_ROWS < NCP_COUNT)
++        Text(fb, CW - 30, LIST_Y + LIST_ROWS * ROW_H - 4, "~", RGB(31, 31, 31));
++}
++
++static void DrawPreview(u16 *fb)
++{
++    const struct PkbnNcp *p = &gPkbnNcps[sN.listCursor];
++    s8 dx[25], dy[25];
++    bool8 comp = Navi_IsCompressed(sN.listCursor, &sN.owner);
++    u8 n = Navi_ShapeCells(sN.listCursor, comp, 0, dx, dy), i, t;
++    s32 y = LIST_Y + LIST_ROWS * ROW_H + 6;
++    Draw_Box(fb, LIST_X - 4, y, CW - LIST_X + 2, CH - y - 1, RGB(3, 5, 12), RGB(20, 24, 31), 14);
++    for (i = 0; i < n; i++)
++        Pkbn_FillRect(fb, LIST_X + 2 + dx[i] * 7, y + 4 + dy[i] * 7, 6, 6, Vfx_TypeColor(p->types[0]));
++    Text(fb, LIST_X + 40, y - 1, p->plus ? "PLUS PART" : "ON THE LINE", p->plus ? RGB(16, 28, 31) : RGB(31, 26, 6));
++    {
++        static const char *const sCond[NCP_COND_COUNT] = {"COOL", "BEAUTY", "CUTE", "SMART", "TOUGH"};
++        char line[24];
++        snprintf(line, sizeof(line), comp ? "COMPRESSED!" : "%s %u/%u", sCond[p->cond], sN.owner.cond[p->cond], NCP_COMPRESS_AT);
++        Text(fb, LIST_X + 40, y + 9, line, comp ? RGB(31, 31, 20) : RGB(16, 18, 22));
++    }
++    // colour variants
++    for (t = 0; t < p->typeCount; t++)
++    {
++        struct PkbnImage icon = Gfx_TypeIcon(p->types[t]);
++        Gfx_Draw(fb, &icon, LIST_X - 1 + t * 35, y + 27, 0, 0, 0);
++    }
++}
++
++static void DrawInfo(u16 *fb)
++{
++    char line[80];
++    s32 y = BOARD_Y + (NAVI_H + 1) * CELL + 2, x, k;
++    Draw_Box(fb, 2, y, LIST_X - 8, CH - y - 1, RGB(3, 5, 12), RGB(20, 24, 31), 14);
++    if (sN.noteTimer)
++    {
++        Text(fb, 6, y + 1, sN.note, RGB(31, 26, 6));
++        return;
++    }
++    if (sN.mode == M_LIST || sN.mode == M_PLACE)
++    {
++        const struct PkbnNcp *p = &gPkbnNcps[sN.mode == M_PLACE ? sN.ghost.prog : sN.listCursor];
++        Text(fb, 6, y + 1, p->name, RGB(31, 31, 31));
++        Hint(fb, y + 1, sN.mode == M_PLACE ? "L/R:TURN A:PUT" : "A:PICK START:RUN");
++        TextWrap(fb, 6, y + 11, LIST_X - 16, 2, p->desc, RGB(22, 26, 31));
++        return;
++    }
++    if (sN.mode == M_BOARD)
++    {
++        u8 c = sN.board.cell[sN.by + 1][sN.bx + 1];
++        if (c == NCELL_ABILITY)
++        {
++            char ab[ABILITY_NAME_LENGTH + 4];
++            Pkbn_GameStringToAscii(ab, gAbilityNames[sN.owner.ability], sizeof(ab));
++            snprintf(line, sizeof(line), "%s (ABILITY)", ab);
++            Text(fb, 6, y + 1, line, RGB(31, 31, 31));
++            Pkbn_GameTextToAscii(line, gAbilityDescriptionPointers[sN.owner.ability], sizeof(line));
++            TextWrap(fb, 6, y + 11, LIST_X - 16, 2, line, RGB(22, 26, 31));
++        }
++        else if (c == NCELL_PART)
++        {
++            u8 p = sN.board.part[sN.by + 1][sN.bx + 1];
++            const struct PkbnNcp *ncp = &gPkbnNcps[sN.navi->parts[p].prog];
++            snprintf(line, sizeof(line), "%s%s%s", ncp->name, sN.board.partRuns[p] ? "" : "  (NOT RUNNING)",
++                     sN.board.partBugged[p] ? "  BUG!" : "");
++            Text(fb, 6, y + 1, line, sN.board.partBugged[p] ? RGB(31, 10, 8) : RGB(31, 31, 31));
++            TextWrap(fb, 6, y + 11, LIST_X - 16, 2, ncp->desc, RGB(22, 26, 31));
++        }
++        else
++            Text(fb, 6, y + 1, "(EMPTY)", RGB(22, 26, 31));
++        if (c != NCELL_ABILITY)
++            Hint(fb, y + 1, "A:MOVE  B:LIST");
++        return;
++    }
++    // M_RESULT: BN6's RUN
++    x = Text(fb, 6, y + 1, "RUN: ", RGB(31, 31, 31));
++    {
++        bool8 bugs = FALSE;
++        for (k = 1; k < NAVI_BUG_TYPES; k++)
++            if (sN.stats.bug[k])
++                bugs = TRUE;
++        if (!bugs)
++            Text(fb, x, y + 1, "OK! NO BUGS", RGB(10, 31, 12));
++        else
++        {
++            line[0] = '\0';
++            for (k = 1; k < NAVI_BUG_TYPES; k++)
++                if (sN.stats.bug[k])
++                    snprintf(line + strlen(line), sizeof(line) - strlen(line), "%s%u ", Navi_BugShort(k), sN.stats.bug[k]);
++            x = Text(fb, x, y + 1, "BUG! ", ((sN.t / 8) & 1) ? RGB(31, 8, 6) : RGB(31, 20, 8));
++            Text(fb, x, y + 1, line, RGB(31, 14, 10));
++        }
++    }
++    snprintf(line, sizeof(line), "HAND+%u  BUSTER %u/%u/%u  HP+%u%%%s%s", sN.stats.hand, sN.stats.busterAtk,
++             sN.stats.busterSpeed, sN.stats.busterCharge, sN.stats.hpPct, sN.stats.pokerus ? "  PKRUS" : "",
++             sN.stats.firstBarrier ? "  BARRIER" : "");
++    Text(fb, 6, y + 11, line, RGB(22, 26, 31));
++    snprintf(line, sizeof(line), "%s%s%s%s  COLOURS %u", (sN.stats.flags & NCPF_SUPER_ARMOR) ? "ARMOR " : "",
++             (sN.stats.flags & NCPF_FLOAT_SHOES) ? "FLOAT " : "", (sN.stats.flags & NCPF_AIR_SHOES) ? "AIR " : "",
++             (sN.stats.flags & NCPF_UNDER_SHIRT) ? "SHIRT " : "", sN.stats.colours);
++    Text(fb, 6, y + 21, line, RGB(22, 26, 31));
++}
++
++static void DrawHeader(u16 *fb)
++{
++    struct PkbnImage icon;
++    s32 x;
++    Pkbn_DrawEmText(fb, 4, -2, "NAVICUST", PKBN_FONT_NORMAL, RGB(31, 26, 6), RGB(2, 2, 5));
++    x = Text(fb, 74, 0, sN.name, RGB(31, 31, 31));
++    icon = Gfx_TypeIcon(sN.owner.types[0]);
++    Gfx_Draw(fb, &icon, x + 4, 2, 0, 0, 0);
++    if (sN.owner.types[1] != sN.owner.types[0])
++    {
++        icon = Gfx_TypeIcon(sN.owner.types[1]);
++        Gfx_Draw(fb, &icon, x + 38, 2, 0, 0, 0);
++    }
++    if (sN.owner.pokerus & 0xF)
++        Text(fb, CW - 44, 0, "PKRS", RGB(31, 12, 20));
++}
++
++static void Draw(u16 *fb)
++{
++    s32 i;
++    for (i = 0; i < CW * CH; i++)
++        fb[i] = PKBN_RGB(1, 2, 6);
++    for (i = 0; i < CH; i += 16) // the Net grid
++        Gfx_FillBlend(fb, 0, (i + (s32)(sN.t / 4)) % CH, CW, 1, RGB(4, 12, 18), 4);
++    DrawHeader(fb);
++    DrawBoard(fb);
++    if (sN.mode == M_PLACE)
++        DrawGhost(fb);
++    if (sN.mode == M_BOARD)
++    {
++        s32 px, py;
++        CellRect(sN.bx, sN.by, &px, &py);
++        Pkbn_FrameRect(fb, px - 1, py - 1, CELL + 2, CELL + 2, (sN.t & 8) ? RGB(31, 26, 6) : RGB(31, 31, 31));
++    }
++    DrawList(fb);
++    DrawPreview(fb);
++    DrawInfo(fb);
++}
++
++// ---- input ---------------------------------------------------------------------------------------------------
++
++static void StartPlacing(u8 prog)
++{
++    sN.ghost.prog = prog;
++    sN.ghost.type = gPkbnNcps[prog].types[0];
++    sN.ghost.rot = 0;
++    sN.ghost.x = 1;
++    sN.ghost.y = gPkbnNcps[prog].plus ? 0 : NAVI_CMD_ROW - 1;
++    sN.moving = FALSE;
++    sN.mode = M_PLACE;
++}
++
++static void RemovePart(u8 i)
++{
++    for (; i + 1 < sN.navi->count; i++)
++        sN.navi->parts[i] = sN.navi->parts[i + 1];
++    sN.navi->count--;
++}
++
++static void Leave(void)
++{
++    gPkbnCanvasOverlay = NULL;
++    SetMainCallback2(sN.exit);
++}
++
++static void HandleInput(u16 keys)
++{
++    switch (sN.mode)
++    {
++    case M_RESULT:
++        if (keys & (A_BUTTON | B_BUTTON | START_BUTTON))
++            sN.mode = M_LIST;
++        break;
++    case M_LIST:
++        if (keys & DPAD_UP)
++        {
++            sN.listCursor = sN.listCursor ? sN.listCursor - 1 : NCP_COUNT - 1;
++            PlaySE(SE_SELECT);
++        }
++        if (keys & DPAD_DOWN)
++        {
++            sN.listCursor = (sN.listCursor + 1) % NCP_COUNT;
++            PlaySE(SE_SELECT);
++        }
++        if (sN.listCursor < sN.listTop)
++            sN.listTop = sN.listCursor;
++        if (sN.listCursor >= sN.listTop + LIST_ROWS)
++            sN.listTop = sN.listCursor - LIST_ROWS + 1;
++        if (keys & A_BUTTON)
++        {
++            if (Available(sN.listCursor) == 0)
++            {
++                Note("NONE LEFT - ALL IN USE");
++                PlaySE(SE_FAILURE);
++            }
++            else if (sN.navi->count >= NAVI_MAX_PARTS)
++                PlaySE(SE_FAILURE);
++            else
++            {
++                StartPlacing(sN.listCursor);
++                PlaySE(SE_SELECT);
++            }
++        }
++        if (keys & DPAD_LEFT)
++        {
++            sN.mode = M_BOARD;
++            sN.bx = NAVI_W - 1;
++            sN.by = NAVI_CMD_ROW;
++        }
++        if (keys & START_BUTTON)
++        {
++            Recompile();
++            sN.mode = M_RESULT;
++            PlaySE(SE_PIN);
++        }
++        if (keys & B_BUTTON)
++        {
++            PlaySE(SE_SELECT);
++            Leave();
++        }
++        break;
++    case M_PLACE:
++        if (keys & DPAD_UP && sN.ghost.y > -2)            sN.ghost.y--;
++        if (keys & DPAD_DOWN && sN.ghost.y < NAVI_H)      sN.ghost.y++;
++        if (keys & DPAD_LEFT && sN.ghost.x > -2)          sN.ghost.x--;
++        if (keys & DPAD_RIGHT && sN.ghost.x < NAVI_W)     sN.ghost.x++;
++        if (keys & R_BUTTON)
++            sN.ghost.rot = (sN.ghost.rot + 1) & 3;
++        if (keys & L_BUTTON)
++            sN.ghost.rot = (sN.ghost.rot + 3) & 3;
++        if (keys & SELECT_BUTTON)
++        {
++            const struct PkbnNcp *p = &gPkbnNcps[sN.ghost.prog];
++            u8 k;
++            for (k = 0; k < p->typeCount && p->types[k] != sN.ghost.type; k++)
++                ;
++            sN.ghost.type = p->types[(k + 1) % p->typeCount];
++        }
++        if (keys & A_BUTTON)
++        {
++            if (Navi_CanPlace(sN.navi, &sN.owner, &sN.ghost, -1))
++            {
++                sN.navi->parts[sN.navi->count++] = sN.ghost;
++                Recompile();
++                sN.mode = sN.moving ? M_BOARD : M_LIST;
++                PlaySE(SE_PIN);
++            }
++            else
++                PlaySE(SE_FAILURE);
++        }
++        if (keys & B_BUTTON)
++        {
++            if (sN.moving) // put it back where it was
++            {
++                sN.navi->parts[sN.navi->count++] = sN.movedFrom;
++                Recompile();
++            }
++            sN.mode = sN.moving ? M_BOARD : M_LIST;
++        }
++        break;
++    case M_BOARD:
++        if (keys & DPAD_UP && sN.by > -1)          sN.by--;
++        if (keys & DPAD_DOWN && sN.by < NAVI_H)    sN.by++;
++        if (keys & DPAD_LEFT && sN.bx > -1)        sN.bx--;
++        if (keys & DPAD_RIGHT)
++        {
++            if (sN.bx < NAVI_W)
++                sN.bx++;
++            else
++                sN.mode = M_LIST;
++        }
++        if (keys & B_BUTTON)
++            sN.mode = M_LIST;
++        if ((keys & A_BUTTON) && sN.board.cell[sN.by + 1][sN.bx + 1] == NCELL_PART)
++        {
++            u8 p = sN.board.part[sN.by + 1][sN.bx + 1];
++            sN.movedFrom = sN.navi->parts[p];
++            sN.ghost = sN.movedFrom;
++            RemovePart(p);
++            Recompile();
++            sN.moving = TRUE;
++            sN.mode = M_PLACE;
++            PlaySE(SE_SELECT);
++        }
++        break;
++    }
++}
++
++// Self-tests drive the editor with PKBN_TEST_NCP_KEYS = "U,D,L,R,A,B,S(tart),E(select),<,>(L/R)" one per 4 frames.
++static const char *sKeys;
++static u32 sKeyClock;
++
++static void CB2_NaviCust(void)
++{
++    u16 keys = gMain.newKeys;
++    sN.t++;
++    if (sN.noteTimer)
++        sN.noteTimer--;
++    if (sKeys != NULL)
++    {
++        keys = 0;
++        if (++sKeyClock % 4 == 0)
++        {
++            switch (*sKeys)
++            {
++            case 'U': keys = DPAD_UP; break;
++            case 'D': keys = DPAD_DOWN; break;
++            case 'L': keys = DPAD_LEFT; break;
++            case 'R': keys = DPAD_RIGHT; break;
++            case 'A': keys = A_BUTTON; break;
++            case 'B': keys = B_BUTTON; break;
++            case 'S': keys = START_BUTTON; break;
++            case 'E': keys = SELECT_BUTTON; break;
++            case '<': keys = L_BUTTON; break;
++            case '>': keys = R_BUTTON; break;
++            case '.': break; // wait
++            }
++            if (*sKeys)
++                sKeys++;
++            if (*sKeys == ',')
++                sKeys++;
++        }
++    }
++    HandleInput(keys);
++}
++
++void PkbnNaviCust_Open(u8 partySlot, MainCallback exitCallback)
++{
++    struct Pokemon *mon = &gPlayerParty[partySlot];
++    memset(&sN, 0, sizeof(sN));
++    sN.slot = partySlot;
++    sN.exit = exitCallback;
++    sN.navi = Navi_ForMon(mon, TRUE);
++    if (sN.navi == NULL)
++    {
++        SetMainCallback2(exitCallback);
++        return;
++    }
++    Navi_OwnerFromMon(&sN.owner, mon);
++    Gfx_LoadMonPic(&sN.pic, sN.owner.species, GetMonData(mon, MON_DATA_PERSONALITY), GetMonData(mon, MON_DATA_OT_ID));
++    Pkbn_GameStringToAscii(sN.name, gSpeciesNames[sN.owner.species], sizeof(sN.name));
++    Recompile();
++    sN.mode = M_LIST;
++    sKeys = getenv("PKBN_TEST_NCP_KEYS");
++    sKeyClock = 0;
++    gPkbnCanvasOverlay = Draw;
++    SetMainCallback2(CB2_NaviCust);
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/ncp_table.c b/src/pkbn/ncp_table.c
+new file mode 100644
+index 0000000..5b66a5b
+--- /dev/null
++++ b/src/pkbn/ncp_table.c
+@@ -0,0 +1,241 @@
++// GENERATED by tools/gen_navicust.py from tools/navicust_curated.py - do not edit.
++#include "global.h"
++#include "constants/abilities.h"
++#include "constants/pokemon.h"
++#include "pkbn/ncp_table.h"
++
++const struct PkbnNcp gPkbnNcps[NCP_COUNT] =
++{
++    { // bn6f entry 4 (SuprArmr)
++        "SuprArmr", "Flinches and knock-backs don't stop you.", NCPE_SUPER_ARMOR, 0, 0, FALSE, 1, 1, NCP_COND_TOUGH, 2, {TYPE_STEEL, TYPE_ROCK}, {3, 3, {2, 7, 7, 0, 0}}, {3, 2, {2, 7, 0, 0, 0}}
++    },
++    { // bn6f entry 8 (Custom1)
++        "Custom1", "+1 chip in the Custom hand.", NCPE_HAND, 0, 1, FALSE, 0, 4, NCP_COND_SMART, 2, {TYPE_PSYCHIC, TYPE_NORMAL}, {3, 3, {2, 7, 6, 0, 0}}, {2, 3, {1, 1, 3, 0, 0}}
++    },
++    { // bn6f entry 12 (Custom2)
++        "Custom2", "+2 chips in the Custom hand.", NCPE_HAND, 0, 2, FALSE, 0, 4, NCP_COND_SMART, 1, {TYPE_PSYCHIC}, {2, 5, {3, 3, 3, 3, 3}}, {2, 4, {3, 3, 3, 1, 0}}
++    },
++    { // bn6f entry 28 (FstBarr)
++        "FstBarr", "Start every battle behind a Barrier.", NCPE_FIRST_BARRIER, 0, 0, FALSE, 0, 1, NCP_COND_TOUGH, 2, {TYPE_PSYCHIC, TYPE_WATER}, {3, 2, {7, 7, 0, 0, 0}}, {2, 2, {1, 3, 0, 0, 0}}
++    },
++    { // bn6f entry 44 (FlotShoe)
++        "FlotShoe", "Panels do nothing to you: no poison, no ice, no cracks.", NCPE_FLOAT_SHOES, 0, 0, FALSE, 0, 3, NCP_COND_BEAUTY, 2, {TYPE_FLYING, TYPE_GHOST}, {3, 3, {4, 7, 6, 0, 0}}, {2, 3, {2, 3, 1, 0, 0}}
++    },
++    { // bn6f entry 48 (AirShoes)
++        "AirShoes", "You can stand on broken panels.", NCPE_AIR_SHOES, 0, 0, FALSE, 0, 3, NCP_COND_BEAUTY, 1, {TYPE_FLYING}, {3, 3, {7, 7, 5, 0, 0}}, {3, 3, {7, 5, 5, 0, 0}}
++    },
++    { // bn6f entry 52 (UnderSht)
++        "UnderSht", "A hit that would faint you leaves 1 HP (when above 1 HP).", NCPE_UNDER_SHIRT, 0, 0, FALSE, 7, 1, NCP_COND_TOUGH, 2, {TYPE_NORMAL, TYPE_FIGHTING}, {1, 2, {1, 1, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // bn6f entry 124 (BugStop)
++        "BugStop", "Cancels every bug.", NCPE_BUG_STOP, 0, 0, FALSE, 0, 0, NCP_COND_SMART, 1, {TYPE_BUG}, {3, 4, {6, 3, 6, 3, 0}}, {3, 4, {2, 3, 6, 2, 0}}
++    },
++    { // bn6f entry 108 (BustPack)
++        "BustPack", "Buster Attack, Speed and Charge +3.", NCPE_BUST_PACK, 0, 3, FALSE, 0, 7, NCP_COND_COOL, 1, {TYPE_STEEL}, {3, 3, {7, 7, 7, 0, 0}}, {3, 3, {3, 7, 7, 0, 0}}
++    },
++    { // bn6f entries 140-142 (Attack+1)
++        "Attack+1", "Buster Attack +1.", NCPE_BUSTER_ATK, 0, 1, TRUE, 0, 7, NCP_COND_COOL, 3, {TYPE_FIGHTING, TYPE_FIRE, TYPE_NORMAL}, {1, 2, {1, 1, 0, 0, 0}}, {1, 2, {1, 1, 0, 0, 0}}
++    },
++    { // bn6f entries 144-146 (Speed+1)
++        "Speed+1", "Buster Speed +1 (shoots more often).", NCPE_BUSTER_SPEED, 0, 1, TRUE, 0, 7, NCP_COND_SMART, 3, {TYPE_ELECTRIC, TYPE_FLYING, TYPE_NORMAL}, {1, 1, {1, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // bn6f entries 148-150 (Charge+1)
++        "Charge+1", "Buster Charge +1 (hold B: charged shot comes faster).", NCPE_BUSTER_CHARGE, 0, 1, TRUE, 0, 7, NCP_COND_TOUGH, 3, {TYPE_ELECTRIC, TYPE_FIRE, TYPE_NORMAL}, {1, 1, {1, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // bn6f entries 164-166 (HP+50)
++        "HP+50", "Max HP +5% in battle.", NCPE_HP_PCT, 0, 5, TRUE, 0, 9, NCP_COND_CUTE, 3, {TYPE_NORMAL, TYPE_GRASS, TYPE_WATER}, {1, 2, {1, 1, 0, 0, 0}}, {1, 2, {1, 1, 0, 0, 0}}
++    },
++    { // bn6f entries 168-170 (HP+100)
++        "HP+100", "Max HP +10% in battle.", NCPE_HP_PCT, 0, 10, TRUE, 0, 9, NCP_COND_CUTE, 3, {TYPE_NORMAL, TYPE_GRASS, TYPE_WATER}, {2, 2, {3, 3, 0, 0, 0}}, {2, 2, {3, 3, 0, 0, 0}}
++    },
++    { // bn6f entries 172-174 (HP+200)
++        "HP+200", "Max HP +20% in battle.", NCPE_HP_PCT, 0, 20, TRUE, 0, 9, NCP_COND_CUTE, 3, {TYPE_NORMAL, TYPE_GRASS, TYPE_POISON}, {3, 2, {7, 7, 0, 0, 0}}, {3, 2, {7, 7, 0, 0, 0}}
++    },
++    { // design
++        "Protein", "Attack +10% in battle.", NCPE_STAT_PCT, STAT_ATK, 10, TRUE, 0, 7, NCP_COND_COOL, 2, {TYPE_FIGHTING, TYPE_NORMAL}, {1, 2, {1, 1, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design
++        "Iron", "Defense +10% in battle.", NCPE_STAT_PCT, STAT_DEF, 10, TRUE, 0, 7, NCP_COND_TOUGH, 2, {TYPE_STEEL, TYPE_ROCK}, {1, 2, {1, 1, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design
++        "Calcium", "Sp. Atk +10% in battle.", NCPE_STAT_PCT, STAT_SPATK, 10, TRUE, 0, 7, NCP_COND_BEAUTY, 2, {TYPE_PSYCHIC, TYPE_FIRE}, {1, 2, {1, 1, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design
++        "Zinc", "Sp. Def +10% in battle.", NCPE_STAT_PCT, STAT_SPDEF, 10, TRUE, 0, 7, NCP_COND_CUTE, 2, {TYPE_WATER, TYPE_PSYCHIC}, {1, 2, {1, 1, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design
++        "Carbos", "Speed +10% in battle (moves and steps come sooner).", NCPE_STAT_PCT, STAT_SPEED, 10, TRUE, 0, 7, NCP_COND_SMART, 2, {TYPE_ELECTRIC, TYPE_FLYING}, {1, 2, {1, 1, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design
++        "HP Up", "Max HP +10% in battle.", NCPE_HP_PCT, 0, 10, TRUE, 0, 9, NCP_COND_CUTE, 2, {TYPE_NORMAL, TYPE_GRASS}, {1, 3, {1, 1, 1, 0, 0}}, {1, 2, {1, 1, 0, 0, 0}}
++    },
++    { // design (Quick Claw, holdEffectParam 20)
++        "QuickClw", "You recover 25% faster after using a chip.", NCPE_QUICK_CLAW, 0, 25, FALSE, 0, 4, NCP_COND_SMART, 2, {TYPE_NORMAL, TYPE_DARK}, {2, 2, {1, 3, 0, 0, 0}}, {2, 1, {3, 0, 0, 0, 0}}
++    },
++    { // design (King's Rock, HOLD_EFFECT_FLINCH param 10)
++        "KingRock", "Your hits stun the foe 10% of the time.", NCPE_KINGS_ROCK, 0, 10, FALSE, 0, 7, NCP_COND_COOL, 2, {TYPE_ROCK, TYPE_STEEL}, {3, 2, {7, 2, 0, 0, 0}}, {2, 1, {3, 0, 0, 0, 0}}
++    },
++    { // design (Scope Lens, HOLD_EFFECT_SCOPE_LENS)
++        "ScopLens", "Critical hits are more likely (+1 stage).", NCPE_SCOPE_LENS, 0, 1, FALSE, 0, 7, NCP_COND_COOL, 2, {TYPE_PSYCHIC, TYPE_DARK}, {2, 2, {3, 3, 0, 0, 0}}, {2, 2, {1, 3, 0, 0, 0}}
++    },
++    { // design (BrightPowder, HOLD_EFFECT_EVASION_UP param 10)
++        "BrtPowdr", "Foes' warnings last 10% longer against you.", NCPE_BRIGHT_POWDER, 0, 10, FALSE, 0, 3, NCP_COND_BEAUTY, 2, {TYPE_BUG, TYPE_PSYCHIC}, {2, 3, {1, 3, 2, 0, 0}}, {2, 2, {3, 2, 0, 0, 0}}
++    },
++    { // design (Leftovers: 1/16 max HP each turn)
++        "Leftovrs", "Heal 1/16 of max HP every turn.", NCPE_LEFTOVERS, 0, 16, FALSE, 6, 9, NCP_COND_CUTE, 2, {TYPE_NORMAL, TYPE_GRASS}, {3, 2, {7, 5, 0, 0, 0}}, {3, 1, {7, 0, 0, 0, 0}}
++    },
++    { // design (Shell Bell, HOLD_EFFECT_SHELL_BELL param 8)
++        "ShelBell", "Heal 1/8 of the damage you deal.", NCPE_SHELL_BELL, 0, 8, FALSE, 6, 9, NCP_COND_CUTE, 2, {TYPE_WATER, TYPE_NORMAL}, {3, 2, {2, 7, 0, 0, 0}}, {2, 1, {3, 0, 0, 0, 0}}
++    },
++    { // design (Focus Band, HOLD_EFFECT_FOCUS_BAND param 10)
++        "FocsBand", "10% chance to survive a fainting hit with 1 HP.", NCPE_FOCUS_BAND, 0, 10, FALSE, 7, 1, NCP_COND_TOUGH, 1, {TYPE_FIGHTING}, {1, 3, {1, 1, 1, 0, 0}}, {1, 2, {1, 1, 0, 0, 0}}
++    },
++    { // design (Choice Band: Attack x1.5, locked to one move)
++        "ChoiceBd", "Attack x1.5, but only 1 chip per Custom.", NCPE_CHOICE_BAND, 0, 50, FALSE, 8, 4, NCP_COND_COOL, 2, {TYPE_FIGHTING, TYPE_NORMAL}, {3, 3, {7, 2, 2, 0, 0}}, {3, 2, {7, 2, 0, 0, 0}}
++    },
++    { // design (Lucky Egg: EXP x1.5)
++        "LuckyEgg", "EXP x1.5 after battle.", NCPE_LUCKY_EGG, 0, 50, FALSE, 0, 6, NCP_COND_CUTE, 1, {TYPE_NORMAL}, {2, 2, {3, 1, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Amulet Coin: prize money x2)
++        "AmuletCn", "Prize money x2.", NCPE_AMULET_COIN, 0, 100, FALSE, 0, 6, NCP_COND_CUTE, 2, {TYPE_NORMAL, TYPE_STEEL}, {2, 2, {1, 3, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "Charcoal", "Fire moves +10%.", NCPE_TYPE_BOOST, TYPE_FIRE, 10, TRUE, 0, 7, NCP_COND_BEAUTY, 1, {TYPE_FIRE}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "MystcWtr", "Water moves +10%.", NCPE_TYPE_BOOST, TYPE_WATER, 10, TRUE, 0, 7, NCP_COND_BEAUTY, 1, {TYPE_WATER}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "Magnet", "Electric moves +10%.", NCPE_TYPE_BOOST, TYPE_ELECTRIC, 10, TRUE, 0, 7, NCP_COND_BEAUTY, 1, {TYPE_ELECTRIC}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "MircSeed", "Grass moves +10%.", NCPE_TYPE_BOOST, TYPE_GRASS, 10, TRUE, 0, 7, NCP_COND_BEAUTY, 1, {TYPE_GRASS}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "NevMeltI", "Ice moves +10%.", NCPE_TYPE_BOOST, TYPE_ICE, 10, TRUE, 0, 7, NCP_COND_BEAUTY, 1, {TYPE_ICE}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "BlkBelt", "Fighting moves +10%.", NCPE_TYPE_BOOST, TYPE_FIGHTING, 10, TRUE, 0, 7, NCP_COND_COOL, 1, {TYPE_FIGHTING}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "PoisBarb", "Poison moves +10%.", NCPE_TYPE_BOOST, TYPE_POISON, 10, TRUE, 0, 7, NCP_COND_COOL, 1, {TYPE_POISON}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "SoftSand", "Ground moves +10%.", NCPE_TYPE_BOOST, TYPE_GROUND, 10, TRUE, 0, 7, NCP_COND_COOL, 1, {TYPE_GROUND}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "ShrpBeak", "Flying moves +10%.", NCPE_TYPE_BOOST, TYPE_FLYING, 10, TRUE, 0, 7, NCP_COND_COOL, 1, {TYPE_FLYING}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "TwstSpn", "Psychic moves +10%.", NCPE_TYPE_BOOST, TYPE_PSYCHIC, 10, TRUE, 0, 7, NCP_COND_BEAUTY, 1, {TYPE_PSYCHIC}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "SlvPowdr", "Bug moves +10%.", NCPE_TYPE_BOOST, TYPE_BUG, 10, TRUE, 0, 7, NCP_COND_COOL, 1, {TYPE_BUG}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "HardStn", "Rock moves +10%.", NCPE_TYPE_BOOST, TYPE_ROCK, 10, TRUE, 0, 7, NCP_COND_COOL, 1, {TYPE_ROCK}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "SpellTag", "Ghost moves +10%.", NCPE_TYPE_BOOST, TYPE_GHOST, 10, TRUE, 0, 7, NCP_COND_COOL, 1, {TYPE_GHOST}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "DrgnFang", "Dragon moves +10%.", NCPE_TYPE_BOOST, TYPE_DRAGON, 10, TRUE, 0, 7, NCP_COND_BEAUTY, 1, {TYPE_DRAGON}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "BlkGlass", "Dark moves +10%.", NCPE_TYPE_BOOST, TYPE_DARK, 10, TRUE, 0, 7, NCP_COND_BEAUTY, 1, {TYPE_DARK}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "MetlCoat", "Steel moves +10%.", NCPE_TYPE_BOOST, TYPE_STEEL, 10, TRUE, 0, 7, NCP_COND_COOL, 1, {TYPE_STEEL}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++    { // design (Gen 3 type item, +10%)
++        "SilkScrf", "Normal moves +10%.", NCPE_TYPE_BOOST, TYPE_NORMAL, 10, TRUE, 0, 7, NCP_COND_COOL, 1, {TYPE_NORMAL}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
++    },
++};
++
++const u8 gPkbnAbilityCells[ABILITIES_COUNT] =
++{
++    [ABILITY_STENCH] = 1,
++    [ABILITY_DRIZZLE] = 3,
++    [ABILITY_SPEED_BOOST] = 3,
++    [ABILITY_BATTLE_ARMOR] = 2,
++    [ABILITY_STURDY] = 2,
++    [ABILITY_DAMP] = 1,
++    [ABILITY_LIMBER] = 1,
++    [ABILITY_SAND_VEIL] = 1,
++    [ABILITY_STATIC] = 2,
++    [ABILITY_VOLT_ABSORB] = 2,
++    [ABILITY_WATER_ABSORB] = 2,
++    [ABILITY_OBLIVIOUS] = 1,
++    [ABILITY_CLOUD_NINE] = 2,
++    [ABILITY_COMPOUND_EYES] = 2,
++    [ABILITY_INSOMNIA] = 1,
++    [ABILITY_COLOR_CHANGE] = 2,
++    [ABILITY_IMMUNITY] = 1,
++    [ABILITY_FLASH_FIRE] = 2,
++    [ABILITY_SHIELD_DUST] = 1,
++    [ABILITY_OWN_TEMPO] = 1,
++    [ABILITY_SUCTION_CUPS] = 1,
++    [ABILITY_INTIMIDATE] = 3,
++    [ABILITY_SHADOW_TAG] = 3,
++    [ABILITY_ROUGH_SKIN] = 2,
++    [ABILITY_WONDER_GUARD] = 3,
++    [ABILITY_LEVITATE] = 3,
++    [ABILITY_EFFECT_SPORE] = 2,
++    [ABILITY_SYNCHRONIZE] = 2,
++    [ABILITY_CLEAR_BODY] = 1,
++    [ABILITY_NATURAL_CURE] = 2,
++    [ABILITY_LIGHTNING_ROD] = 2,
++    [ABILITY_SERENE_GRACE] = 2,
++    [ABILITY_SWIFT_SWIM] = 2,
++    [ABILITY_CHLOROPHYLL] = 2,
++    [ABILITY_ILLUMINATE] = 1,
++    [ABILITY_TRACE] = 2,
++    [ABILITY_HUGE_POWER] = 3,
++    [ABILITY_POISON_POINT] = 2,
++    [ABILITY_INNER_FOCUS] = 2,
++    [ABILITY_MAGMA_ARMOR] = 1,
++    [ABILITY_WATER_VEIL] = 1,
++    [ABILITY_MAGNET_PULL] = 2,
++    [ABILITY_SOUNDPROOF] = 1,
++    [ABILITY_RAIN_DISH] = 2,
++    [ABILITY_SAND_STREAM] = 3,
++    [ABILITY_PRESSURE] = 2,
++    [ABILITY_THICK_FAT] = 2,
++    [ABILITY_EARLY_BIRD] = 1,
++    [ABILITY_FLAME_BODY] = 2,
++    [ABILITY_RUN_AWAY] = 1,
++    [ABILITY_KEEN_EYE] = 1,
++    [ABILITY_HYPER_CUTTER] = 1,
++    [ABILITY_PICKUP] = 1,
++    [ABILITY_TRUANT] = 1,
++    [ABILITY_HUSTLE] = 2,
++    [ABILITY_CUTE_CHARM] = 1,
++    [ABILITY_PLUS] = 1,
++    [ABILITY_MINUS] = 1,
++    [ABILITY_FORECAST] = 1,
++    [ABILITY_STICKY_HOLD] = 1,
++    [ABILITY_SHED_SKIN] = 2,
++    [ABILITY_GUTS] = 2,
++    [ABILITY_MARVEL_SCALE] = 2,
++    [ABILITY_LIQUID_OOZE] = 1,
++    [ABILITY_OVERGROW] = 2,
++    [ABILITY_BLAZE] = 2,
++    [ABILITY_TORRENT] = 2,
++    [ABILITY_SWARM] = 2,
++    [ABILITY_ROCK_HEAD] = 2,
++    [ABILITY_DROUGHT] = 3,
++    [ABILITY_ARENA_TRAP] = 3,
++    [ABILITY_VITAL_SPIRIT] = 1,
++    [ABILITY_WHITE_SMOKE] = 1,
++    [ABILITY_PURE_POWER] = 3,
++    [ABILITY_SHELL_ARMOR] = 2,
++    [ABILITY_CACOPHONY] = 1,
++    [ABILITY_AIR_LOCK] = 2,
++};
++
++const u8 gPkbnAbilityGrants[ABILITIES_COUNT] =
++{
++    [ABILITY_LEVITATE] = NCPF_FLOAT_SHOES | NCPF_AIR_SHOES,
++    [ABILITY_STURDY] = NCPF_UNDER_SHIRT,
++    [ABILITY_INNER_FOCUS] = NCPF_SUPER_ARMOR,
++};
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+new file mode 100644
+index 0000000..07443e1
+--- /dev/null
++++ b/src/pkbn/pkbn_save.c
+@@ -0,0 +1,151 @@
++// Sidecar save for our own data (POC-9): pkbn.sav next to pokeemerald.sav. PC builds only.
++//
++// Why a separate file: every sector of Emerald's 128 KB flash already has an owner (include/save.h:19-31), and on
++// the 64-bit PC port SaveBlock1 is already 408 bytes larger than the 4 sectors that save it (docs/design/06 §0),
++// so nothing of ours goes into the vanilla save. Written whenever the game saves (TrySavingData), read whenever it
++// loads (LoadGameSave), reset on a new game (NewGameInitData).
++#include "global.h"
++#include "pokemon.h"
++#include "pokemon_storage_system.h"
++#include "pkbn/navicust.h"
++
++#ifdef PORTABLE
++#include <stdio.h>
++#include <string.h>
++
++#define PKBN_SAVE_PATH    "pkbn.sav"
++#define PKBN_SAVE_VERSION 1
++
++struct PkbnSaveFile
++{
++    char magic[8];            // "PKBNSAVE"
++    u16 version;
++    u16 nextId;
++    u16 ncpCount;             // NCP_COUNT when written
++    u16 pad;
++    struct PkbnNavi navis[NAVI_MAX];
++    u8 owned[256];            // programs owned, by gPkbnNcps index
++};
++
++static struct PkbnSaveFile sSave;
++
++void PkbnSave_Reset(void)
++{
++    s32 i;
++    memset(&sSave, 0, sizeof(sSave));
++    memcpy(sSave.magic, "PKBNSAVE", 8);
++    sSave.version = PKBN_SAVE_VERSION;
++    sSave.nextId = 1;
++    sSave.ncpCount = NCP_COUNT;
++    for (i = 0; i < NCP_COUNT; i++)
++        sSave.owned[i] = NCP_OWNED_TEST; // everything unlocked for now (decision of 2026-10-05)
++}
++
++void PkbnSave_Read(void)
++{
++    FILE *f = fopen(PKBN_SAVE_PATH, "rb");
++    struct PkbnSaveFile tmp;
++    s32 i;
++    if (f == NULL || fread(&tmp, 1, sizeof(tmp), f) != sizeof(tmp) || memcmp(tmp.magic, "PKBNSAVE", 8) != 0
++     || tmp.version != PKBN_SAVE_VERSION)
++    {
++        if (f != NULL)
++            fclose(f);
++        PkbnSave_Reset();
++        return;
++    }
++    fclose(f);
++    sSave = tmp;
++    for (i = sSave.ncpCount; i < NCP_COUNT; i++) // programs added since this file was written
++        sSave.owned[i] = NCP_OWNED_TEST;
++    sSave.ncpCount = NCP_COUNT;
++}
++
++void PkbnSave_Write(void)
++{
++    FILE *f = fopen(PKBN_SAVE_PATH, "wb");
++    if (f == NULL)
++        return;
++    fwrite(&sSave, 1, sizeof(sSave), f);
++    fclose(f);
++}
++
++struct PkbnNavi *PkbnSave_FindNavi(u16 id)
++{
++    s32 i;
++    if (id == 0)
++        return NULL;
++    for (i = 0; i < NAVI_MAX; i++)
++        if (sSave.navis[i].id == id)
++            return &sSave.navis[i];
++    return NULL;
++}
++
++static bool8 IdReferenced(u16 id)
++{
++    s32 i, j;
++    for (i = 0; i < PARTY_SIZE; i++)
++        if (GetMonData(&gPlayerParty[i], MON_DATA_ENCRYPT_SEPARATOR) == id)
++            return TRUE;
++    for (i = 0; i < TOTAL_BOXES_COUNT; i++)
++        for (j = 0; j < IN_BOX_COUNT; j++)
++            if (GetBoxMonDataAt(i, j, MON_DATA_ENCRYPT_SEPARATOR) == id)
++                return TRUE;
++    return FALSE;
++}
++
++struct PkbnNavi *PkbnSave_NewNavi(void)
++{
++    s32 i, pass;
++    for (pass = 0; pass < 2; pass++)
++    {
++        for (i = 0; i < NAVI_MAX; i++)
++            if (sSave.navis[i].id == 0)
++            {
++                struct PkbnNavi *n = &sSave.navis[i];
++                memset(n, 0, sizeof(*n));
++                for (;;)
++                {
++                    s32 j;
++                    bool8 taken = FALSE;
++                    u16 id = sSave.nextId++;
++                    if (sSave.nextId == 0)
++                        sSave.nextId = 1;
++                    if (id == 0)
++                        continue;
++                    for (j = 0; j < NAVI_MAX; j++)
++                        if (sSave.navis[j].id == id)
++                            taken = TRUE;
++                    if (!taken && !IdReferenced(id))
++                    {
++                        n->id = id;
++                        break;
++                    }
++                }
++                return n;
++            }
++        // full: free the layouts no Pokémon in the party or boxes points at any more (released / traded away)
++        for (i = 0; i < NAVI_MAX; i++)
++            if (sSave.navis[i].id && !IdReferenced(sSave.navis[i].id))
++                sSave.navis[i].id = 0;
++    }
++    return NULL;
++}
++
++u8 Navi_ProgramsOwned(u8 prog)
++{
++    return sSave.owned[prog];
++}
++
++u8 Navi_ProgramsInUse(u8 prog)
++{
++    s32 i, j, n = 0;
++    for (i = 0; i < NAVI_MAX; i++)
++        if (sSave.navis[i].id)
++            for (j = 0; j < sSave.navis[i].count; j++)
++                if (sSave.navis[i].parts[j].prog == prog)
++                    n++;
++    return n > 255 ? 255 : n;
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index 4bf2c67..54057c9 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -214,7 +214,7 @@ static u8 TrainerLoseText(char *dst, u32 size)
+ static u32 TrainerMoney(void)
+ {
+     const struct Trainer *t = &gTrainers[gTrainerBattleOpponent_A];
+-    u32 lastMonLevel = 0, i, multiplier = 1;
++    u32 lastMonLevel = 0, i, j, cls, multiplier = 1;
+     switch (t->partyFlags)
+     {
+     case 0: lastMonLevel = t->party.NoItemDefaultMoves[t->partySize - 1].lvl; break;
+@@ -222,14 +222,20 @@ static u32 TrainerMoney(void)
+     case F_TRAINER_PARTY_HELD_ITEM: lastMonLevel = t->party.ItemDefaultMoves[t->partySize - 1].lvl; break;
+     default: lastMonLevel = t->party.ItemCustomMoves[t->partySize - 1].lvl; break;
+     }
+-    for (i = 0; gTrainerMoneyTable[i].classId != 0xFF; i++)
+-        if (gTrainerMoneyTable[i].classId == t->trainerClass)
++    for (cls = 0; gTrainerMoneyTable[cls].classId != 0xFF; cls++)
++        if (gTrainerMoneyTable[cls].classId == t->trainerClass)
+             break;
+     // gBattleStruct->moneyMultiplier: 2 if an Amulet Coin holder was sent in (battle_util.c:3310)
+     for (i = 0; i < sB.partyCount; i++)
+-        if (sB.party[i].participated && GetItemHoldEffect(GetMonData(&gPlayerParty[i], MON_DATA_HELD_ITEM)) == HOLD_EFFECT_DOUBLE_PRIZE)
++        if (sB.party[i].participated && (GetItemHoldEffect(GetMonData(&gPlayerParty[i], MON_DATA_HELD_ITEM)) == HOLD_EFFECT_DOUBLE_PRIZE
++                                       || sB.party[i].navi.amuletCoin))   // AmuletCn program
+             multiplier = 2;
+-    return 4 * lastMonLevel * multiplier * gTrainerMoneyTable[i].value;
++    // NaviCust collect bug (BN6 bug type 6 limits rewards, asm/asm29.s:10816): half the prize (TUNE)
++    for (j = 0; j < sB.partyCount; j++)
++        if (sB.party[j].participated && sB.party[j].navi.bug[6])
++            return 2 * lastMonLevel * multiplier * gTrainerMoneyTable[cls].value;
++    // (POC-7 read the table with the party loop's index here - a bug that paid the wrong class's rate)
++    return 4 * lastMonLevel * multiplier * gTrainerMoneyTable[cls].value;
+ }
+ 
+ static void StepStart(void)
+diff --git a/src/pkbn/render.c b/src/pkbn/render.c
+index 979c661..5270d8d 100644
+--- a/src/pkbn/render.c
++++ b/src/pkbn/render.c
+@@ -225,6 +225,12 @@ static u8 AsciiToGame(char c)
+     case ')': return 0x5D;
+     case '$': return 0xB7; // the Pokédollar sign
+     case '*': return 0xB9; // multiplication sign (x)
++    case '<': return 0x85;
++    case '>': return 0x86;
++    case '^': return 0x79; // UP_ARROW
++    case '~': return 0x7A; // DOWN_ARROW (no '~' in the game's font)
++    case '[': return 0x7B; // LEFT_ARROW
++    case ']': return 0x7C; // RIGHT_ARROW
+     }
+     return 0x00;
+ }
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index 472762c..0f9edab 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -19,6 +19,7 @@
+ #include "battle_setup.h"
+ #include "pkbn/grid_battle.h"
+ #include "pkbn/render.h"
++#include "pkbn/navicust.h"
+ 
+ #ifdef PORTABLE
+ 
+@@ -198,6 +199,103 @@ static void CreateTestMon(struct Pokemon *mon, const char *desc, unsigned specie
+         SetMonMoveSlot(mon, MOVE_NONE, m);
+ }
+ 
++// PKBN_TEST_NCP="slot:Name@x,y,rot[,v];Name@x,y,rot/slot:..." puts programs on party members' NaviCusts
++// (v = colour variant index). PKBN_TEST_COND="slot:cool,beauty,cute,smart,tough/..." sets conditions (Pokéblocks).
++// PKBN_TEST_POKERUS="slot:byte/...".
++static u8 FindProgram(const char *name, u32 len)
++{
++    u8 i;
++    for (i = 0; i < NCP_COUNT; i++)
++        if (strlen(gPkbnNcps[i].name) == len && strncmp(gPkbnNcps[i].name, name, len) == 0)
++            return i;
++    return 0xFF;
++}
++
++static void ApplyTestNaviCusts(void)
++{
++    const char *t;
++    char buf[512];
++    char *slotSpec, *save1;
++    if ((t = getenv("PKBN_TEST_COND")) != NULL)
++    {
++        strncpy(buf, t, sizeof(buf) - 1);
++        buf[sizeof(buf) - 1] = '\0';
++        for (slotSpec = strtok_r(buf, "/", &save1); slotSpec; slotSpec = strtok_r(NULL, "/", &save1))
++        {
++            static const u8 sIds[5] = {MON_DATA_COOL, MON_DATA_BEAUTY, MON_DATA_CUTE, MON_DATA_SMART, MON_DATA_TOUGH};
++            unsigned slot, c[5], i;
++            if (sscanf(slotSpec, "%u:%u,%u,%u,%u,%u", &slot, &c[0], &c[1], &c[2], &c[3], &c[4]) == 6 && slot < PARTY_SIZE)
++                for (i = 0; i < 5; i++)
++                    SetMonData(&gPlayerParty[slot], sIds[i], &c[i]);
++        }
++    }
++    if ((t = getenv("PKBN_TEST_POKERUS")) != NULL)
++    {
++        strncpy(buf, t, sizeof(buf) - 1);
++        buf[sizeof(buf) - 1] = '\0';
++        for (slotSpec = strtok_r(buf, "/", &save1); slotSpec; slotSpec = strtok_r(NULL, "/", &save1))
++        {
++            unsigned slot, v;
++            if (sscanf(slotSpec, "%u:%u", &slot, &v) == 2 && slot < PARTY_SIZE)
++                SetMonData(&gPlayerParty[slot], MON_DATA_POKERUS, &v);
++        }
++    }
++    if ((t = getenv("PKBN_TEST_NCP")) != NULL)
++    {
++        strncpy(buf, t, sizeof(buf) - 1);
++        buf[sizeof(buf) - 1] = '\0';
++        for (slotSpec = strtok_r(buf, "/", &save1); slotSpec; slotSpec = strtok_r(NULL, "/", &save1))
++        {
++            unsigned slot = (unsigned)atoi(slotSpec);
++            char *part, *save2, *colon = strchr(slotSpec, ':');
++            struct PkbnNavi *navi;
++            struct PkbnNaviOwner owner;
++            if (colon == NULL || slot >= PARTY_SIZE || (navi = Navi_ForMon(&gPlayerParty[slot], TRUE)) == NULL)
++                continue;
++            Navi_OwnerFromMon(&owner, &gPlayerParty[slot]);
++            for (part = strtok_r(colon + 1, ";", &save2); part; part = strtok_r(NULL, ";", &save2))
++            {
++                char *at = strchr(part, '@');
++                int x, y, rot, v = 0;
++                u8 prog;
++                struct PkbnNaviPart np;
++                if (at == NULL || sscanf(at + 1, "%d,%d,%d,%d", &x, &y, &rot, &v) < 3)
++                    continue;
++                prog = FindProgram(part, at - part);
++                if (prog == 0xFF || navi->count >= NAVI_MAX_PARTS)
++                {
++                    printf("[pkbn-selftest] unknown program in %s\n", part);
++                    continue;
++                }
++                np.prog = prog;
++                np.type = gPkbnNcps[prog].types[v < gPkbnNcps[prog].typeCount ? v : 0];
++                np.x = x;
++                np.y = y;
++                np.rot = rot & 3;
++                if (!Navi_CanPlace(navi, &owner, &np, -1))
++                    printf("[pkbn-selftest] can't place %s\n", part);
++                else
++                    navi->parts[navi->count++] = np;
++            }
++        }
++    }
++}
++
++static void CB2_SelfTestEditorDone(void)
++{
++    gPkbnCanvasOverlay = NULL;
++    SetMainCallback2(CB2_SelfTestBattle);
++}
++
++static u32 sEditorFrame;
++static void WrappedEditorOverlay(u16 *fb)
++{
++    sInnerOverlay(fb);
++    if (sDumpDir != NULL && sEditorFrame % sDumpEvery == 0)
++        DumpFrame(fb, 90000 + sEditorFrame);
++    sEditorFrame++;
++}
++
+ void Pkbn_SelfTestMaybeStart(void)
+ {
+     if (getenv("PKBN_SELFTEST") == NULL)
+@@ -266,8 +364,85 @@ void Pkbn_SelfTestMaybeStart(void)
+         gTrainerBattleOpponent_A = (u16)atoi(getenv("PKBN_TEST_TRAINER"));
+     }
+     gMain.savedCallback = CB2_SelfTestDone;
+-    SetMainCallback2(CB2_SelfTestBattle);
++    PkbnSave_Reset();
++    ApplyTestNaviCusts();
++    if (getenv("PKBN_TEST_SAVE_ROUNDTRIP") != NULL)
++    {
++        // pkbn.sav round trip: write, wipe, read back, compare every party layout byte for byte
++        struct PkbnNavi before[PARTY_SIZE];
++        s32 i, ok = 1;
++        memset(before, 0, sizeof(before));
++        for (i = 0; i < PARTY_SIZE; i++)
++        {
++            struct PkbnNavi *nv = Navi_ForMon(&gPlayerParty[i], FALSE);
++            if (nv != NULL)
++                before[i] = *nv;
++        }
++        PkbnSave_Write();
++        PkbnSave_Reset();
++        PkbnSave_Read();
++        for (i = 0; i < PARTY_SIZE; i++)
++        {
++            struct PkbnNavi *nv = Navi_ForMon(&gPlayerParty[i], FALSE);
++            struct PkbnNavi empty;
++            memset(&empty, 0, sizeof(empty));
++            if (memcmp(nv != NULL ? nv : &empty, &before[i], sizeof(empty)) != 0)
++                ok = 0;
++        }
++        printf("[pkbn-selftest] save round trip: %s (%u parts on slot 0)\n", ok ? "OK" : "MISMATCH", before[0].count);
++    }
++    {
++        s32 i;
++        for (i = 0; i < PARTY_SIZE && GetMonData(&gPlayerParty[i], MON_DATA_SPECIES); i++)
++        {
++            struct PkbnNaviStats st;
++            Navi_StatsForMon(&gPlayerParty[i], &st);
++            {
++                // the board as text: A = ability, a/b/c... = parts (upper case when running), ! = bugged
++                struct PkbnNaviBoard b;
++                struct PkbnNaviOwner o;
++                struct PkbnNavi *nv = Navi_ForMon(&gPlayerParty[i], FALSE);
++                s32 x, y;
++                if (nv != NULL && nv->count)
++                {
++                    Navi_OwnerFromMon(&o, &gPlayerParty[i]);
++                    Navi_Compile(nv, &o, &st, &b);
++                    for (y = -1; y <= NAVI_H; y++)
++                    {
++                        char row[16];
++                        for (x = -1; x <= NAVI_W; x++)
++                        {
++                            u8 c = b.cell[y + 1][x + 1];
++                            char ch = (x < 0 || x >= NAVI_W || y < 0 || y >= NAVI_H) ? ' ' : '.';
++                            if (c == NCELL_ABILITY) ch = '@';
++                            if (c == NCELL_PART)
++                            {
++                                u8 p2 = b.part[y + 1][x + 1];
++                                ch = (b.partRuns[p2] ? 'A' : 'a') + p2;
++                            }
++                            row[x + 1] = ch;
++                        }
++                        row[NAVI_W + 2] = '\0';
++                        printf("[pkbn-selftest]   |%s|%s\n", row, y == NAVI_CMD_ROW ? " <- command line" : "");
++                    }
++                }
++            }
++            if (st.programsRun || st.flags)
++                printf("[pkbn-selftest] navicust slot %d: run %u hand+%u buster %u/%u/%u hp+%u%% flags %x colours %u bugs mov%u pan%u cus%u col%u bus%u hp%u st%u/%u pkrs %u\n",
++                       (int)i, st.programsRun, st.hand, st.busterAtk, st.busterSpeed, st.busterCharge, st.hpPct, st.flags,
++                       st.colours, st.bug[1], st.bug[3], st.bug[4], st.bug[6], st.bug[7], st.bug[9], st.bug[11], st.bug[12], st.pokerus);
++        }
++    }
+     printf("[pkbn-selftest] started\n");
++    if (getenv("PKBN_TEST_NCP_KEYS") != NULL)
++    {
++        // open the NaviCust editor on party slot 0 first, drive it with the scripted keys, then fight
++        PkbnNaviCust_Open(0, CB2_SelfTestEditorDone);
++        sInnerOverlay = gPkbnCanvasOverlay;
++        gPkbnCanvasOverlay = WrappedEditorOverlay;
++        return;
++    }
++    SetMainCallback2(CB2_SelfTestBattle);
+ }
+ 
+ #endif // PORTABLE
+diff --git a/src/save.c b/src/save.c
+index 957b338..1c1265b 100644
+--- a/src/save.c
++++ b/src/save.c
+@@ -1,4 +1,7 @@
+ #include "global.h"
++#ifdef PORTABLE
++#include "pkbn/navicust.h"
++#endif
+ #include "platform.h"
+ #include "agb_flash.h"
+ #include "gba/flash_internal.h"
+@@ -781,6 +784,8 @@ u8 TrySavingData(u8 saveType)
+     {
+ #ifdef PORTABLE
+ 		Platform_StoreSaveFile();
++        if (saveType != SAVE_HALL_OF_FAME && saveType != SAVE_HALL_OF_FAME_ERASE_BEFORE)
++            PkbnSave_Write();   // pkbn: our sidecar save (NaviCusts) goes with every game save
+ #endif
+         gSaveAttemptStatus = SAVE_STATUS_OK;
+         return SAVE_STATUS_OK;
+@@ -895,6 +900,9 @@ u8 LoadGameSave(u8 saveType)
+         status = TryLoadSaveSlot(FULL_SAVE_SLOT, gRamSaveSectorLocations);
+         CopyPartyAndObjectsFromSave();
+         gSaveFileStatus = status;
++#ifdef PORTABLE
++        PkbnSave_Read();   // pkbn: our sidecar save
++#endif
+         gGameContinueCallback = NULL;
+         break;
+     case SAVE_HALL_OF_FAME:
+diff --git a/src/strings.c b/src/strings.c
+index 438cafb..acd757a 100644
+--- a/src/strings.c
++++ b/src/strings.c
+@@ -365,6 +365,7 @@ const u8 gText_Shift[] = _("SHIFT");
+ const u8 gText_SendOut[] = _("SEND OUT");
+ const u8 gText_Switch2[] = _("SWITCH");
+ const u8 gText_Summary5[] = _("SUMMARY");
++const u8 gText_PkbnNaviCust[] = _("NAVICUST");
+ const u8 gText_Moves[] = _("MOVES"); // Unused
+ const u8 gText_Enter[] = _("ENTER");
+ const u8 gText_NoEntry[] = _("NO ENTRY");
+-- 
+2.43.0
+
