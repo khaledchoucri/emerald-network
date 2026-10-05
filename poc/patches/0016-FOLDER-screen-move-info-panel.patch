@@ -1,0 +1,128 @@
+From 33e19fd8dff6d0f7ce2534290ed4a543864cc628 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Mon, 5 Oct 2026 15:54:01 +0300
+Subject: [PATCH] FOLDER screen: the side panel describes the move (power,
+ accuracy, priority, Emerald's move text)
+
+Copies, limit and ownership already sit in the list columns.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/folder_ui.c | 69 +++++++++++++++++++++++++++++++++++---------
+ 1 file changed, 55 insertions(+), 14 deletions(-)
+
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index 417bc6c..e525a83 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -19,6 +19,7 @@
+ #include "main.h"
+ #include "pokemon.h"
+ #include "pokemon_storage_system.h"
++#include "pokemon_summary_screen.h"
+ #include "sound.h"
+ #include "constants/items.h"
+ #include "constants/songs.h"
+@@ -75,6 +76,35 @@ static s32 Text(u16 *fb, s32 x, s32 y, const char *s, u16 col)
+     return Pkbn_DrawEmText(fb, x, y, s, PKBN_FONT_SMALL, col, RGB(2, 2, 5));
+ }
+ 
++// Word-wrap `s` into at most `lines` lines of `width` pixels, 10 px apart.
++static void TextWrap(u16 *fb, s32 x, s32 y, s32 width, s32 lines, const char *s, u16 col)
++{
++    char line[96];
++    while (*s && lines-- > 0)
++    {
++        s32 n = 0, lastSpace = -1;
++        while (s[n] && n < (s32)sizeof(line) - 1)
++        {
++            memcpy(line, s, n + 1);
++            line[n + 1] = '\0';
++            if (Pkbn_EmTextWidth(line, PKBN_FONT_SMALL) > width)
++                break;
++            if (s[n] == ' ')
++                lastSpace = n;
++            n++;
++        }
++        if (s[n] && lastSpace > 0)
++            n = lastSpace;
++        memcpy(line, s, n);
++        line[n] = '\0';
++        Text(fb, x, y, line, col);
++        y += 10;
++        s += n;
++        while (*s == ' ')
++            s++;
++    }
++}
++
+ static void Note(const char *s)
+ {
+     snprintf(sF.note, sizeof(sF.note), "%s", s);
+@@ -382,37 +412,48 @@ static void DrawPanel(u16 *fb)
+     Gfx_Draw(fb, &icon, x + 50, y + 6, 0, 0, 0);
+     MoveName(nm, sizeof(nm), mv);
+     Text(fb, x + 2, y + 25, nm, RGB(31, 31, 31));
+-    if (gBattleMoves[mv].power > 1)
+-        snprintf(line, sizeof(line), "%s  POW %u", gPkbnKindNames[gPkbnMoveInfo[mv].kind], gBattleMoves[mv].power);
+-    else
+-        snprintf(line, sizeof(line), "%s", gPkbnKindNames[gPkbnMoveInfo[mv].kind]);
+-    Text(fb, x + 2, y + 36, line, RGB(22, 26, 31));
+-    snprintf(line, sizeof(line), "LIMIT %u (MB %u)", Chip_CopyCap(mv), Chip_MB(mv));
+-    Text(fb, x + 2, y + 47, line, InFolder(mv, -1) >= Chip_CopyCap(mv) ? RGB(31, 20, 6) : RGB(31, 31, 31));
+-    snprintf(line, sizeof(line), "IN FOLDER %u  OWN %u", InFolder(mv, -1), PkbnPack_Total(mv));
+-    Text(fb, x + 2, y + 58, line, RGB(22, 26, 31));
++    // the move itself: power / accuracy / priority, then Emerald's own description (the summary screen's text)
++    {
++        const struct BattleMove *bm = &gBattleMoves[mv];
++        char acc[8];
++        if (bm->accuracy)
++            snprintf(acc, sizeof(acc), "%u", bm->accuracy);
++        else
++            snprintf(acc, sizeof(acc), "---");
++        if (bm->power > 1)
++            snprintf(line, sizeof(line), "POW %u  ACC %s", bm->power, acc);
++        else
++            snprintf(line, sizeof(line), "POW ---  ACC %s", acc);
++        if (bm->priority > 0)
++            snprintf(line + strlen(line), sizeof(line) - strlen(line), "  FIRST");
++        Text(fb, x + 2, y + 36, line, RGB(22, 26, 31));
++    }
++    {
++        char desc[128];
++        Pkbn_GameTextToAscii(desc, gMoveDescriptionPointers[mv - 1], sizeof(desc));
++        TextWrap(fb, x + 2, y + 48, CW - x - 6, 4, desc, RGB(31, 31, 31));
++    }
+     if (sF.page == PAGE_CANDY)
+     {
+         const struct CandyRow *r = &sF.candy[sF.cursor[PAGE_CANDY]];
+         char tn[16], sp[16];
+         Pkbn_GameStringToAscii(tn, gTypeNames[gBattleMoves[mv].type], sizeof(tn));
+         snprintf(line, sizeof(line), "%s CANDY %u", tn, PkbnCandy_Get(gBattleMoves[mv].type));
+-        Text(fb, x + 2, y + 69, line, RGB(31, 26, 6));
++        Text(fb, x + 2, y + 92, line, RGB(31, 26, 6));
+         Pkbn_GameStringToAscii(sp, gSpeciesNames[r->species], sizeof(sp));
+         if (r->needLevel)
+             snprintf(line, sizeof(line), "%s AT LV%u", sp, r->needLevel);
+         else
+             snprintf(line, sizeof(line), "FROM %s", sp);
+-        Text(fb, x + 2, y + 80, line, r->needLevel ? RGB(16, 18, 22) : RGB(22, 26, 31));
+-        return;   // (no room for the party row on this page)
++        Text(fb, x + 2, y + 103, line, r->needLevel ? RGB(16, 18, 22) : RGB(22, 26, 31));
++        return;
+     }
+     // who can use it (party icons, info only - chips themselves never show a Pokémon)
+-    Text(fb, x + 2, y + 80, "USABLE BY", RGB(14, 16, 22));
+     for (p = 0; p < sF.partyCount; p++)
+     {
+         bool8 can = Chip_CanUse(&sF.party[p], mv);
+         if (sF.party[p].species)
+-            Pkbn_BlitIcon(fb, sF.partyIcon[p], x - 6 + p * 16, y + 84, FALSE, can ? 0 : RGB(4, 4, 6));
++            Pkbn_BlitIcon(fb, sF.partyIcon[p], x - 6 + p * 16, y + 90, FALSE, can ? 0 : RGB(4, 4, 6));
+     }
+ }
+ 
+-- 
+2.43.0
+
