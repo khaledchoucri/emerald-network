@@ -402,3 +402,89 @@ BN avoids this by requiring exactly 30.
   | 4 | 85% |
 
   So copies are what make a grown Pokémon consistent.
+
+---
+
+## 11. Back to one shared folder (2026-10-05; replaces §10's per-Pokémon sections)
+
+**Decision:**
+- One folder for the whole party.
+- A chip is a **move**, not a Pokémon's: whoever is in battle can use it if its species can use the move.
+- Chips no longer switch Pokémon in. Special switch chips, which work like today's chips, come later as rewards.
+- PP is replaced by chip uses: a used chip is gone for that battle, and the folder is full again next battle.
+
+**Simulation:** `tools/shared_folder_sim.py`, run from the host root.
+- It reads, from the port's own data:
+  - learnsets: level-up including pre-evolutions, TM/HM, tutor and egg moves;
+  - the type chart (`gTypeEffectiveness`);
+  - moves;
+  - trainer party sizes.
+- Parties are random 6-member teams from the 99 fully evolved, non-legendary Hoenn species.
+- The folder is built greedily: it favours moves several members can use, and members that have little so far. BN6
+  copy caps apply.
+- Enemies are random Hoenn species, and damage includes STAB and type effectiveness.
+- Fixed numbers:
+  - a KO takes about 4 average uses;
+  - 2 chips per Custom;
+  - unused chips stay in the hand (BN6);
+  - a Pokémon faints after 3–6 Customs on the field.
+
+### 11.1 Folder size: 30 + 2 per extra Pokémon (40 with 6)
+
+| rule | n | F | 6v6 runs dry | key move in hand, 1 → 5 copies |
+|---|---|---|---|---|
+| BN 30 | 6 | 30 | **7–8%** | 18% → 56% |
+| **30 + 2 per extra** | 2 / 4 / 6 | 32 / 36 / 40 | 0% | 17→60% / 12→50% / **11→46%** |
+| 30 + 5 per extra | 2 / 4 / 6 | 35 / 45 / 55 | 0% | 17→56% / 12→43% / **9→34%** |
+
+These figures use the "can learn" rule (§11.2).
+
+**Why +2 and not +5:**
+- What grows with the party is the size of the battles you face. Full 6-Pokémon teams only show up late (Emerald:
+  35 of 854 trainer parties).
+- An m-enemy battle draws about `5 + 4m` usable chips. A 6v6 needs about 29, plus the unusable chips that sit in
+  the hand. 40 never ran out; 30 ran out in 7–8% of 6v6 battles.
+- Beyond 40, a bigger folder only dilutes copies. With +5, five copies of your key move show up 34% of the time
+  instead of 46%, and nothing gets better.
+
+### 11.2 Who can use a chip: "can learn" vs "has learned"
+
+| rule | the folder you end up with | a member can use | switching | Customs per battle |
+|---|---|---|---|---|
+| **can learn** (any TM/tutor counts) | **55% of chips usable by 5–6 members, 55% Normal-type** (Body Slam, Double-Edge, Secret Power, Facade, Mega Kick) | ~75% | 5% | 3.1 |
+| **has learned** (level-up at any level and egg moves count; TM/tutor moves only once taught) | Typed, STAB-heavy | ~30% | 25–36% | 2.7–3.6 |
+
+**With "can learn":**
+- Every team converges on the same universal Normal folder.
+- Ghost-types wall it: in 12% of Customs nobody has a usable chip.
+- Teams lose their identity.
+
+**With "has learned":**
+- Teams keep their identity. Gen 3 TMs are single-use, so teaching a TM costs something.
+- The hand often favours a benched member, so switching becomes part of play.
+
+### 11.3 Switch, then act
+
+Today nothing can be queued after the Switch slot, so a switch costs the whole Custom. If chips the **incoming**
+Pokémon can use may follow the Switch slot:
+
+| "has learned" rule, full party | Customs per battle | 6v6 lost |
+|---|---|---|
+| switch costs the Custom | 3.6 | 3% |
+| **switch, then act** | **2.7** | **1%** |
+
+Switching becomes the move. The hand tells you who should fight, much as BN6's Navi chips did, without tying chips
+to a Pokémon.
+
+### 11.4 Proposal
+
+- **F = 30 + 2 per extra party Pokémon** (40 max). Copy caps per move as in §2.3.
+- **"Has learned":** every level-up and egg move of its species counts (no level gate); TM and tutor moves count only
+  once taught.
+- **Switch, then act.**
+- **Learning a move** still adds 1 copy (the move's first code) to the pack. Drops and shops add more (§4).
+- **Not modelled:**
+  - status chips (they make "nothing usable" rarer);
+  - the NaviCust hand bonus;
+  - early-game folders, which are small, so the lack of reshuffle bites. Proposal: reshuffle only while the folder
+    is under 15 chips.
