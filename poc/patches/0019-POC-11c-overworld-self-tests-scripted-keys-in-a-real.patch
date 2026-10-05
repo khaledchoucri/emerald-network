@@ -1,0 +1,408 @@
+From 21dd17252787f4dee15f88e132f990250a905dff Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Mon, 5 Oct 2026 20:06:07 +0300
+Subject: [PATCH 19/22] POC-11c: overworld self-tests (scripted keys in a real
+ map, frame dumps)
+
+PKBN_OWTEST starts a new game in a chosen map with a party and plays a key
+script (waits, presses, holds, A-mash, frame dumps, scripted additem, wild
+battle start; battles can use the self-test autopilot). Verified: START ->
+FOLDER, party menu -> NAVICUST, Mart -> CHIPS, field wild battle round trip,
+TM from a script, Move Relearner chip. Grants now log a line.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/grid_battle.c |  10 ++
+ src/pkbn/owtest.c      | 249 +++++++++++++++++++++++++++++++++++++++++
+ src/pkbn/pkbn_save.c   |   6 +
+ src/pkbn/selftest.c    |  15 +++
+ src/platform/sdl2.c    |   7 ++
+ 5 files changed, 287 insertions(+)
+ create mode 100644 src/pkbn/owtest.c
+
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index fefcb2f..f3e0b2f 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -1432,6 +1432,16 @@ void CB2_PkbnGridBattle(void)
+ {
+     if (!sActive)
+         Begin();
++    {
++        // overworld self-tests: let the self-test autopilot fight (src/pkbn/owtest.c, PKBN_OW_AUTOBATTLE)
++        extern bool8 PkbnOwTest_Active(void);
++        extern void Pkbn_SelfTestAutopilot(void);
++        static s8 sOwAuto = -1;
++        if (sOwAuto < 0)
++            sOwAuto = getenv("PKBN_OW_AUTOBATTLE") != NULL;
++        if (sOwAuto && PkbnOwTest_Active())
++            Pkbn_SelfTestAutopilot();
++    }
+ 
+     sB.frame++;
+     if (sB.msgTimer)
+diff --git a/src/pkbn/owtest.c b/src/pkbn/owtest.c
+new file mode 100644
+index 0000000..a95ab62
+--- /dev/null
++++ b/src/pkbn/owtest.c
+@@ -0,0 +1,249 @@
++// Overworld self-tests (POC-11, item 7): start straight in a map with a party and a key script, dump frames, quit.
++// Lets us check menus and field hooks (START -> FOLDER, party menu -> NAVICUST, Poké Mart CHIPS, wild battles in
++// grass, story flags) without a save file or a person at the keyboard.
++//
++//   PKBN_OWTEST="group:num:x:y"        map (MAP_GROUP/MAP_NUM from include/constants/map_groups.h) and position
++//   PKBN_OWTEST_PARTY="sp:lv[:m/m/m/m]|..."   numeric species / moves (tools: /tmp/ids.py style)
++//   PKBN_OWTEST_FLAGS="flag,flag,..."  extra flags to set (numbers)
++//   PKBN_OWTEST_ITEMS="item:n,..."     bag items;  PKBN_OWTEST_MONEY=n
++//   PKBN_OWKEYS="W60,S,D,A,P,B,Q"      the script: Wn waits n frames; U D L R A B S(tart) E(select) < > press a key
++//                                      (held 4 frames, then 6 frames released); Hn+key holds it n frames (H40R
++//                                      walks right); Mn taps A for n frames; P dumps a frame now; Q quits.
++//                                      Titem runs "additem item, 1" as a script.
++//                                      Gsp:lv starts a wild battle (species / level numbers) as if met in grass.
++//   PKBN_OW_AUTOBATTLE=1               grid battles started from the field are fought by the self-test autopilot
++//   PKBN_DUMP_DIR=dir                  P writes dir/ow_NNNNN.ppm (264x176, what the window shows)
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include "global.h"
++#include "main.h"
++#include "event_data.h"
++#include "item.h"
++#include "money.h"
++#include "new_game.h"
++#include "overworld.h"
++#include "pokemon.h"
++#include "constants/flags.h"
++#include "constants/moves.h"
++#include "pkbn/render.h"
++#include "battle_setup.h"
++#include "script.h"
++#include "script_pokemon_util.h"
++#include "constants/items.h"
++
++#ifdef PORTABLE
++
++static const char *sScript;
++static u32 sWait, sHold, sFrame, sMash;
++static u16 sKey;
++static bool8 sActive, sDumpNext;
++
++bool8 PkbnOwTest_Active(void)
++{
++    return sActive;
++}
++
++static u16 KeyOf(char c)
++{
++    switch (c)
++    {
++    case 'U': return DPAD_UP;
++    case 'D': return DPAD_DOWN;
++    case 'L': return DPAD_LEFT;
++    case 'R': return DPAD_RIGHT;
++    case 'A': return A_BUTTON;
++    case 'B': return B_BUTTON;
++    case 'S': return START_BUTTON;
++    case 'E': return SELECT_BUTTON;
++    case '<': return L_BUTTON;
++    case '>': return R_BUTTON;
++    }
++    return 0;
++}
++
++// Called by Platform_GetKeyInput every frame: the scripted keys.
++u16 PkbnOwTest_Keys(void)
++{
++    sFrame++;
++    if (sMash)
++    {
++        sMash--;
++        return (sMash % 8) < 3 ? A_BUTTON : 0;
++    }
++    if (sHold)
++    {
++        sHold--;
++        return sKey;
++    }
++    if (sWait)
++    {
++        sWait--;
++        return 0;
++    }
++    while (sScript && *sScript)
++    {
++        char c = *sScript++;
++        if (c == ',' || c == ' ')
++            continue;
++        if (c == 'W')
++        {
++            sWait = strtoul(sScript, (char **)&sScript, 10);
++            return 0;
++        }
++        if (c == 'H')
++        {
++            sHold = strtoul(sScript, (char **)&sScript, 10);
++            sKey = KeyOf(*sScript++);
++            return sKey;
++        }
++        if (c == 'G')   // Gsp:lv - start a wild battle against species sp at level lv, as if met in grass
++        {
++            u16 sp = (u16)strtoul(sScript, (char **)&sScript, 10);
++            u8 lv = 5;
++            if (*sScript == ':')
++                lv = (u8)strtoul(sScript + 1, (char **)&sScript, 10);
++            CreateScriptedWildMon(sp, lv, ITEM_NONE);
++            BattleSetup_StartWildBattle();
++            printf("[pkbn-owtest] wild battle: species %u lv %u\n", sp, lv);
++            continue;
++        }
++        if (c == 'T')   // Titem: run "additem item, 1" through the script engine (tests the scripts' item hook)
++        {
++            static u8 sScr[8];
++            u16 item = (u16)strtoul(sScript, (char **)&sScript, 10);
++            sScr[0] = 0x44;                       // SCR_OP_ADDITEM (data/script_cmd_table.inc)
++            sScr[1] = item & 0xFF, sScr[2] = item >> 8;
++            sScr[3] = 1, sScr[4] = 0;
++            sScr[5] = 0x02;                       // SCR_OP_END
++            ScriptContext_SetupScript(sScr);
++            printf("[pkbn-owtest] script additem %u\n", item);
++            continue;
++        }
++        if (c == 'M')   // Mn: tap A every 8 frames for n frames (text boxes, post-battle)
++        {
++            sMash = strtoul(sScript, (char **)&sScript, 10);
++            return 0;
++        }
++        if (c == 'P')
++        {
++            sDumpNext = TRUE;
++            continue;
++        }
++        if (c == 'Q')
++        {
++            printf("[pkbn-owtest] done at frame %u\n", (unsigned)sFrame);
++            fflush(stdout);
++            exit(0);
++        }
++        sKey = KeyOf(c);
++        sHold = 3;
++        sWait = 6;
++        return sKey;
++    }
++    return 0;
++}
++
++// Called by VDraw with the finished 264x176 canvas.
++void PkbnOwTest_Frame(const u16 *canvas)
++{
++    static u32 sCount;
++    const char *dir = getenv("PKBN_DUMP_DIR");
++    char path[512];
++    FILE *f;
++    s32 i;
++    if (!sDumpNext)
++        return;
++    sDumpNext = FALSE;
++    if (dir == NULL)
++        return;
++    snprintf(path, sizeof(path), "%s/ow_%05u.ppm", dir, (unsigned)sCount++);
++    f = fopen(path, "wb");
++    if (f == NULL)
++        return;
++    fprintf(f, "P6\n%d %d\n255\n", PKBN_CANVAS_W, PKBN_CANVAS_H);
++    for (i = 0; i < PKBN_CANVAS_W * PKBN_CANVAS_H; i++)
++    {
++        u16 c = canvas[i];
++        u8 rgb[3] = { (u8)((c & 31) << 3), (u8)(((c >> 5) & 31) << 3), (u8)(((c >> 10) & 31) << 3) };
++        fwrite(rgb, 1, 3, f);
++    }
++    fclose(f);
++    printf("[pkbn-owtest] frame %u dumped (%s)\n", (unsigned)sFrame, path);
++}
++
++static void GiveParty(const char *spec)
++{
++    s32 slot = 0;
++    while (spec && *spec && slot < PARTY_SIZE)
++    {
++        u16 sp = (u16)strtol(spec, (char **)&spec, 10);
++        u8 lv = 5;
++        if (*spec == ':')
++            lv = (u8)strtol(spec + 1, (char **)&spec, 10);
++        CreateMon(&gPlayerParty[slot], sp, lv, 32, FALSE, 0, OT_ID_PLAYER_ID, 0);
++        if (*spec == ':')
++        {
++            s32 m = 0;
++            spec++;
++            while (*spec && *spec != '|' && m < MAX_MON_MOVES)
++            {
++                u16 mv = (u16)strtol(spec, (char **)&spec, 10);
++                SetMonMoveSlot(&gPlayerParty[slot], mv, m++);
++                if (*spec == '/')
++                    spec++;
++            }
++            for (; m < MAX_MON_MOVES; m++)
++                SetMonMoveSlot(&gPlayerParty[slot], MOVE_NONE, m);
++        }
++        slot++;
++        if (*spec == '|')
++            spec++;
++    }
++    CalculatePlayerPartyCount();
++}
++
++static void CB2_OwTestStart(void)
++{
++    const char *t;
++    s32 group = 0, num = 0, x = -1, y = -1;
++    sscanf(getenv("PKBN_OWTEST"), "%d:%d:%d:%d", &group, &num, &x, &y);
++    NewGameInitData();
++    FlagSet(FLAG_SYS_POKEMON_GET);
++    FlagSet(FLAG_SYS_POKEDEX_GET);
++    FlagSet(FLAG_SYS_B_DASH);
++    if ((t = getenv("PKBN_OWTEST_FLAGS")) != NULL)
++        while (*t)
++        {
++            FlagSet((u16)strtol(t, (char **)&t, 10));
++            while (*t == ',')
++                t++;
++        }
++    ZeroPlayerPartyMons();
++    GiveParty(getenv("PKBN_OWTEST_PARTY"));
++    if ((t = getenv("PKBN_OWTEST_ITEMS")) != NULL)
++        while (*t)
++        {
++            u16 item = (u16)strtol(t, (char **)&t, 10);
++            u16 n = (*t == ':') ? (u16)strtol(t + 1, (char **)&t, 10) : 1;
++            AddBagItem(item, n);
++            while (*t == ',')
++                t++;
++        }
++    if (getenv("PKBN_OWTEST_MONEY"))
++        SetMoney(&gSaveBlock1Ptr->money, (u32)atoi(getenv("PKBN_OWTEST_MONEY")));
++    SetWarpDestination(group, num, -1, x, y);
++    WarpIntoMap();
++    printf("[pkbn-owtest] start: map %d:%d at %d,%d\n", (int)group, (int)num, (int)x, (int)y);
++    fflush(stdout);
++    SetMainCallback2(CB2_LoadMap);
++}
++
++void PkbnOwTest_Start(void)
++{
++    sActive = TRUE;
++    sScript = getenv("PKBN_OWKEYS");
++    SetMainCallback2(CB2_OwTestStart);
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index 24ebaf1..9921746 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -257,6 +257,7 @@ void PkbnPack_GrantTM(u16 item, u16 count)
+     if (!PkbnFolder_MoveIsChip(move))
+         return;
+     PkbnPack_Add(move, gPkbnMoveInfo[move].lanes[0], 2 * count);
++    printf("[pkbn] chip grant: TM/HM item %u -> move %u x%u\n", item, move, 2 * count);
+ }
+ 
+ // Move Relearner (a Heart Scale): +1 copy of the move, with a code you don't own yet for it when there is one.
+@@ -271,6 +272,7 @@ void PkbnPack_GrantRelearned(u16 move)
+         if (PkbnPack_Get(move, info->lanes[i]) == 0)
+         {
+             PkbnPack_Add(move, info->lanes[i], 1);
++            printf("[pkbn] chip grant: relearned move %u code %c\n", move, PkbnFolder_LetterChar(info->lanes[i]));
+             return;
+         }
+     PkbnPack_Add(move, info->lanes[0], 1);
+@@ -284,6 +286,7 @@ void PkbnCandy_GrantRelease(struct BoxPokemon *mon)
+     if (species == SPECIES_NONE || species >= NUM_SPECIES || GetBoxMonData(mon, MON_DATA_IS_EGG))
+         return;
+     n = 1 + (GetLevelFromBoxMonExp(mon) >= 30 ? 1 : 0);
++    printf("[pkbn] candy grant: released species %u -> %u candy per type\n", species, n);
+     PkbnCandy_Add(gSpeciesInfo[species].types[0], n);
+     if (gSpeciesInfo[species].types[1] != gSpeciesInfo[species].types[0])
+         PkbnCandy_Add(gSpeciesInfo[species].types[1], n);
+@@ -303,7 +306,10 @@ void PkbnPack_GrantEggMoves(struct Pokemon *mon)
+     for (i++; gEggMoves[i] != 0xFFFF && gEggMoves[i] < 20000; i++)
+         for (m = 0; m < MAX_MON_MOVES; m++)
+             if (GetMonData(mon, MON_DATA_MOVE1 + m) == gEggMoves[i] && PkbnFolder_MoveIsChip(gEggMoves[i]))
++            {
+                 PkbnPack_Add(gEggMoves[i], gPkbnMoveInfo[gEggMoves[i]].lanes[0], 1);
++                printf("[pkbn] chip grant: egg move %u\n", gEggMoves[i]);
++            }
+ }
+ 
+ u16 PkbnCandy_Get(u8 type)
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index 98df092..6e88eaa 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -163,6 +163,12 @@ static void Autopilot(void)
+     gMain.newKeys = edge ? pressed : 0;
+ }
+ 
++// Overworld self-tests reuse the battle autopilot (PKBN_OW_AUTOBATTLE).
++void Pkbn_SelfTestAutopilot(void)
++{
++    Autopilot();
++}
++
+ static void CB2_SelfTestBattle(void)
+ {
+     Autopilot();
+@@ -356,8 +362,17 @@ static void WrappedEditorOverlay(u16 *fb)
+     sEditorFrame++;
+ }
+ 
++void PkbnOwTest_Start(void);
++
+ void Pkbn_SelfTestMaybeStart(void)
+ {
++    if (getenv("PKBN_OWTEST") != NULL)
++    {
++        // overworld self-test (src/pkbn/owtest.c)
++        SetSaveBlocksPointers(0);
++        PkbnOwTest_Start();
++        return;
++    }
+     if (getenv("PKBN_SELFTEST") == NULL)
+         return;
+     sDumpDir = getenv("PKBN_DUMP_DIR");
+diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
+index 7eea6e4..0e5e215 100644
+--- a/src/platform/sdl2.c
++++ b/src/platform/sdl2.c
+@@ -54,6 +54,9 @@ void ProcessEvents(void);
+ void VDraw(SDL_Texture *texture);
+ extern void (*gPkbnFrameOverlay)(uint16_t *pixels);
+ extern void (*gPkbnCanvasOverlay)(uint16_t *canvas);
++extern bool8 PkbnOwTest_Active(void);
++extern u16 PkbnOwTest_Keys(void);
++extern void PkbnOwTest_Frame(const uint16_t *canvas);
+ extern void Pkbn_SetTarget(int32_t w, int32_t h);
+ // pkbn: the window shows a 264x176 canvas (see include/pkbn/render.h); the GBA frame is centred in it.
+ #define PKBN_CANVAS_W 264
+@@ -457,6 +460,8 @@ u16 GetXInputKeys()
+ 
+ u16 Platform_GetKeyInput(void)
+ {
++    if (PkbnOwTest_Active())
++        return PkbnOwTest_Keys(); // PKBN: scripted overworld self-test (src/pkbn/owtest.c)
+ #ifdef _WIN32
+     u16 gamepadKeys = GetXInputKeys();
+     return (gamepadKeys != 0) ? gamepadKeys : keys;
+@@ -502,6 +507,8 @@ void VDraw(SDL_Texture *texture)
+         for (y = 0; y < DISPLAY_HEIGHT; y++)
+             memcpy(&canvas[(y + oy) * PKBN_CANVAS_W + ox], &image[y * DISPLAY_WIDTH], DISPLAY_WIDTH * sizeof(uint16_t));
+     }
++    if (PkbnOwTest_Active())
++        PkbnOwTest_Frame(canvas);
+     SDL_UpdateTexture(texture, NULL, canvas, PKBN_CANVAS_W * sizeof (Uint16));
+     REG_VCOUNT = 161; // prep for being in VBlank period
+ }
+-- 
+2.43.0
+

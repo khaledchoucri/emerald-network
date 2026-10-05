@@ -1,0 +1,460 @@
+From 3f508a739ea29b0563640f42889d541918c1f0c5 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Mon, 5 Oct 2026 20:54:46 +0300
+Subject: [PATCH 22/22] POC-11f: trainers as Navi rivals - NaviCust programs
+ and Emerald AI move choice
+
+Gym Leaders, the rival, Elite Four, Champion and team leaders run auto-laid-out
+NaviCust programs by tier (bug-free only) and score moves with their own
+gTrainers[].aiFlags (CheckBadMove, TryToFaint, CheckViability parts the grid can read).
+Ordinary trainers and wild battles are unchanged (regression logs identical).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |   3 +
+ include/pkbn/rival.h         |  10 ++
+ src/pkbn/grid_battle.c       |  39 +++++-
+ src/pkbn/grid_draw.c         |  12 ++
+ src/pkbn/grid_moves.c        |  47 +++++++-
+ src/pkbn/rival.c             | 223 +++++++++++++++++++++++++++++++++++
+ 6 files changed, 332 insertions(+), 2 deletions(-)
+ create mode 100644 include/pkbn/rival.h
+ create mode 100644 src/pkbn/rival.c
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 472f1b3..380cd7d 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -265,6 +265,8 @@ struct GridBattle
+     u16 foeAi[MAX_FOES][2];    // aiStepTimer / aiAttackTimer of the foes that aren't selected
+     // trainer battles
+     bool8 trainer;
++    u8 rivalTier;              // POC-11: 1-5 for Gym Leaders, the rival, E4... (src/pkbn/rival.c), 0 otherwise
++    u32 aiFlags;               // the trainer's Emerald AI scripts (gTrainers[].aiFlags), used when rivalTier
+     u8 enemySlot;              // gEnemyParty index currently out
+     u8 enemyCount;
+     u8 sentIn;                 // player slots sent in against the current enemy (Cmd_getexp sentInPokes)
+@@ -316,6 +318,7 @@ u8 Moves_KindOf(u16 move);
+ bool8 Moves_IsPositionFree(u8 kind);
+ void Moves_UsePA(u8 side, u8 paIndex, const struct BattlePokemon *user, const char *userName, u8 userSlot);
+ void Moves_ComboPanel(u8 type, s8 x, s8 y);
++s32 Moves_EstimateDamage(u8 side, u16 move, u16 *eff);
+ 
+ // grid_field.c
+ void Field_Init(void);
+diff --git a/include/pkbn/rival.h b/include/pkbn/rival.h
+new file mode 100644
+index 0000000..c199054
+--- /dev/null
++++ b/include/pkbn/rival.h
+@@ -0,0 +1,10 @@
++#ifndef GUARD_PKBN_RIVAL_H
++#define GUARD_PKBN_RIVAL_H
++// Trainers as Navi rivals (POC-11): src/pkbn/rival.c
++#include "global.h"
++#include "pkbn/navicust.h"
++
++u8 Rival_Tier(u16 trainerId);                                   // 0 = an ordinary trainer, 1-5 = rival strength
++void Rival_NaviForMon(struct Pokemon *mon, u8 tier, struct PkbnNaviStats *out);
++s32 Rival_ScoreMove(u32 aiFlags, u8 slot, const u8 *options, u8 n);   // Emerald AI score for the selected foe
++#endif // GUARD_PKBN_RIVAL_H
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 0733388..7e0c066 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -37,6 +37,7 @@
+ #include "pkbn/grid_battle.h"
+ #include "pkbn/render.h"
+ #include "wild_encounter.h"
++#include "pkbn/rival.h"
+ 
+ #ifdef PORTABLE
+ 
+@@ -419,6 +420,18 @@ static void LoadEnemy(struct Pokemon *mon)
+     Pkbn_DecodeMonIcon(f->icon[1], f->bm.species, f->bm.personality, 1);
+     Gfx_LoadMonPic(&f->pic, f->bm.species, f->bm.personality, f->bm.otId);
+     Field_ResetFighterConditions(f);
++    memset(&f->navi, 0, sizeof(f->navi));
++    if (sB.rivalTier)
++    {
++        // a rival's Pokémon run NaviCust programs (src/pkbn/rival.c)
++        u16 bonus;
++        Rival_NaviForMon(mon, sB.rivalTier, &f->navi);
++        ApplyNaviToBattleMon(&f->bm, &f->navi, &bonus);
++        if (f->navi.firstBarrier)
++            f->barrier = TRUE;
++        PKBN_LOG("rival navicust %s (tier %u): %u programs, HP+%u%% flags %x barrier %u", f->name, sB.rivalTier,
++                 f->navi.programsRun, f->navi.hpPct, f->navi.flags, f->barrier);
++    }
+ }
+ 
+ static void Overlay(u16 *fb)
+@@ -634,6 +647,13 @@ static void Begin(void)
+     }
+ 
+     sB.trainer = (gBattleTypeFlags & BATTLE_TYPE_TRAINER) != 0;
++    if (sB.trainer && getenv("PKBN_NO_RIVALS") == NULL)
++    {
++        sB.rivalTier = Rival_Tier(gTrainerBattleOpponent_A);
++        sB.aiFlags = gTrainers[gTrainerBattleOpponent_A].aiFlags;
++        if (sB.rivalTier)
++            PKBN_LOG("rival: trainer %u tier %u ai flags %x", gTrainerBattleOpponent_A, sB.rivalTier, (unsigned)sB.aiFlags);
++    }
+     if (!sB.trainer)
+         AddWildPack();
+     PkbnWild_ClearPack();
+@@ -730,7 +750,7 @@ static u16 EnemyAttackInterval(void)
+     u32 spd = Moves_EffectiveSpeed(&sB.f[SIDE_ENEMY]);
+     if (spd > 100)
+         spd = 100;
+-    return 150 - spd / 2 + (Random() % 40); // TUNE: faster Pokémon attack more often
++    return (150 - spd / 2 + (Random() % 40)) * (20 - sB.rivalTier) / 20; // TUNE: faster Pokémon attack more often; rivals -5%/tier
+ }
+ 
+ // ---- Per-state update -----------------------------------------------------------------
+@@ -1250,6 +1270,23 @@ static bool8 PickEnemyMove(u8 *outSlot)
+     }
+     if (n == 0)
+         return FALSE;
++    if (sB.rivalTier)
++    {
++        // Emerald's trainer AI: best score wins, ties at random (ChooseMoveOrAction_Singles)
++        s32 sc[MAX_MON_MOVES], best = -1000;
++        u8 top[MAX_MON_MOVES], nt = 0;
++        for (i = 0; i < n; i++)
++        {
++            sc[i] = Rival_ScoreMove(sB.aiFlags, options[i], options, n);
++            if (sc[i] > best)
++                best = sc[i];
++        }
++        for (i = 0; i < n; i++)
++            if (sc[i] == best)
++                top[nt++] = options[i];
++        *outSlot = top[Random() % nt];
++        return TRUE;
++    }
+     *outSlot = options[Random() % n];
+     return TRUE;
+ }
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 2dcf119..122c0bf 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -567,7 +567,19 @@ static void DrawEnemyHud(u16 *fb)
+         s32 tw = Pkbn_EmTextWidth(tag, PKBN_FONT_SMALL) + 4;
+         Draw_Box(fb, x - 6 - tw, 3, tw, 9, col, col, 16);
+         Text(fb, x - 4 - tw, 0, tag, COL_WHITE);
++        x -= tw + 2;
+     }
++    if (f->navi.programsRun && sB.trainer)
++    {
++        // a rival runs NaviCust programs (POC-11): say how many
++        char ncp[12];
++        s32 nw;
++        snprintf(ncp, sizeof(ncp), "NCP %u", f->navi.programsRun);
++        nw = Pkbn_EmTextWidth(ncp, PKBN_FONT_SMALL) + 4;
++        Draw_Box(fb, x - 6 - nw, 3, nw, 9, RGB(6, 10, 22), COL_BOX_EDGE, 16);
++        Text(fb, x - 4 - nw, 0, ncp, COL_WHITE);
++    }
++    x = CW - 4 - w;
+     DrawStages(fb, x - 4, 20, f);
+     if (sB.trainer)
+     {
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index ce7095d..22b486c 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -133,7 +133,9 @@ static const struct PkbnProgramAdvance *PAOf(const struct Attack *a)
+ // NaviCust (POC-9): the compiled programs behind an attack (player side: the Pokémon that used it).
+ static const struct PkbnNaviStats *AttackNavi(const struct Attack *a)
+ {
+-    return (a->side == SIDE_PLAYER && a->userSlot < PKBN_PARTY_MAX) ? &sB.party[a->userSlot].navi : NULL;
++    if (a->side == SIDE_ENEMY)   // a rival trainer's programs (POC-11; wild Pokémon run none)
++        return sB.f[SIDE_ENEMY].navi.programsRun ? &sB.f[SIDE_ENEMY].navi : NULL;
++    return (a->userSlot < PKBN_PARTY_MAX) ? &sB.party[a->userSlot].navi : NULL;
+ }
+ 
+ // QuickClw program: recover faster after a chip.
+@@ -446,6 +448,49 @@ static struct BattlePokemon DefenderData(u8 defSide)
+     return d;
+ }
+ 
++// AI estimate (POC-11 rivals): Gen 3 damage of `move` from side's Pokémon on the other one, with STAB and the type
++// chart but no random roll, no crit and no side effects. 0 when it can't hurt (status moves, immunities).
++s32 Moves_EstimateDamage(u8 side, u16 move, u16 *eff)
++{
++    struct BattlePokemon atk = sB.f[side].bm;
++    struct BattlePokemon def = DefenderData(side ^ 1);
++    const struct BattleMove *m = &gBattleMoves[move];
++    u8 type = m->type;
++    s32 dmg;
++    *eff = TYPE_MUL_NORMAL;
++    if (m->power == 0)
++        return 0;
++    if (m->power == 1)   // fixed / variable damage: about the user's level (Night Shade, Seismic Toss; TUNE)
++    {
++        s32 one = 1;
++        *eff = ApplyTypeChart(type, &def, &one);
++        return *eff == TYPE_MUL_NO_EFFECT ? 0 : atk.level;
++    }
++    gBattleMons[side] = atk;
++    gBattleMons[side ^ 1] = def;
++    gBattlersCount = 2;
++    gBattleWeather = sB.weather;
++    gCurrentMove = move;
++    gCritMultiplier = 1;
++    dmg = CalculateBaseDamage(&atk, &def, move, 0, 0, type, side, side ^ 1);
++    if (atk.types[0] == type || atk.types[1] == type)
++        dmg = dmg * 15 / 10;
++    if ((def.ability == ABILITY_LEVITATE && type == TYPE_GROUND)
++     || (type == TYPE_ELECTRIC && def.ability == ABILITY_VOLT_ABSORB) || (type == TYPE_WATER && def.ability == ABILITY_WATER_ABSORB)
++     || (type == TYPE_FIRE && def.ability == ABILITY_FLASH_FIRE))
++    {
++        *eff = TYPE_MUL_NO_EFFECT;
++        return 0;
++    }
++    *eff = ApplyTypeChart(type, &def, &dmg);
++    if (def.ability == ABILITY_WONDER_GUARD && *eff <= TYPE_MUL_NORMAL)
++    {
++        *eff = TYPE_MUL_NO_EFFECT;
++        return 0;
++    }
++    return dmg;
++}
++
+ // Full Gen 3 damage for one hit of `a` on defSide. *eff = multiplier x10. Returns -1 if the move has
+ // no effect for a non-type reason (e.g. Dream Eater on an awake target).
+ static s32 CalcHitDamage(struct Attack *a, u8 defSide, u16 *eff, bool8 *crit)
+diff --git a/src/pkbn/rival.c b/src/pkbn/rival.c
+new file mode 100644
+index 0000000..c4dec36
+--- /dev/null
++++ b/src/pkbn/rival.c
+@@ -0,0 +1,223 @@
++// Trainers as Navi rivals (POC-11, item 4). Gym Leaders, the rival, the Elite Four, the Champion and the team
++// leaders bring NaviCust programs (BN Navis always run some) and pick their moves with Emerald's own trainer AI
++// flags instead of at random.
++//
++//  - Programs: a greedy auto-layout on the same board and compiler the player uses (src/pkbn/navicust.c). Which
++//    programs, by tier, is our design (TUNE). A part that would cause a bug is left out.
++//  - Move choice: the AI scripts the trainer has in Emerald (gTrainers[].aiFlags, src/data/trainers.h), scored like
++//    BattleAI_ChooseMoveOrAction: every move starts at 100 (battle_ai_script_commands.c:326), the best score wins,
++//    ties at random (ChooseMoveOrAction_Singles, :423-445). Only the parts that read the grid's state are modelled.
++#include "pkbn/grid_internal.h"
++#include "pkbn/rival.h"
++#include "pkbn/navicust.h"
++#include "pkbn/ncp_table.h"
++#include "battle.h"
++#include "battle_main.h"
++#include "data.h"
++#include "random.h"
++#include "constants/abilities.h"
++#include "constants/battle_ai.h"
++#include "constants/battle_move_effects.h"
++#include "constants/opponents.h"
++#include "constants/trainers.h"
++
++#ifdef PORTABLE
++
++// ---- Who is a rival ---------------------------------------------------------------------------------------------
++
++u8 Rival_Tier(u16 trainerId)
++{
++    const struct Trainer *t;
++    if (trainerId == 0 || trainerId >= TRAINERS_COUNT)
++        return 0;
++    t = &gTrainers[trainerId];
++    if (trainerId >= TRAINER_ROXANNE_1 && trainerId <= TRAINER_JUAN_1)
++        return 1 + (trainerId - TRAINER_ROXANNE_1) / 2;          // Roxanne/Brawly 1 ... Tate&Liza/Juan 4 (TUNE)
++    switch (t->trainerClass)
++    {
++    case TRAINER_CLASS_LEADER:                                   // rematches (_2.._5)
++    case TRAINER_CLASS_ELITE_FOUR:
++    case TRAINER_CLASS_CHAMPION:
++        return 5;
++    case TRAINER_CLASS_AQUA_LEADER:
++    case TRAINER_CLASS_MAGMA_LEADER:
++        return 4;
++    case TRAINER_CLASS_RIVAL:
++    {
++        // the rival grows with the story: by the level of their lead Pokémon (TUNE)
++        u8 lv = GetMonData(&gEnemyParty[0], MON_DATA_LEVEL);
++        return lv <= 15 ? 1 : lv <= 25 ? 2 : lv <= 35 ? 3 : 4;
++    }
++    }
++    return 0;
++}
++
++// ---- NaviCust ---------------------------------------------------------------------------------------------------
++
++static s32 ProgByName(const char *name)
++{
++    s32 i;
++    for (i = 0; i < NCP_COUNT; i++)
++        if (strcmp(gPkbnNcps[i].name, name) == 0)
++            return i;
++    return -1;
++}
++
++static s32 TypeProg(u8 type)
++{
++    s32 i;
++    for (i = 0; i < NCP_COUNT; i++)
++        if (gPkbnNcps[i].effect == NCPE_TYPE_BOOST && gPkbnNcps[i].arg == type)
++            return i;
++    return -1;
++}
++
++static bool8 Clean(const struct PkbnNaviStats *s)
++{
++    s32 b;
++    for (b = 1; b < NAVI_BUG_TYPES; b++)
++        if (s->bug[b])
++            return FALSE;
++    return TRUE;
++}
++
++// Try every rotation and cell for `prog`; keep the first spot where it runs and the board stays bug-free.
++static bool8 Place(struct PkbnNavi *navi, const struct PkbnNaviOwner *owner, s32 prog)
++{
++    s32 rot, x, y, c;
++    if (prog < 0 || navi->count >= NAVI_MAX_PARTS)
++        return FALSE;
++    for (c = 0; c < navi->count; c++)
++        if (navi->parts[c].prog == prog)
++            return FALSE;   // one of each
++    for (rot = 0; rot < 4; rot++)
++        for (y = 0; y < NAVI_H; y++)
++            for (x = 0; x < NAVI_W; x++)
++            {
++                struct PkbnNaviPart part = { prog, gPkbnNcps[prog].types[0], x, y, rot };
++                struct PkbnNaviStats st;
++                struct PkbnNaviBoard board;
++                if (!Navi_CanPlace(navi, owner, &part, -1))
++                    continue;
++                navi->parts[navi->count++] = part;
++                Navi_Compile(navi, owner, &st, &board);
++                if (board.partRuns[navi->count - 1] && Clean(&st))
++                    return TRUE;
++                navi->count--;
++            }
++    return FALSE;
++}
++
++void Rival_NaviForMon(struct Pokemon *mon, u8 tier, struct PkbnNaviStats *out)
++{
++    struct PkbnNavi navi;
++    struct PkbnNaviOwner owner;
++    struct PkbnNaviBoard board;
++    u16 species = GetMonData(mon, MON_DATA_SPECIES);
++    u8 t0 = gSpeciesInfo[species].types[0], t1 = gSpeciesInfo[species].types[1];
++    bool8 special = gSpeciesInfo[species].baseSpAttack > gSpeciesInfo[species].baseAttack;
++
++    memset(&navi, 0, sizeof(navi));
++    memset(out, 0, sizeof(*out));
++    if (tier == 0)
++        return;
++    Navi_OwnerFromMon(&owner, mon);
++    Place(&navi, &owner, ProgByName(tier >= 4 ? "HP+200" : tier >= 2 ? "HP+100" : "HP+50"));
++    Place(&navi, &owner, TypeProg(t0));
++    if (tier >= 2)
++        Place(&navi, &owner, ProgByName(special ? "Calcium" : "Protein"));
++    if (tier >= 3)
++    {
++        Place(&navi, &owner, ProgByName("FstBarr"));
++        Place(&navi, &owner, ProgByName("Carbos"));
++    }
++    if (tier >= 4)
++    {
++        Place(&navi, &owner, ProgByName("UnderSht"));
++        Place(&navi, &owner, ProgByName("Leftovrs"));
++    }
++    if (tier >= 5)
++    {
++        Place(&navi, &owner, ProgByName("ScopLens"));
++        Place(&navi, &owner, ProgByName("SuprArmr"));
++        if (t1 != t0)
++            Place(&navi, &owner, TypeProg(t1));
++    }
++    Navi_Compile(&navi, &owner, out, &board);
++}
++
++// ---- Move choice ------------------------------------------------------------------------------------------------
++
++static bool8 IsStatusEffect(u8 eff)
++{
++    return eff == EFFECT_SLEEP || eff == EFFECT_POISON || eff == EFFECT_TOXIC || eff == EFFECT_PARALYZE
++        || eff == EFFECT_WILL_O_WISP;
++}
++
++// One move's score for the selected foe (sB.f[SIDE_ENEMY]) against the player's Pokémon.
++s32 Rival_ScoreMove(u32 aiFlags, u8 slot, const u8 *options, u8 n)
++{
++    const struct Fighter *e = &sB.f[SIDE_ENEMY];
++    const struct Fighter *p = &sB.f[SIDE_PLAYER];
++    u16 mv = e->bm.moves[slot];
++    const struct BattleMove *m = &gBattleMoves[mv];
++    s32 score = 100, i;
++    u16 eff;
++    s32 dmg = Moves_EstimateDamage(SIDE_ENEMY, mv, &eff);
++
++    if (aiFlags & AI_SCRIPT_CHECK_BAD_MOVE)
++    {
++        // AI_CheckBadMove (data/battle_ai_scripts.s:51-): no effect -10, absorbed -12, status on a statused target -10
++        if (m->power && eff == TYPE_MUL_NO_EFFECT)
++            score -= ((m->type == TYPE_ELECTRIC && p->bm.ability == ABILITY_VOLT_ABSORB)
++                   || (m->type == TYPE_WATER && p->bm.ability == ABILITY_WATER_ABSORB)
++                   || (m->type == TYPE_FIRE && p->bm.ability == ABILITY_FLASH_FIRE)) ? 12 : 10;
++        if (IsStatusEffect(m->effect) && (p->bm.status1 || p->safeguard))
++            score -= 10;                                          // AI_CBM_Sleep / _Toxic / _Paralyze (:216, :341, :397)
++        if (m->effect == EFFECT_CONFUSE && p->confTurns)
++            score -= 10;                                          // AI_CBM_Confuse (:386)
++        if (m->effect == EFFECT_ATTACK_UP && e->bm.statStages[STAT_ATK] >= MAX_STAT_STAGE)
++            score -= 10;                                          // AI_CBM_AttackUp (:249)
++        if (m->effect == EFFECT_ATTRACT && (p->infatuated || p->bm.ability == ABILITY_OBLIVIOUS))
++            score -= 10;                                          // AI_CBM_Attract (:456)
++        if (m->effect == EFFECT_DREAM_EATER && !(p->bm.status1 & STATUS1_SLEEP))
++            score -= 8;
++    }
++    if ((aiFlags & AI_SCRIPT_TRY_TO_FAINT) && m->power)
++    {
++        // AI_TryToFaint (:2616): a KO +4 (+2 more for a Quick Attack); not the strongest -1; x4 +2 most of the time
++        if (dmg >= p->bm.hp)
++            score += (m->effect == EFFECT_QUICK_ATTACK) ? 6 : 4;
++        else
++        {
++            bool8 best = TRUE;
++            for (i = 0; i < n; i++)
++            {
++                u16 e2;
++                if (options[i] != slot && Moves_EstimateDamage(SIDE_ENEMY, e->bm.moves[options[i]], &e2) > dmg)
++                    best = FALSE;
++            }
++            if (!best)
++                score -= 1;
++            if (eff >= TYPE_MUL_SUPER_EFFECTIVE * 2 && (Random() % 256) >= 80)
++                score += 2;
++        }
++    }
++    if (aiFlags & AI_SCRIPT_CHECK_VIABILITY)
++    {
++        // AI_CheckViability (:652) is long; the parts the grid can read (TUNE weights):
++        if (m->power && eff >= TYPE_MUL_SUPER_EFFECTIVE)
++            score += 1;
++        if (m->power && eff > TYPE_MUL_NO_EFFECT && eff < TYPE_MUL_NORMAL)
++            score -= 1;
++        if (IsStatusEffect(m->effect) && !p->bm.status1 && p->bm.hp * 2 > p->bm.maxHP)
++            score += 1;                                           // status early, while the target is healthy
++        if (m->effect == EFFECT_RESTORE_HP && e->bm.hp * 2 < e->bm.maxHP)
++            score += 2;
++        if (m->effect == EFFECT_RESTORE_HP && e->bm.hp * 10 > e->bm.maxHP * 9)
++            score -= 5;
++    }
++    return score;
++}
++
++#endif // PORTABLE
+-- 
+2.43.0
+

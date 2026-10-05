@@ -1,0 +1,1115 @@
+From 6d4601e1aca5242957e479925087641f094223ef Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Mon, 5 Oct 2026 20:38:01 +0300
+Subject: [PATCH 21/22] POC-11e: wild packs - 2-3 wild Pokemon on the grid, BN
+ virus style
+
+Foe context swap (sB.f[SIDE_ENEMY] = the selected foe), packs only from standard
+grass/water encounters, area hits strike every foe, BN6 multi-delete scoring,
+catching once one is left. One foe = the old battle (regression logs identical).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/busting.h       |   4 +
+ include/pkbn/grid_internal.h |  15 +++
+ include/wild_encounter.h     |   7 ++
+ src/pkbn/busting.c           |  28 ++++-
+ src/pkbn/grid_battle.c       | 219 ++++++++++++++++++++++++++++++++++-
+ src/pkbn/grid_draw.c         | 170 +++++++++++++++++----------
+ src/pkbn/grid_field.c        |  53 +++++++--
+ src/pkbn/grid_moves.c        |  48 +++++++-
+ src/pkbn/owtest.c            |   8 ++
+ src/wild_encounter.c         |  58 ++++++++++
+ 10 files changed, 526 insertions(+), 84 deletions(-)
+
+diff --git a/include/pkbn/busting.h b/include/pkbn/busting.h
+index 68bd664..8ef35fe 100644
+--- a/include/pkbn/busting.h
++++ b/include/pkbn/busting.h
+@@ -12,6 +12,9 @@ struct PkbnBustStats
+     bool8 fainted;       // a player Pokémon fainted
+     u8 balls;            // balls thrown
+     bool8 prevStun;
++    u8 deleteRun;        // POC-11 packs: foes deleted in the current 10-frame window
++    u8 multiDelete;      // largest such run (BN6 Unk_1b)
++    u32 deleteUntil;
+ };
+ 
+ void Busting_Reset(void);
+@@ -22,6 +25,7 @@ void Busting_NoteChain(u8 chips, bool8 programAdvance);
+ void Busting_NoteCounter(void);
+ void Busting_NoteFaint(void);
+ void Busting_NoteThrow(void);
++void Busting_NoteDelete(void);
+ u8 Busting_Level(void);                              // 1..11 (11 = S); logs both clocks
+ void Busting_Reward(u8 level, char *msg, u32 size);  // grants it
+ void Busting_ScaleExp(u8 level);
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index c64b8f0..472f1b3 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -59,6 +59,7 @@
+ #define BROKEN_PANEL_FRAMES  600  // TUNE: a broken panel comes back after this long
+ #define PANEL_EFFECT_FRAMES  900  // TUNE: poison / holy / grass panels fade after this long
+ #define MAX_ATTACKS          10
++#define MAX_FOES             3    // POC-11: wild packs of up to 3 on the enemy side (BN virus battles have 1-3)
+ 
+ enum { ST_INTRO, ST_CUSTOM, ST_FIGHT, ST_END, ST_PICK, ST_TIMESTOP, ST_THROW, ST_SENDOUT };
+ enum { SIDE_PLAYER, SIDE_ENEMY };
+@@ -173,6 +174,7 @@ struct Attack
+     u8 pa;                   // Program Advance index + 1 (0 = a normal move)
+     bool8 combo;             // follow-up of an Emerald contest combo (chain payoff)
+     u16 powerPct;            // partner chip power (100 = normal), POC-11
++    u8 foe;                  // POC-11: the foe this attack belongs to (enemy side) or is aimed at (player side)
+     bool8 paLanded;          // PAF_HITONCE: already hit
+     u16 powerOverride;
+     u8 typeOverride;
+@@ -253,6 +255,14 @@ struct GridBattle
+     u8 paCount;
+     char paPreview[32];
+     u8 tsPA;                   // time-stop bench entry for a Program Advance (index + 1)
++    // POC-11 multi-enemy wild battles. sB.f[SIDE_ENEMY] is always the selected foe; the others wait in foes[]
++    // (foes[cur] is stale while it is selected). Foe_Select swaps. One foe = the old single-enemy battle exactly.
++    struct Fighter foes[MAX_FOES];
++    u8 foeCount;
++    u8 cur;
++    u8 foeSlot[MAX_FOES];      // gEnemyParty index of each foe
++    bool8 foeDown[MAX_FOES];   // fainted and handled (EXP given)
++    u16 foeAi[MAX_FOES][2];    // aiStepTimer / aiAttackTimer of the foes that aren't selected
+     // trainer battles
+     bool8 trainer;
+     u8 enemySlot;              // gEnemyParty index currently out
+@@ -287,6 +297,11 @@ void SyncActiveToParty(void);
+ void BeginTimeStop(u8 kind, u8 target, bool8 keepStages);
+ void OpenPicker(u8 purpose);
+ void BeginAssist(void);
++void Foe_Select(u8 i);
++const struct Fighter *Foe_Get(u8 i);
++s8 Foe_At(s8 x, s8 y, bool8 hittable);   // live foe standing on (x, y), or -1
++u8 Foe_LiveCount(void);
++u8 Foe_PlayerTarget(void);                // the foe the player's next move aims at (nearest in the row)
+ 
+ // grid_moves.c
+ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, const char *userName, u8 userSlot);
+diff --git a/include/wild_encounter.h b/include/wild_encounter.h
+index 6e72f6f..e0508ba 100755
+--- a/include/wild_encounter.h
++++ b/include/wild_encounter.h
+@@ -36,5 +36,12 @@ void FishingWildEncounter(u8 rod);
+ u16 GetLocalWildMon(bool8 *isWaterMon);
+ u16 GetLocalWaterMon(void);
+ bool8 UpdateRepelCounter(void);
++#ifdef PORTABLE
++// POC-11 multi-enemy wild battles (src/wild_encounter.c)
++bool8 PkbnWild_AllowPackHere(void);
++bool8 PkbnWild_PackAllowed(void);
++void PkbnWild_ClearPack(void);
++bool8 PkbnWild_GenerateExtra(u8 slot);
++#endif
+ 
+ #endif // GUARD_WILD_ENCOUNTER_H
+diff --git a/src/pkbn/busting.c b/src/pkbn/busting.c
+index b9fd51a..15c799c 100644
+--- a/src/pkbn/busting.c
++++ b/src/pkbn/busting.c
+@@ -87,6 +87,27 @@ void Busting_NoteChain(u8 chips, bool8 programAdvance)
+         sB.bust.chainPts = pts;
+ }
+ 
++// BN6 multi-delete (bit 3), now that wild packs exist (POC-11): deletes within a 10-tick window chain, the largest
++// chain m scores (m-1)*2 (sub_800AE44 / sub_800AE0C, asm/asm00_1.s:16931-16972), with BN6's call-out text
++// (TextScript86F0374). Counted with the chip-chain ADAPT above: the better of the two scores.
++void Busting_NoteDelete(void)
++{
++    static const char *const sCall[] = { "DOUBLE DELETE!", "TRIPLE DELETE!", "QUADRUPLE DELETE!" };
++    if (sB.bust.fightFrames > sB.bust.deleteUntil)
++        sB.bust.deleteRun = 0;
++    sB.bust.deleteRun++;
++    sB.bust.deleteUntil = sB.bust.fightFrames + 10;
++    if (sB.bust.deleteRun > sB.bust.multiDelete)
++        sB.bust.multiDelete = sB.bust.deleteRun;
++    if (sB.bust.deleteRun >= 2)
++    {
++        u8 k = sB.bust.deleteRun - 2 < 2 ? sB.bust.deleteRun - 2 : 2;
++        strncpy(sB.flashText, sCall[k], sizeof(sB.flashText) - 1);
++        sB.flashTimer = 60;
++        PKBN_LOG("%s", sCall[k]);
++    }
++}
++
+ void Busting_NoteCounter(void)
+ {
+     sB.bust.counters++;
+@@ -136,7 +157,8 @@ static s32 TimePoints(bool8 seconds)
+ static u8 Score(bool8 seconds, s32 *parts)
+ {
+     s32 t = TimePoints(seconds), h = HitPoints(), st = sB.bust.steps <= 2 ? 1 : 0;
+-    s32 ch = sB.bust.chainPts, co = sB.bust.counters < 3 ? sB.bust.counters : 3, nf = sB.bust.fainted ? 0 : 1;
++    s32 ch = sB.bust.multiDelete >= 2 && (sB.bust.multiDelete - 1) * 2 > sB.bust.chainPts ? (sB.bust.multiDelete - 1) * 2
++                                                                                        : sB.bust.chainPts, co = sB.bust.counters < 3 ? sB.bust.counters : 3, nf = sB.bust.fainted ? 0 : 1;
+     if (parts)
+         parts[0] = t, parts[1] = h, parts[2] = st, parts[3] = ch, parts[4] = co, parts[5] = nf;
+     return Clamp(t + h + st + ch + co + nf);
+@@ -273,8 +295,8 @@ void Busting_Reward(u8 level, char *msg, u32 size)
+     bool8 lowHP = hp <= 3 * (maxHP >> 3);   // asm/asm29.s:11011-11048
+     s32 slot = 0;
+ 
+-    // BN6 picks a random enemy of the battle (asm/asm29.s:10960-10971)
+-    if (sB.trainer && sB.enemyCount)
++    // BN6 picks a random enemy of the battle (asm/asm29.s:10960-10971); a wild pack too (POC-11)
++    if ((sB.trainer || sB.foeCount > 1) && sB.enemyCount)
+         slot = Random() % sB.enemyCount;
+     enemy = &gEnemyParty[slot];
+     lvl = GetMonData(enemy, MON_DATA_LEVEL);
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 1fda961..0733388 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -36,6 +36,7 @@
+ #include "pkbn/battle_stub.h"
+ #include "pkbn/grid_battle.h"
+ #include "pkbn/render.h"
++#include "wild_encounter.h"
+ 
+ #ifdef PORTABLE
+ 
+@@ -68,6 +69,74 @@ s8 Facing(u8 side)
+     return side == SIDE_PLAYER ? 1 : -1;
+ }
+ 
++// ---- Foes (POC-11 multi-enemy wild battles) ---------------------------------------------------------
++// The rules code talks to sB.f[SIDE_ENEMY]; with a pack, the foe being worked on is swapped in there.
++
++void Foe_Select(u8 i)
++{
++    if (i == sB.cur || i >= sB.foeCount)
++        return;
++    sB.foes[sB.cur] = sB.f[SIDE_ENEMY];
++    sB.foeAi[sB.cur][0] = sB.aiStepTimer;
++    sB.foeAi[sB.cur][1] = sB.aiAttackTimer;
++    sB.f[SIDE_ENEMY] = sB.foes[i];
++    sB.aiStepTimer = sB.foeAi[i][0];
++    sB.aiAttackTimer = sB.foeAi[i][1];
++    sB.cur = i;
++    sB.enemySlot = sB.foeSlot[i];
++}
++
++const struct Fighter *Foe_Get(u8 i)
++{
++    return i == sB.cur ? &sB.f[SIDE_ENEMY] : &sB.foes[i];
++}
++
++s8 Foe_At(s8 x, s8 y, bool8 hittable)
++{
++    s32 i;
++    for (i = 0; i < sB.foeCount; i++)
++    {
++        const struct Fighter *f = Foe_Get(i);
++        if (f->bm.hp && f->x == x && f->y == y && (!hittable || !f->invuln))
++            return i;
++    }
++    return -1;
++}
++
++u8 Foe_LiveCount(void)
++{
++    s32 i, n = 0;
++    for (i = 0; i < sB.foeCount; i++)
++        if (Foe_Get(i)->bm.hp)
++            n++;
++    return n;
++}
++
++// Nearest live foe in the player's row (what a buster or cannon meets first), else the closest one. TUNE.
++u8 Foe_PlayerTarget(void)
++{
++    const struct Fighter *p = &sB.f[SIDE_PLAYER];
++    s32 i, best = -1, bestScore = 0;
++    if (sB.foeCount <= 1)
++        return sB.cur;
++    for (i = 0; i < sB.foeCount; i++)
++    {
++        const struct Fighter *f = Foe_Get(i);
++        s32 score;
++        if (f->bm.hp == 0)
++            continue;
++        score = 10 * abs(f->y - p->y) + (f->x - p->x);
++        if (best < 0 || score < bestScore)
++            best = i, bestScore = score;
++    }
++    return best < 0 ? sB.cur : best;
++}
++
++static void TargetForPlayer(void)
++{
++    Foe_Select(Foe_PlayerTarget());
++}
++
+ // Gen 3 battle data from a party/enemy Pokemon, following the field set used by
+ // the battle controllers' REQUEST_ALL_BATTLE copy.
+ static void MonToBattleMon(struct Pokemon *mon, struct BattlePokemon *bm)
+@@ -258,9 +327,12 @@ void BeginAssist(void)
+ static void ChainUse(u16 move, u8 slot);
+ static void SpendPAChips(u8 k);
+ 
++static void TargetForPlayer(void);
++
+ static void EndTimeStop(void)
+ {
+     sB.state = ST_FIGHT;
++    TargetForPlayer();
+     switch (sB.tsKind)
+     {
+     case TS_SWITCH:
+@@ -459,6 +531,46 @@ static void OpenCustom(void)
+     sB.state = ST_CUSTOM;
+ }
+ 
++// POC-11: how many extra wild Pokémon join (TUNE): none before the first badge 90% of the time; with b badges a pack
++// of 2 is 25 + 4b %, and 3b % of all battles are a pack of 3. Only standard grass / water encounters
++// (src/wild_encounter.c PkbnWild_AllowPack). Self-tests: PKBN_TEST_FOES="species:level,species:level".
++static void AddWildPack(void)
++{
++    const char *t = getenv("PKBN_TEST_FOES");
++    s32 n = 0, extra = 0, b, r;
++    if (t != NULL)
++    {
++        while (*t && n < MAX_FOES - 1)
++        {
++            u16 sp = (u16)strtol(t, (char **)&t, 10);
++            u8 lv = 5;
++            if (*t == ':')
++                lv = (u8)strtol(t + 1, (char **)&t, 10);
++            CreateMon(&gEnemyParty[1 + n], sp, lv, 32, FALSE, 0, OT_ID_PLAYER_ID, 0);
++            n++;
++            while (*t == ',')
++                t++;
++        }
++        return;
++    }
++    if (!PkbnWild_PackAllowed())
++        return;
++    for (b = 0, r = FLAG_BADGE01_GET; r <= FLAG_BADGE08_GET; r++)
++        b += FlagGet(r) ? 1 : 0;
++    r = Random() % 100;
++    if (r < 3 * b)
++        extra = 2;
++    else if (r < (b == 0 ? 10 : 25 + 4 * b))
++        extra = 1;
++    if (getenv("PKBN_TEST_PACK_EXTRA") != NULL)   // owtests: force the pack size, still drawn from the map's table
++        extra = atoi(getenv("PKBN_TEST_PACK_EXTRA"));
++    for (n = 0; n < extra; n++)
++        if (!PkbnWild_GenerateExtra(1 + n))
++            break;
++    if (extra)
++        PKBN_LOG("wild pack roll %d with %d badges: +%d", (int)r, (int)b, (int)extra);
++}
++
+ static void Begin(void)
+ {
+     s32 i;
+@@ -522,6 +634,9 @@ static void Begin(void)
+     }
+ 
+     sB.trainer = (gBattleTypeFlags & BATTLE_TYPE_TRAINER) != 0;
++    if (!sB.trainer)
++        AddWildPack();
++    PkbnWild_ClearPack();
+     for (i = 0; i < PARTY_SIZE; i++)
+         if (GetMonData(&gEnemyParty[i], MON_DATA_SPECIES) != SPECIES_NONE)
+             sB.enemyCount = i + 1;
+@@ -535,6 +650,26 @@ static void Begin(void)
+     sB.f[SIDE_ENEMY].y = 1;
+     sB.aiStepTimer = ENEMY_STEP_MIN;
+     sB.aiAttackTimer = 120;
++    sB.foeCount = 1;
++    if (!sB.trainer && sB.enemyCount > 1)
++    {
++        // the rest of the pack: back corners, attacks staggered (TUNE)
++        static const s8 sPos[MAX_FOES][2] = { {4, 1}, {5, 0}, {5, 2} };
++        sB.foes[0] = sB.f[SIDE_ENEMY];
++        for (i = 1; i < sB.enemyCount && i < MAX_FOES; i++)
++        {
++            LoadEnemy(&gEnemyParty[i]);
++            sB.f[SIDE_ENEMY].x = sPos[i][0];
++            sB.f[SIDE_ENEMY].y = sPos[i][1];
++            sB.foes[i] = sB.f[SIDE_ENEMY];
++            sB.foeSlot[i] = i;
++            sB.foeAi[i][0] = ENEMY_STEP_MIN + 17 * i;
++            sB.foeAi[i][1] = 120 + 50 * i;
++        }
++        sB.foeCount = i;
++        sB.f[SIDE_ENEMY] = sB.foes[0];
++        PKBN_LOG("wild pack: %u Pokemon", sB.foeCount);
++    }
+     if (sB.trainer)
+     {
+         char cls[16], nm[16];
+@@ -543,6 +678,10 @@ static void Begin(void)
+         // sText_Trainer1WantsToBattle (battle_message.c:385)
+         snprintf(sB.banner, sizeof(sB.banner), "%s %s WANTS TO BATTLE!", cls, nm);
+     }
++    else if (sB.foeCount == 2)
++        snprintf(sB.banner, sizeof(sB.banner), "WILD %s AND %s APPEARED!", sB.f[SIDE_ENEMY].name, sB.foes[1].name); // sText_TwoWildPkmnAppeared
++    else if (sB.foeCount > 2)
++        snprintf(sB.banner, sizeof(sB.banner), "A PACK OF %u WILD POKEMON APPEARED!", sB.foeCount);
+     else
+         snprintf(sB.banner, sizeof(sB.banner), "WILD %s APPEARED!", sB.f[SIDE_ENEMY].name);
+     sB.state = ST_INTRO;
+@@ -733,9 +872,17 @@ static void UpdateCustom(void)
+         }
+         else if (sB.ballItem == 0 || sB.queueCount > 0)
+             PlaySE(SE_FAILURE);
++        else if (Foe_LiveCount() > 1)
++        {
++            SetMsg("CAN'T AIM WITH MORE THAN ONE OUT!", 60); // POC-11 design: thin the pack first
++            PlaySE(SE_FAILURE);
++        }
+         else
+         {
+             s32 i;
++            for (i = 0; i < sB.foeCount; i++)
++                if (Foe_Get(i)->bm.hp)
++                    Foe_Select(i);   // the one left standing
+             RemoveBagItem(sB.ballItem, 1);
+             sB.throwShakes = Catch_Throw(sB.ballItem);
+             Busting_NoteThrow();
+@@ -1050,10 +1197,12 @@ static void UpdatePlayer(void)
+ 
+     if ((keys & A_BUTTON) && sB.queueCount > 0)
+     {
++        TargetForPlayer();
+         UseNextChip();
+     }
+     else if ((held & B_BUTTON) && sB.busterCd == 0)
+     {
++        TargetForPlayer();
+         Moves_ApplyBuster(SIDE_PLAYER);
+         // Speed+ programs: 3 frames quicker per level (BN6 buster speed 1-5; TUNE)
+         sB.busterCd = BUSTER_COOLDOWN - 3 * ((p->navi.busterSpeed ? p->navi.busterSpeed : 1) - 1);
+@@ -1170,7 +1319,7 @@ static void EnemyDodge(void)
+             }
+ }
+ 
+-static void UpdateEnemy(void)
++static void UpdateOneEnemy(void)
+ {
+     struct Fighter *e = &sB.f[SIDE_ENEMY];
+ 
+@@ -1218,6 +1367,22 @@ static void UpdateEnemy(void)
+     }
+ }
+ 
++static void UpdateEnemy(void)
++{
++    s32 k;
++    if (sB.foeCount <= 1)
++    {
++        UpdateOneEnemy();
++        return;
++    }
++    for (k = 0; k < sB.foeCount && sB.state == ST_FIGHT; k++)
++    {
++        Foe_Select(k);
++        if (sB.f[SIDE_ENEMY].bm.hp)
++            UpdateOneEnemy();
++    }
++}
++
+ static void Tick(struct Fighter *f)
+ {
+     if (f->moveCd) f->moveCd--;
+@@ -1343,11 +1508,50 @@ static void UpdateThrow(void)
+     sB.state = ST_FIGHT;
+ }
+ 
++// A pack (POC-11): each foe that goes down gives its EXP at once; the battle is won when the last one falls.
++static bool8 CheckPackFaints(void)
++{
++    s32 k, i;
++    s8 last = -1;
++    for (k = 0; k < sB.foeCount; k++)
++    {
++        char text[40];
++        u32 zero = 0;
++        if (sB.foeDown[k] || Foe_Get(k)->bm.hp)
++            continue;
++        Foe_Select(k);
++        sB.foeDown[k] = TRUE;
++        last = k;
++        SetMonData(&gEnemyParty[sB.foeSlot[k]], MON_DATA_HP, &zero);
++        AwardExpForFaintedEnemy();
++        Busting_NoteDelete();
++        for (i = 0; i < MAX_ATTACKS; i++)   // a deleted virus's attacks go with it (BN)
++            if (sB.attacks[i].active && sB.attacks[i].side == SIDE_ENEMY && sB.attacks[i].foe == k)
++                sB.attacks[i].active = FALSE;
++        snprintf(text, sizeof(text), "WILD %s FAINTED!", sB.f[SIDE_ENEMY].name);
++        PKBN_LOG("pack: %s down, %u left", sB.f[SIDE_ENEMY].name, Foe_LiveCount());
++        if (Foe_LiveCount() == 0)
++        {
++            EndBattle(B_OUTCOME_WON, text);
++            return TRUE;
++        }
++        SetMsg(text, 60);
++        PlaySE(SE_FAINT);
++    }
++    (void)last;
++    return FALSE;
++}
++
+ static void CheckFaints(void)
+ {
+     if (sB.state != ST_FIGHT)
+         return;
+-    if (sB.f[SIDE_ENEMY].bm.hp == 0)
++    if (sB.foeCount > 1)
++    {
++        if (CheckPackFaints())
++            return;
++    }
++    else if (sB.f[SIDE_ENEMY].bm.hp == 0)
+     {
+         char text[40];
+         s8 next;
+@@ -1378,8 +1582,9 @@ static void CheckFaints(void)
+         else
+             snprintf(text, sizeof(text), "WILD %s FAINTED!", sB.f[SIDE_ENEMY].name);
+         EndBattle(B_OUTCOME_WON, text);
++        return;
+     }
+-    else if (sB.f[SIDE_PLAYER].bm.hp == 0)
++    if (sB.f[SIDE_PLAYER].bm.hp == 0)
+     {
+         bool8 alive[PKBN_PARTY_MAX];
+         s32 i, others = 0;
+@@ -1427,7 +1632,11 @@ static void UpdateFight(void)
+         sB.busterCd--;
+     Busting_OnFightFrame();
+     Tick(&sB.f[SIDE_PLAYER]);
+-    Tick(&sB.f[SIDE_ENEMY]);
++    for (r = 0; r < sB.foeCount; r++)
++    {
++        Foe_Select(r);
++        Tick(&sB.f[SIDE_ENEMY]);
++    }
+     for (r = 0; r < GRID_ROWS; r++)
+         for (c = 0; c < GRID_COLS; c++)
+             if (sB.fx[r][c])
+@@ -1551,7 +1760,7 @@ void PkbnGrid_GetDebug(struct PkbnGridDebug *d)
+                 d->anySelectable = TRUE;
+     d->cursorIsWild = sB.cursor == sB.handCount;
+     d->itemRow = sB.handCount + 1;
+-    d->ballUsable = !sB.trainer && sB.ballItem && sB.queueCount == 0;
++    d->ballUsable = !sB.trainer && sB.ballItem && sB.queueCount == 0 && Foe_LiveCount() <= 1;
+     d->pickedCount = 0;
+     for (i = 0; i < sB.handCount; i++)
+         d->pickedCount += sB.picked[i];
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 22a546d..2dcf119 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -311,11 +311,18 @@ static void DrawField(u16 *fb, u32 t)
+ 
+ // ---- fighters ----------------------------------------------------------------------------------------------
+ 
+-static u8 sFaintT[2];
+-static u16 sLastHp[2];
+-static u16 sLastSpecies[2];
+-static u8 sPoseT[2];      // frames left of the "attacking" pose
+-static u8 sAppearT[2];    // frames left of the send-out grow (Emerald's Poké Ball release)
++// Per visual slot: 0 = the player's side, 1 + n = foe n of a wild pack (POC-11; one foe = slot 1 as before).
++#define NVIS (1 + MAX_FOES)
++static u8 sFaintT[NVIS];
++static u16 sLastHp[NVIS];
++static u16 sLastSpecies[NVIS];
++static u8 sPoseT[NVIS];      // frames left of the "attacking" pose
++static u8 sAppearT[NVIS];    // frames left of the send-out grow (Emerald's Poké Ball release)
++
++static u8 VS(u8 side)
++{
++    return side == SIDE_PLAYER ? 0 : 1 + sB.cur;
++}
+ static u16 sMaxSerial;     // newest attack the visuals have announced
+ static u32 sTick;
+ static u32 sLastBattleFrame;
+@@ -326,10 +333,19 @@ static void ResetVisuals(void)
+     memset(sPoseT, 0, sizeof(sPoseT));
+     memset(sAppearT, 0, sizeof(sAppearT));
+     sMaxSerial = sB.attackSerial;
++    memset(sLastHp, 0, sizeof(sLastHp));
++    memset(sLastSpecies, 0, sizeof(sLastSpecies));
+     sLastHp[0] = sB.f[0].bm.hp;
+-    sLastHp[1] = sB.f[1].bm.hp;
+     sLastSpecies[0] = sB.f[0].bm.species;
+-    sLastSpecies[1] = sB.f[1].bm.species;
++    {
++        s32 k;
++        for (k = 0; k < sB.foeCount || k == 0; k++)
++        {
++            const struct Fighter *f = sB.foeCount > 1 ? Foe_Get(k) : &sB.f[1];
++            sLastHp[1 + k] = f->bm.hp;
++            sLastSpecies[1 + k] = f->bm.species;
++        }
++    }
+     Vfx_Reset();
+ }
+ 
+@@ -338,7 +354,7 @@ static bool8 FighterHidden(u8 side)
+     const struct Fighter *f = &sB.f[side];
+     if (side == SIDE_ENEMY && ((sB.state == ST_THROW && sB.timer >= 30) || (sB.state == ST_END && sB.caught)))
+         return TRUE; // inside the ball
+-    if (f->bm.hp == 0 && sFaintT[side] >= 32)
++    if (f->bm.hp == 0 && sFaintT[VS(side)] >= 32)
+         return TRUE;
+     return FALSE;
+ }
+@@ -378,10 +394,10 @@ static void DrawFighter(u16 *fb, u8 side)
+         return; // BN blink while invincible
+ 
+     img = Gfx_MonImage(&f->pic, 0);
+-    if (sPoseT[side])
++    if (sPoseT[VS(side)])
+     {
+         frame = 1; // Emerald's second frame as the "attacking" pose
+-        dx = (sPoseT[side] > 6) ? 3 : 1;
++        dx = (sPoseT[VS(side)] > 6) ? 3 : 1;
+     }
+     else if (!still && ((sTick / 40) & 1))
+         y -= 1; // breathing
+@@ -425,15 +441,15 @@ static void DrawFighter(u16 *fb, u8 side)
+     {
+         // Emerald's faint: the picture slides down out of sight
+         Gfx_ClipBottom(y + 1);
+-        y += sFaintT[side] * 2;
++        y += sFaintT[VS(side)] * 2;
+         flags |= GFX_TINT;
+         color = COL_BLACK;
+         amt = 4;
+     }
+-    if (sAppearT[side])
++    if (sAppearT[VS(side)])
+     {
+         // released from the ball: grows from nothing, white at first (Emerald's send-out)
+-        s32 k = 16 - sAppearT[side];
++        s32 k = 16 - sAppearT[VS(side)];
+         Gfx_DrawScaled(fb, &img, x + dx, y - lift, 32 + k * 14, 32 + k * 14, flags | GFX_TINT, COL_WHITE, (u8)(16 - k));
+     }
+     else
+@@ -1180,32 +1196,81 @@ static void DrawThrow(u16 *fb)
+     Vfx_DrawBall(fb, sB.ballItem, bx, by, t);
+ }
+ 
++// Run fn for the player's side and every foe (a pack's foes are swapped into sB.f[SIDE_ENEMY] one by one).
++static void ForEachVis(void (*fn)(u8 side, u8 vis))
++{
++    s32 k;
++    fn(SIDE_PLAYER, 0);
++    for (k = 0; k < sB.foeCount || k == 0; k++)
++    {
++        Foe_Select(k);
++        fn(SIDE_ENEMY, 1 + k);
++    }
++}
++
++static bool8 sNewBattle;
++static void VisAppear(u8 side, u8 v)
++{
++    const struct Fighter *f = &sB.f[side];
++    if (f->bm.species != sLastSpecies[v] || sNewBattle)
++    {
++        s32 fx, fy;
++        sAppearT[v] = 16;
++        Draw_FeetPos(f->x, f->y, &fx, &fy);
++        Vfx_OnSendOut(fx, fy);
++        sLastSpecies[v] = f->bm.species;
++        sLastHp[v] = f->bm.hp; // a different Pokémon came in: no damage number for that
++        sFaintT[v] = 0;
++    }
++}
++
++static void VisTrack(u8 s, u8 v)
++{
++    const struct Fighter *f = &sB.f[s];
++    if (f->bm.hp != sLastHp[v])
++    {
++        s32 fx, fy;
++        Draw_FeetPos(f->x, f->y, &fx, &fy);
++        if (sB.state != ST_INTRO && sB.state != ST_SENDOUT && sB.state != ST_TIMESTOP)
++            Vfx_OnHpChange(s, (s32)f->bm.hp - (s32)sLastHp[v], fx, fy);
++        sLastHp[v] = f->bm.hp;
++    }
++    if (f->bm.hp == 0 && sFaintT[v] < 40)
++        sFaintT[v]++;
++    if (f->bm.hp != 0)
++        sFaintT[v] = 0;
++    if (sPoseT[v])
++        sPoseT[v]--;
++    if (sAppearT[v])
++        sAppearT[v]--;
++}
++
++static u16 *sDrawFb;
++static s32 sDrawRow;
++static void VisDrawRow(u8 side, u8 v)
++{
++    (void)v;
++    if (sB.f[side].y == sDrawRow)
++        DrawFighter(sDrawFb, side);
++}
++
++static void VisHpUnder(u8 side, u8 v)
++{
++    (void)v;
++    if (side == SIDE_ENEMY)
++        DrawEnemyHpUnder(sDrawFb);
++}
++
+ void Draw_Overlay(u16 *fb)
+ {
+     s32 bw;
+     u32 t;
++    u8 keepFoe = sB.cur;
+ 
+-    if (sB.frame < sLastBattleFrame || sB.f[0].bm.species != sLastSpecies[0] || sB.f[1].bm.species != sLastSpecies[1])
+-    {
+-        if (sB.frame < sLastBattleFrame)
+-            ResetVisuals();
+-        {
+-            s32 s2;
+-            for (s2 = 0; s2 < 2; s2++)
+-                if (sB.f[s2].bm.species != sLastSpecies[s2] || sB.frame < sLastBattleFrame)
+-                {
+-                    s32 fx, fy;
+-                    sAppearT[s2] = 16;
+-                    Draw_FeetPos(sB.f[s2].x, sB.f[s2].y, &fx, &fy);
+-                    Vfx_OnSendOut(fx, fy);
+-                }
+-        }
+-        sLastSpecies[0] = sB.f[0].bm.species;
+-        sLastSpecies[1] = sB.f[1].bm.species;
+-        sLastHp[0] = sB.f[0].bm.hp; // a different Pokémon came in: no damage number for that
+-        sLastHp[1] = sB.f[1].bm.hp;
+-        sFaintT[0] = sFaintT[1] = 0;
+-    }
++    sNewBattle = sB.frame < sLastBattleFrame;
++    if (sNewBattle)
++        ResetVisuals();
++    ForEachVis(VisAppear);
+     sLastBattleFrame = sB.frame;
+     sTick++;
+     t = sTick;
+@@ -1224,29 +1289,11 @@ void Draw_Overlay(u16 *fb)
+             if (next == NULL)
+                 break;
+             sMaxSerial = next->serial;
+-            sPoseT[next->side] = 14;
++            sPoseT[next->side == SIDE_PLAYER ? 0 : 1 + (sB.foeCount > 1 ? next->foe : 0)] = 14;
+             Vfx_OnLaunch(next);
+         }
+-        for (s = 0; s < 2; s++)
+-        {
+-            const struct Fighter *f = &sB.f[s];
+-            if (f->bm.hp != sLastHp[s])
+-            {
+-                s32 fx, fy;
+-                Draw_FeetPos(f->x, f->y, &fx, &fy);
+-                if (sB.state != ST_INTRO && sB.state != ST_SENDOUT && sB.state != ST_TIMESTOP)
+-                    Vfx_OnHpChange(s, (s32)f->bm.hp - (s32)sLastHp[s], fx, fy);
+-                sLastHp[s] = f->bm.hp;
+-            }
+-            if (f->bm.hp == 0 && sFaintT[s] < 40)
+-                sFaintT[s]++;
+-            if (f->bm.hp != 0)
+-                sFaintT[s] = 0;
+-            if (sPoseT[s])
+-                sPoseT[s]--;
+-            if (sAppearT[s])
+-                sAppearT[s]--;
+-        }
++        (void)s;
++        ForEachVis(VisTrack);
+         Vfx_ScanImpacts();
+     }
+ 
+@@ -1257,19 +1304,20 @@ void Draw_Overlay(u16 *fb)
+     // back row first so the front row overlaps it (BN draws objects by row)
+     {
+         s32 r;
++        sDrawFb = fb;
+         for (r = 0; r < GRID_ROWS; r++)
+         {
+-            if (sB.f[SIDE_PLAYER].y == r)
+-                DrawFighter(fb, SIDE_PLAYER);
+-            if (sB.f[SIDE_ENEMY].y == r)
+-                DrawFighter(fb, SIDE_ENEMY);
++            sDrawRow = r;
++            ForEachVis(VisDrawRow);
+         }
+     }
++    Foe_Select(keepFoe);
+     Vfx_DrawAttacks(fb);
+     Vfx_DrawLayer(fb, VFX_LAYER_AIR);
+     if (sB.state == ST_THROW || (sB.state == ST_END && sB.caught))
+         DrawThrow(fb);
+-    DrawEnemyHpUnder(fb);
++    ForEachVis(VisHpUnder);
++    Foe_Select(keepFoe);
+     Vfx_DrawWeather(fb, t);
+     Vfx_DrawLayer(fb, VFX_LAYER_HUD);
+     Vfx_EndFrame(fb);
+@@ -1280,7 +1328,9 @@ void Draw_Overlay(u16 *fb)
+         DrawGauge(fb, t);
+         DrawBottomHud(fb);
+     }
++    Foe_Select(Foe_PlayerTarget());   // the top-right box follows the foe the player is aiming at
+     DrawEnemyHud(fb);
++    Foe_Select(keepFoe);
+ 
+     if (sB.state == ST_TIMESTOP)
+         DrawTimeStop(fb);
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index 327ce7d..bceddbe 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -70,6 +70,12 @@ bool8 Field_CanStand(u8 side, s8 x, s8 y)
+         return FALSE;
+     if (side == SIDE_PLAYER ? x >= PLAYER_COLS : x < PLAYER_COLS)
+         return FALSE;
++    if (side == SIDE_ENEMY && sB.foeCount > 1)
++    {
++        s8 k = Foe_At(x, y, FALSE);   // a pack doesn't share panels (BN viruses never do)
++        if (k >= 0 && k != sB.cur)
++            return FALSE;
++    }
+     if (sB.panel[y][x] == PANEL_BROKEN && (sB.f[side].navi.flags & NCPF_AIR_SHOES))
+         return TRUE;   // AirShoes program: holes don't matter (BN6)
+     return sB.panel[y][x] != PANEL_BROKEN;
+@@ -384,6 +390,8 @@ void Field_NaviStatusBug(u8 side)
+     PKBN_LOG("%s", line);
+ }
+ 
++static void FighterFrame(u8 s);
++
+ void Field_Update(void)
+ {
+     s32 r, c, s;
+@@ -392,12 +400,21 @@ void Field_Update(void)
+             if (sB.panelTimer[r][c] && --sB.panelTimer[r][c] == 0)
+                 sB.panel[r][c] = PANEL_NORMAL;
+ 
+-    for (s = 0; s < 2; s++)
++    FighterFrame(SIDE_PLAYER);
++    for (s = 0; s < sB.foeCount; s++)
++    {
++        Foe_Select(s);
++        FighterFrame(SIDE_ENEMY);
++    }
++}
++
++static void FighterFrame(u8 s)
++{
+     {
+         struct Fighter *f = &sB.f[s];
+         TickFighterTimers(f);
+         if (f->bm.hp == 0)
+-            continue;
++            return;
+         if ((f->slideDx || f->slideDy) && f->moveCd == 0)
+         {
+             if (!f->hold && Field_CanStand(s, f->x + f->slideDx, f->y + f->slideDy))
+@@ -412,7 +429,7 @@ void Field_Update(void)
+         // Pokémon HP is far lower than a Navi's, so one "damage" here is maxHP/128 (TUNE).
+         NaviBugsTick(s);
+         if (f->bm.hp == 0)
+-            continue;
++            return;
+         if (sB.panel[f->y][f->x] == PANEL_POISON && !f->invuln && !(f->navi.flags & NCPF_FLOAT_SHOES)
+          && !HasType(f, TYPE_POISON) && !HasType(f, TYPE_STEEL))
+         {
+@@ -446,10 +463,11 @@ static void Heal(struct Fighter *f, s32 amount)
+     f->bm.hp = (f->bm.hp + amount > f->bm.maxHP) ? f->bm.maxHP : f->bm.hp + amount;
+ }
+ 
++static void EndTurnFighter(u8 s);
++
+ void Field_EndTurn(void)
+ {
+     s32 s;
+-    char line[40];
+ 
+     sB.turn++;
+     PKBN_LOG("---- end of turn %u ----", (unsigned)sB.turn);
+@@ -461,23 +479,36 @@ void Field_EndTurn(void)
+              : sB.weather & B_WEATHER_SANDSTORM ? "THE SANDSTORM SUBSIDED." : "THE HAIL STOPPED.", 60);
+         sB.weather = 0;
+     }
+-    for (s = 0; s < 2; s++)
++    for (s = 0; s <= sB.foeCount; s++)
+     {
+-        struct Fighter *f = &sB.f[s];
++        struct Fighter *f;
++        if (s > 0)
++            Foe_Select(s - 1);
++        f = &sB.f[s > 0 ? SIDE_ENEMY : SIDE_PLAYER];
+         if (f->bm.hp == 0 || f->invuln)
+             continue;
+         if ((sB.weather & B_WEATHER_SANDSTORM) && !HasType(f, TYPE_ROCK) && !HasType(f, TYPE_GROUND) && !HasType(f, TYPE_STEEL))
+-            Moves_DamageFighter(s, Frac(f, 16), "IS BUFFETED BY THE SANDSTORM!");
++            Moves_DamageFighter(s > 0, Frac(f, 16), "IS BUFFETED BY THE SANDSTORM!");
+         if ((sB.weather & B_WEATHER_HAIL) && !HasType(f, TYPE_ICE))
+-            Moves_DamageFighter(s, Frac(f, 16), "IS PELTED BY HAIL!");
++            Moves_DamageFighter(s > 0, Frac(f, 16), "IS PELTED BY HAIL!");
+     }
+ 
+-    for (s = 0; s < 2; s++)
++    EndTurnFighter(SIDE_PLAYER);
++    for (s = 0; s < sB.foeCount; s++)
++    {
++        Foe_Select(s);
++        EndTurnFighter(SIDE_ENEMY);
++    }
++}
++
++static void EndTurnFighter(u8 s)
++{
++    char line[40];
+     {
+         struct Fighter *f = &sB.f[s];
+         struct Fighter *o = &sB.f[s ^ 1];
+         if (f->bm.hp == 0)
+-            continue;
++            return;
+         // Leftovrs program (Gen 3 Leftovers: 1/16 each turn)
+         if (f->navi.leftovers)
+             Heal(f, Frac(f, f->navi.leftovers));
+@@ -517,7 +548,7 @@ void Field_EndTurn(void)
+             Moves_DamageFighter(s, Frac(f, 16), "IS HURT BY THE TRAP!");
+         }
+         if (f->bm.hp == 0)
+-            continue;
++            return;
+         // Sleep counts down (Gen 3 decrements on each move attempt; here once per turn).
+         if (f->bm.status1 & STATUS1_SLEEP)
+         {
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 2211d0f..ce7095d 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -266,6 +266,7 @@ static struct Attack *NewAttack(void)
+             memset(&sB.attacks[i], 0, sizeof(sB.attacks[i]));
+             sB.attacks[i].active = TRUE;
+             sB.attacks[i].serial = ++sB.attackSerial;
++            sB.attacks[i].foe = sB.cur; // the foe acting (enemy side) or the player's target (TargetForPlayer)
+             return &sB.attacks[i];
+         }
+     return NULL;
+@@ -280,7 +281,8 @@ bool8 Moves_SideHasPending(u8 side)
+ {
+     s32 i;
+     for (i = 0; i < MAX_ATTACKS; i++)
+-        if (sB.attacks[i].active && sB.attacks[i].side == side)
++        if (sB.attacks[i].active && sB.attacks[i].side == side
++         && (side == SIDE_PLAYER || sB.foeCount <= 1 || sB.attacks[i].foe == sB.cur))
+             return TRUE;
+     return FALSE;
+ }
+@@ -923,6 +925,23 @@ static void ApplyHit(struct Attack *a, bool8 last)
+ static bool8 StrikeCells(struct Attack *a, const u8 cells[GRID_ROWS][GRID_COLS], bool8 last)
+ {
+     struct Fighter *opp = &sB.f[a->side ^ 1];
++    if (a->side == SIDE_PLAYER && sB.foeCount > 1)
++    {
++        // a pack: everyone standing in the area is hit (BN WideSword through two viruses)
++        s32 k;
++        bool8 hit = FALSE;
++        for (k = 0; k < sB.foeCount; k++)
++        {
++            const struct Fighter *f = Foe_Get(k);
++            if (f->bm.hp == 0 || !cells[f->y][f->x])
++                continue;
++            Foe_Select(k);
++            ApplyHit(a, last);
++            hit = TRUE;
++        }
++        Foe_Select(a->foe);
++        return hit;
++    }
+     if (cells[opp->y][opp->x])
+     {
+         ApplyHit(a, last);
+@@ -960,7 +979,8 @@ static void DirectCells(u8 side, struct Attack *a, s8 x, s8 y, u8 cells[GRID_ROW
+             for (c = x + dir; c >= 0 && c < GRID_COLS; c += dir)
+             {
+                 cells[r][c] = 1;
+-                if (opp->x == c && opp->y == r && !opp->invuln)
++                if ((side == SIDE_PLAYER && sB.foeCount > 1) ? Foe_At(c, r, TRUE) >= 0
++                                                              : (opp->x == c && opp->y == r && !opp->invuln))
+                 {
+                     if (a->kind == GK_SPREADER)
+                     {
+@@ -1249,6 +1269,14 @@ static void Launch(struct Attack *a)
+ static bool8 ProjectileHits(struct Attack *a, s8 x, s8 y)
+ {
+     struct Fighter *opp = &sB.f[a->side ^ 1];
++    if (a->side == SIDE_PLAYER && sB.foeCount > 1)
++    {
++        s8 k = Foe_At(x, y, FALSE);
++        if (k < 0)
++            return FALSE;
++        Foe_Select(k);   // the shot hits whoever it meets, not just the one it was aimed at
++        a->foe = k;
++    }
+     if (opp->x == x && opp->y == y && !(opp->invuln && !CanHitInvulnerable(a->move, opp->invulnKind)))
+         return TRUE;
+     return FALSE;
+@@ -1526,10 +1554,8 @@ after_impact:
+     Finish(a);
+ }
+ 
+-void Moves_Update(void)
++static void BideTick(s32 i)
+ {
+-    s32 i;
+-    for (i = 0; i < 2; i++)
+     {
+         struct Fighter *f = &sB.f[i];
+         if (f->bideFrames && --f->bideFrames == 0 && f->bm.hp)
+@@ -1544,9 +1570,21 @@ void Moves_Update(void)
+                 SayFighter(f, "UNLEASHED ENERGY... BUT FAILED!", 50);
+         }
+     }
++}
++
++void Moves_Update(void)
++{
++    s32 i;
++    BideTick(SIDE_PLAYER);
++    for (i = 0; i < sB.foeCount; i++)
++    {
++        Foe_Select(i);
++        BideTick(SIDE_ENEMY);
++    }
+     for (i = 0; i < MAX_ATTACKS; i++)
+         if (sB.attacks[i].active)
+         {
++            Foe_Select(sB.attacks[i].foe);
+             sVisAttack = &sB.attacks[i];
+             UpdateAttack(&sB.attacks[i]);
+             sVisAttack = NULL;
+diff --git a/src/pkbn/owtest.c b/src/pkbn/owtest.c
+index a95ab62..d4b41ae 100644
+--- a/src/pkbn/owtest.c
++++ b/src/pkbn/owtest.c
+@@ -11,6 +11,8 @@
+ //                                      walks right); Mn taps A for n frames; P dumps a frame now; Q quits.
+ //                                      Titem runs "additem item, 1" as a script.
+ //                                      Gsp:lv starts a wild battle (species / level numbers) as if met in grass.
++//                                      J before G lets that battle bring a pack from the map's own grass table
++//                                      (PKBN_TEST_PACK_EXTRA=n forces n extra Pokémon).
+ //   PKBN_OW_AUTOBATTLE=1               grid battles started from the field are fought by the self-test autopilot
+ //   PKBN_DUMP_DIR=dir                  P writes dir/ow_NNNNN.ppm (264x176, what the window shows)
+ #include <stdio.h>
+@@ -108,6 +110,12 @@ u16 PkbnOwTest_Keys(void)
+             printf("[pkbn-owtest] wild battle: species %u lv %u\n", sp, lv);
+             continue;
+         }
++        if (c == 'J')   // J: the next G battle may bring a pack from this map's grass table (as a grass encounter)
++        {
++            extern bool8 PkbnWild_AllowPackHere(void);
++            printf("[pkbn-owtest] pack allowed: %d\n", PkbnWild_AllowPackHere());
++            continue;
++        }
+         if (c == 'T')   // Titem: run "additem item, 1" through the script engine (tests the scripts' item hook)
+         {
+             static u8 sScr[8];
+diff --git a/src/wild_encounter.c b/src/wild_encounter.c
+index e50855a..5f19537 100644
+--- a/src/wild_encounter.c
++++ b/src/wild_encounter.c
+@@ -376,6 +376,10 @@ static u8 PickWildMonNature(void)
+     return Random() % NUM_NATURES;
+ }
+ 
++#ifdef PORTABLE
++static void PkbnWild_AllowPack(const struct WildPokemonInfo *info, u8 area);
++#endif
++
+ static void CreateWildMon(u16 species, u8 level)
+ {
+     bool32 checkCuteCharm;
+@@ -621,6 +625,9 @@ bool8 StandardWildEncounter(u16 curMetatileBehavior, u16 prevMetatileBehavior)
+                 // try a regular wild land encounter
+                 if (TryGenerateWildMon(gWildMonHeaders[headerId].landMonsInfo, WILD_AREA_LAND, WILD_CHECK_REPEL | WILD_CHECK_KEEN_EYE) == TRUE)
+                 {
++#ifdef PORTABLE
++                    PkbnWild_AllowPack(gWildMonHeaders[headerId].landMonsInfo, WILD_AREA_LAND);
++#endif
+                     BattleSetup_StartWildBattle();
+                     return TRUE;
+                 }
+@@ -653,6 +660,9 @@ bool8 StandardWildEncounter(u16 curMetatileBehavior, u16 prevMetatileBehavior)
+             {
+                 if (TryGenerateWildMon(gWildMonHeaders[headerId].waterMonsInfo, WILD_AREA_WATER, WILD_CHECK_REPEL | WILD_CHECK_KEEN_EYE) == TRUE)
+                 {
++#ifdef PORTABLE
++                    PkbnWild_AllowPack(gWildMonHeaders[headerId].waterMonsInfo, WILD_AREA_WATER);
++#endif
+                     BattleSetup_StartWildBattle();
+                     return TRUE;
+                 }
+@@ -965,3 +975,51 @@ static void ApplyCleanseTagEncounterRateMod(u32 *encRate)
+     if (GetMonData(&gPlayerParty[0], MON_DATA_HELD_ITEM) == ITEM_CLEANSE_TAG)
+         *encRate = *encRate * 2 / 3;
+ }
++
++#ifdef PORTABLE
++// POC-11 (multi-enemy wild battles, our design): a wild battle met in grass or water may bring 2-3 Pokémon onto the
++// grid, BN virus style. The extras come from the same encounter table and the same slot / level rolls as the first
++// (ChooseWildMonIndex_Land / _WaterRock, ChooseWildMonLevel above). Scripted, static, roamer, fishing and safari
++// battles never get extras: only the two calls in StandardWildEncounter allow a pack.
++static const struct WildPokemonInfo *sPkbnPackInfo;
++static u8 sPkbnPackArea;
++
++static void PkbnWild_AllowPack(const struct WildPokemonInfo *info, u8 area)
++{
++    sPkbnPackInfo = info;
++    sPkbnPackArea = area;
++}
++
++// Owtests: allow a pack from the current map's land table (Gsp:lv starts a scripted battle otherwise).
++bool8 PkbnWild_AllowPackHere(void)
++{
++    u16 headerId = GetCurrentMapWildMonHeaderId();
++    if (headerId == HEADER_NONE || gWildMonHeaders[headerId].landMonsInfo == NULL)
++        return FALSE;
++    PkbnWild_AllowPack(gWildMonHeaders[headerId].landMonsInfo, WILD_AREA_LAND);
++    return TRUE;
++}
++
++// Read by the grid battle at its start: was this battle a standard grass / water encounter?
++bool8 PkbnWild_PackAllowed(void)
++{
++    return sPkbnPackInfo != NULL;
++}
++
++void PkbnWild_ClearPack(void)
++{
++    sPkbnPackInfo = NULL;
++}
++
++// One more wild Pokémon into gEnemyParty[slot] (CreateWildMon without the party wipe; no Cute Charm roll).
++bool8 PkbnWild_GenerateExtra(u8 slot)
++{
++    u8 idx, level;
++    if (sPkbnPackInfo == NULL || slot >= PARTY_SIZE)
++        return FALSE;
++    idx = (sPkbnPackArea == WILD_AREA_LAND) ? ChooseWildMonIndex_Land() : ChooseWildMonIndex_WaterRock();
++    level = ChooseWildMonLevel(&sPkbnPackInfo->wildPokemon[idx]);
++    CreateMonWithNature(&gEnemyParty[slot], sPkbnPackInfo->wildPokemon[idx].species, level, USE_RANDOM_IVS, PickWildMonNature());
++    return TRUE;
++}
++#endif
+-- 
+2.43.0
+

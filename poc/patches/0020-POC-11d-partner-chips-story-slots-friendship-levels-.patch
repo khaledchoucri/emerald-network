@@ -1,0 +1,523 @@
+From 1b0099ecdc2034068e21f1b2868f6ad156f7186f Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Mon, 5 Oct 2026 20:18:19 +0300
+Subject: [PATCH 20/22] POC-11d: partner chips (story slots, friendship levels,
+ FOLDER > PARTNER page)
+
+Slots open at the Route 103 rival battle and badges 3, 5, 7. Each holds a
+party Pokemon (by Navi ID) and one of its moves; in battle the chip (code *)
+switches that Pokemon in and uses the move (costs the Custom), at x1 / x1.3 /
+x1.6 power for friendship <150 / 150 / 220 (V1-V3). The chip shows the
+Pokemon's icon. pkbn.sav v3 (v1/v2 migrate).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/chip_pack.h     |  11 +++
+ include/pkbn/grid_internal.h |   3 +
+ src/pkbn/folder.c            |  55 ++++++++++++++
+ src/pkbn/folder_ui.c         | 138 ++++++++++++++++++++++++++++++++---
+ src/pkbn/grid_battle.c       |  20 ++++-
+ src/pkbn/grid_draw.c         |   5 +-
+ src/pkbn/grid_moves.c        |   6 ++
+ src/pkbn/pkbn_save.c         |  20 ++++-
+ 8 files changed, 242 insertions(+), 16 deletions(-)
+
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index 065b320..69117ca 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -17,6 +17,17 @@
+ #define CANDY_MAX    9999
+ #define PKBN_FOLDER_SLOTS FOLDER_MAX
+ 
++// Partner chips (POC-11, design 10 §10.3): earned at fixed story points, each assigned to one Pokémon (by its
++// Navi ID) and one of its moves. In battle it switches that Pokémon in and uses the move (costing the Custom),
++// with power by level: V1, V2 at friendship 150, V3 at 220. Code *.
++#define PKBN_PARTNER_SLOTS 4
++struct PkbnPartnerSlot { u16 naviId; u16 move; };
++struct PkbnPartnerSlot *PkbnPartner_Slot(u8 i);
++u8 PkbnPartner_Unlocked(void);                 // slots earned so far (story flags)
++u8 PkbnPartner_Level(struct Pokemon *mon);     // 1..3 from friendship
++s32 PkbnPartner_PartySlot(u16 naviId);         // party slot of that Pokémon, or -1
++u16 PkbnPartner_PowerPct(u8 level);            // 100 / 130 / 160
++
+ u8 PkbnPack_Get(u16 move, u8 letter);
+ void PkbnPack_Add(u16 move, u8 letter, s32 n);
+ u16 PkbnPack_Total(u16 move);
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 7cb1e62..c64b8f0 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -172,6 +172,7 @@ struct Attack
+     bool8 hitAnything;
+     u8 pa;                   // Program Advance index + 1 (0 = a normal move)
+     bool8 combo;             // follow-up of an Emerald contest combo (chain payoff)
++    u16 powerPct;            // partner chip power (100 = normal), POC-11
+     bool8 paLanded;          // PAF_HITONCE: already hit
+     u16 powerOverride;
+     u8 typeOverride;
+@@ -245,6 +246,8 @@ struct GridBattle
+     // chain payoffs
+     u16 chainPrev;             // last move used from this Custom's chain (contest combos)
+     bool8 nextCombo;           // the next Moves_Use is a combo follow-up
++    u16 nextPowerPct;          // the next Moves_Use is a partner chip at this power (0 = normal)
++    u16 tsPartnerPct;          // time-stop bench entry for a partner chip
+     u8 comboMask;              // COMBO_* rewards switched on (PKBN_COMBO)
+     struct { u8 pa; u8 chips[3]; } paQueue[2];
+     u8 paCount;
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index cebf054..4839132 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -1,4 +1,5 @@
+ // Chip folder: build, draw, selection rule. See include/pkbn/folder.h.
++#include <stdlib.h>
+ #include "global.h"
+ #include "battle.h"
+ #include "pokemon.h"
+@@ -10,6 +11,8 @@
+ #include "pkbn/folder.h"
+ #include "pkbn/chip_pack.h"
+ #include "pkbn/move_table.h"
++#include "event_data.h"
++#include "constants/flags.h"
+ 
+ bool8 PkbnFolder_MoveIsChip(u16 move)
+ {
+@@ -63,6 +66,45 @@ bool8 Chip_CanUse(const struct BattlePokemon *bm, u16 move)
+     return Chip_SpeciesCanLearn(bm->species, move);
+ }
+ 
++// ---- Partner chips (POC-11) ------------------------------------------------------------------------------------
++// Story points that give a slot (TUNE): the first rival battle (Route 103), then badges 3, 5 and 7.
++u8 PkbnPartner_Unlocked(void)
++{
++    u8 n = 0;
++    if (FlagGet(FLAG_DEFEATED_RIVAL_ROUTE103))
++        n++;
++    if (FlagGet(FLAG_BADGE03_GET))
++        n++;
++    if (FlagGet(FLAG_BADGE05_GET))
++        n++;
++    if (FlagGet(FLAG_BADGE07_GET))
++        n++;
++    if (getenv("PKBN_TEST_PARTNER_SLOTS") != NULL)
++        n = (u8)atoi(getenv("PKBN_TEST_PARTNER_SLOTS"));
++    return n > PKBN_PARTNER_SLOTS ? PKBN_PARTNER_SLOTS : n;
++}
++
++u8 PkbnPartner_Level(struct Pokemon *mon)
++{
++    u8 f = GetMonData(mon, MON_DATA_FRIENDSHIP);   // BN6 Navi chips V1-V3; ours by friendship (TUNE)
++    return f >= 220 ? 3 : f >= 150 ? 2 : 1;
++}
++
++u16 PkbnPartner_PowerPct(u8 level)
++{
++    return level >= 3 ? 160 : level == 2 ? 130 : 100;
++}
++
++s32 PkbnPartner_PartySlot(u16 naviId)
++{
++    s32 i;
++    for (i = 0; i < PARTY_SIZE; i++)
++        if (GetMonData(&gPlayerParty[i], MON_DATA_SPECIES) && !GetMonData(&gPlayerParty[i], MON_DATA_IS_EGG)
++         && GetMonData(&gPlayerParty[i], MON_DATA_ENCRYPT_SEPARATOR) == naviId)
++            return i;
++    return -1;
++}
++
+ u8 Chip_FolderSize(u8 partyCount)
+ {
+     u8 n = partyCount ? partyCount : 1;
+@@ -212,6 +254,19 @@ void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party,
+     }
+ 
+ shuffle:
++    // Partner chips (POC-11): one per assigned slot whose Pokémon is in the party, on top of the folder size.
++    for (i = 0; i < PkbnPartner_Unlocked() && folder->count < FOLDER_MAX; i++)
++    {
++        struct PkbnPartnerSlot *ps = PkbnPartner_Slot(i);
++        s32 slot = ps->naviId ? PkbnPartner_PartySlot(ps->naviId) : -1;
++        if (slot < 0 || slot >= partyCount || party[slot].species == SPECIES_NONE || !PkbnFolder_MoveIsChip(ps->move))
++            continue;
++        folder->chips[folder->count].move = ps->move;
++        folder->chips[folder->count].letter = LETTER_WILD;
++        folder->chips[folder->count].owner = slot;
++        folder->chips[folder->count].slot = PkbnPartner_Level(&gPlayerParty[slot]);
++        folder->count++;
++    }
+     for (p = 0; p < folder->count; p++)
+         folder->pile[p] = p;
+     folder->pileCount = folder->count;
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index 26bbe59..ff5098d 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -27,6 +27,7 @@
+ #include "constants/items.h"
+ #include "constants/songs.h"
+ #include "pkbn/chip_pack.h"
++#include "pkbn/navicust.h"
+ #include "pkbn/move_table.h"
+ #include "pkbn/render.h"
+ #include "pkbn/gfx.h"
+@@ -45,7 +46,7 @@ extern const struct Evolution gEvolutionTable[][EVOS_PER_MON];
+ #define ROW_H 11
+ #define PANEL_X 164
+ 
+-enum { PAGE_FOLDER, PAGE_PACK, PAGE_CANDY, PAGE_COUNT, PAGE_SHELF = PAGE_COUNT };   // SHELF: the Poké Mart's chip shelf
++enum { PAGE_FOLDER, PAGE_PACK, PAGE_CANDY, PAGE_PARTNER, PAGE_COUNT, PAGE_SHELF = PAGE_COUNT };   // SHELF: the Poké Mart's chip shelf
+ 
+ struct PackRow { u16 move; u8 letter; };
+ struct CandyRow { u16 move; u8 letter; u8 needLevel; u16 species; };   // needLevel 0 = buyable now
+@@ -350,12 +351,115 @@ static void LoadFolder(void)
+     }
+ }
+ 
++// ---- partner chips (POC-11) -------------------------------------------------------------------------------------
++
++static const char *const sPartnerUnlock[PKBN_PARTNER_SLOTS] = {
++    "BEAT YOUR RIVAL ON ROUTE 103", "THE 3RD BADGE", "THE 5TH BADGE", "THE 7TH BADGE" };
++
++static u16 PartnerMove(u8 i)
++{
++    struct PkbnPartnerSlot *ps = PkbnPartner_Slot(i);
++    return (i < PkbnPartner_Unlocked() && ps->naviId && PkbnPartner_PartySlot(ps->naviId) >= 0) ? ps->move : MOVE_NONE;
++}
++
++// A: the next party Pokémon for this slot (then none). Its first chip move goes with it.
++static void PartnerCyclePokemon(u8 i)
++{
++    struct PkbnPartnerSlot *ps = PkbnPartner_Slot(i);
++    s32 cur = ps->naviId ? PkbnPartner_PartySlot(ps->naviId) : -1, next, m;
++    if (i >= PkbnPartner_Unlocked())
++    {
++        Note(sPartnerUnlock[i]);
++        PlaySE(SE_FAILURE);
++        return;
++    }
++    for (next = cur + 1; next < PARTY_SIZE; next++)
++        if (GetMonData(&gPlayerParty[next], MON_DATA_SPECIES) && !GetMonData(&gPlayerParty[next], MON_DATA_IS_EGG))
++            break;
++    if (next >= PARTY_SIZE)
++    {
++        ps->naviId = 0, ps->move = MOVE_NONE;
++    }
++    else
++    {
++        struct PkbnNavi *nv = Navi_ForMon(&gPlayerParty[next], TRUE);   // gives it a Navi ID if it has none
++        ps->naviId = nv ? nv->id : 0;
++        ps->move = MOVE_NONE;
++        for (m = 0; m < MAX_MON_MOVES; m++)
++            if (PkbnFolder_MoveIsChip(GetMonData(&gPlayerParty[next], MON_DATA_MOVE1 + m)))
++            {
++                ps->move = GetMonData(&gPlayerParty[next], MON_DATA_MOVE1 + m);
++                break;
++            }
++    }
++    PlaySE(SE_SELECT);
++}
++
++// SELECT: the slot's next move among the Pokémon's own moves.
++static void PartnerCycleMove(u8 i)
++{
++    struct PkbnPartnerSlot *ps = PkbnPartner_Slot(i);
++    s32 slot = ps->naviId ? PkbnPartner_PartySlot(ps->naviId) : -1, m, k;
++    if (slot < 0)
++        return;
++    for (m = 0; m < MAX_MON_MOVES; m++)
++        if (GetMonData(&gPlayerParty[slot], MON_DATA_MOVE1 + m) == ps->move)
++            break;
++    for (k = 1; k <= MAX_MON_MOVES; k++)
++    {
++        u16 mv = GetMonData(&gPlayerParty[slot], MON_DATA_MOVE1 + (m + k) % MAX_MON_MOVES);
++        if (PkbnFolder_MoveIsChip(mv))
++        {
++            ps->move = mv;
++            break;
++        }
++    }
++    PlaySE(SE_SELECT);
++}
++
++static void DrawPartnerList(u16 *fb)
++{
++    s32 i;
++    Text(fb, LIST_X + 4, LIST_Y - 14, "PARTNER CHIPS: SWITCH IN + MOVE", RGB(12, 14, 20));
++    for (i = 0; i < PKBN_PARTNER_SLOTS; i++)
++    {
++        struct PkbnPartnerSlot *ps = PkbnPartner_Slot(i);
++        s32 y = LIST_Y + i * 24, slot = ps->naviId ? PkbnPartner_PartySlot(ps->naviId) : -1;
++        char line[48];
++        if (i == sF.cursor[PAGE_PARTNER])
++            Pkbn_FillRect(fb, LIST_X - 1, y - 1, PANEL_X - LIST_X - 4, 22, RGB(8, 14, 28));
++        if (i >= PkbnPartner_Unlocked())
++        {
++            snprintf(line, sizeof(line), "%d  LOCKED", (int)i + 1);
++            Text(fb, LIST_X + 2, y - 2, line, RGB(14, 14, 16));
++            Text(fb, LIST_X + 14, y + 8, sPartnerUnlock[i], RGB(12, 12, 14));
++            continue;
++        }
++        if (slot < 0)
++        {
++            snprintf(line, sizeof(line), "%d  EMPTY (A: CHOOSE)", (int)i + 1);
++            Text(fb, LIST_X + 2, y + 3, line, RGB(22, 24, 28));
++            continue;
++        }
++        {
++            char sp[16], mv[MOVE_NAME_LENGTH + 1];
++            Pkbn_BlitIcon(fb, sF.partyIcon[slot], LIST_X - 4, y - 8, FALSE, 0);
++            Pkbn_GameStringToAscii(sp, gSpeciesNames[GetMonData(&gPlayerParty[slot], MON_DATA_SPECIES)], sizeof(sp));
++            MoveName(mv, sizeof(mv), ps->move);
++            snprintf(line, sizeof(line), "%s", sp);
++            Text(fb, LIST_X + 28, y - 2, line, RGB(31, 31, 31));
++            snprintf(line, sizeof(line), "%s  V%u  *", mv, PkbnPartner_Level(&gPlayerParty[slot]));
++            Text(fb, LIST_X + 28, y + 8, line, RGB(31, 26, 6));
++        }
++    }
++}
++
+ // ---- drawing ---------------------------------------------------------------------------------------------------
+ 
+ static u8 RowCount(void)
+ {
+     return sF.page == PAGE_FOLDER ? sF.groupCount : sF.page == PAGE_PACK ? sF.packCount
+-         : sF.page == PAGE_SHELF ? sF.shelfCount : sF.candyCount;
++         : sF.page == PAGE_SHELF ? sF.shelfCount : sF.page == PAGE_PARTNER ? PKBN_PARTNER_SLOTS : sF.candyCount;
+ }
+ 
+ static void RowChip(u8 row, u16 *move, u8 *letter)
+@@ -366,13 +470,15 @@ static void RowChip(u8 row, u16 *move, u8 *letter)
+         *move = sF.pack[row].move, *letter = sF.pack[row].letter;
+     else if (sF.page == PAGE_SHELF)
+         *move = sF.shelf[row].move, *letter = sF.shelf[row].letter;
++    else if (sF.page == PAGE_PARTNER)
++        *move = PartnerMove(row), *letter = LETTER_WILD;
+     else
+         *move = sF.candy[row].move, *letter = sF.candy[row].letter;
+ }
+ 
+ static void DrawTabs(u16 *fb)
+ {
+-    static const char *const names[PAGE_COUNT] = { "FOLDER", "PACK", "CANDY" };
++    static const char *const names[PAGE_COUNT] = { "FOLDER", "PACK", "CANDY", "PARTNER" };
+     s32 i, x = 4;
+     char line[32];
+     if (sF.shelfMode)
+@@ -384,12 +490,12 @@ static void DrawTabs(u16 *fb)
+     }
+     for (i = 0; i < PAGE_COUNT; i++)
+     {
+-        s32 w = Pkbn_EmTextWidth(names[i], PKBN_FONT_NORMAL) + 10;
++        s32 w = Pkbn_EmTextWidth(names[i], PKBN_FONT_SMALL) + 10;
+         bool8 on = i == sF.page;
+-        Pkbn_FillRect(fb, x, 2, w, 17, on ? RGB(6, 10, 22) : RGB(2, 3, 8));
+-        Pkbn_FrameRect(fb, x, 2, w, 17, on ? RGB(31, 26, 6) : RGB(8, 10, 16));
+-        Pkbn_DrawEmText(fb, x + 5, 0, names[i], PKBN_FONT_NORMAL, on ? RGB(31, 26, 6) : RGB(14, 16, 22), RGB(2, 2, 5));
+-        x += w + 3;
++        Pkbn_FillRect(fb, x, 3, w, 14, on ? RGB(6, 10, 22) : RGB(2, 3, 8));
++        Pkbn_FrameRect(fb, x, 3, w, 14, on ? RGB(31, 26, 6) : RGB(8, 10, 16));
++        Pkbn_DrawEmText(fb, x + 5, 3, names[i], PKBN_FONT_SMALL, on ? RGB(31, 26, 6) : RGB(14, 16, 22), RGB(2, 2, 5));
++        x += w + 2;
+     }
+     snprintf(line, sizeof(line), "%u/%u CHIPS%s", sF.fCount, sF.fMax, sF.edited ? "" : " (AUTO)");
+     Text(fb, CW - 4 - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), 4, line, sF.fCount > sF.fMax ? RGB(31, 10, 8) : RGB(31, 31, 31));
+@@ -407,7 +513,12 @@ static void DrawList(u16 *fb)
+         *top = *cur - LIST_ROWS + 1;
+     Pkbn_FillRect(fb, LIST_X - 2, LIST_Y - 2, PANEL_X - LIST_X - 2, LIST_ROWS * ROW_H + 4, RGB(2, 3, 8));
+     {
+-        static const char *const qtyHead[PAGE_COUNT + 1] = { "QTY", "IN/OWN", "CANDY", "PRICE" };
++        static const char *const qtyHead[PAGE_COUNT + 1] = { "QTY", "IN/OWN", "CANDY", "", "PRICE" };
++        if (sF.page == PAGE_PARTNER)
++        {
++            DrawPartnerList(fb);
++            return;
++        }
+         Text(fb, LIST_X + 96, LIST_Y - 14, qtyHead[sF.page], RGB(12, 14, 20));
+         Text(fb, PANEL_X - 8 - Pkbn_EmTextWidth("LIMIT", PKBN_FONT_SMALL), LIST_Y - 14, "LIMIT", RGB(12, 14, 20));
+     }
+@@ -502,6 +613,8 @@ static void DrawPanel(u16 *fb)
+     RowChip(sF.cursor[sF.page], &mv, &letter);
+     // the chip: BN-style icon, code, name
+     Pkbn_FillRect(fb, x + 2, y + 2, 26, 22, RGB(1, 2, 5));
++    if (mv == MOVE_NONE)
++        return;
+     PkbnDraw_ChipIcon(fb, x + 4, y + 4, mv, FALSE);
+     line[0] = PkbnFolder_LetterChar(letter), line[1] = '\0';
+     Pkbn_DrawEmText(fb, x + 34, y + 2, line, PKBN_FONT_NORMAL, RGB(31, 26, 6), RGB(2, 2, 5));
+@@ -560,6 +673,7 @@ static void DrawHints(u16 *fb)
+         "A:TAKE OUT  SELECT:AUTO  L/R:PAGE  B:DONE",
+         "A:ADD  START:PP UP  SELECT:PP MAX  B:DONE",
+         "A:BUY  SELECT:CODE (+2)  L/R:PAGE  B:DONE",
++        "A:POKEMON  SELECT:MOVE  L/R:PAGE  B:DONE",
+         "A:BUY  B:DONE",
+     };
+     Pkbn_FillRect(fb, 0, CH - 24, CW, 24, RGB(1, 2, 5));
+@@ -775,6 +889,12 @@ static void HandleInput(u16 keys)
+         if (keys & A_BUTTON)
+             BuyShelf();
+         break;
++    case PAGE_PARTNER:
++        if (keys & A_BUTTON)
++            PartnerCyclePokemon(*cur);
++        if (keys & SELECT_BUTTON)
++            PartnerCycleMove(*cur);
++        break;
+     case PAGE_CANDY:
+         if (keys & A_BUTTON)
+             Buy();
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index f3e0b2f..1fda961 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -287,7 +287,12 @@ static void EndTimeStop(void)
+             sB.tsPA = 0;
+             break;
+         }
+-        if (p->bm.pp[sB.tsSlot] > 0)
++        if (sB.tsPartnerPct)
++        {
++            sB.nextPowerPct = sB.tsPartnerPct;   // a partner chip: no PP, its level's power
++            sB.tsPartnerPct = 0;
++        }
++        else if (p->bm.pp[sB.tsSlot] > 0)
+             p->bm.pp[sB.tsSlot]--;
+         ChainUse(sB.tsMove, sB.tsSlot);
+         break;
+@@ -924,11 +929,22 @@ static void UseNextChip(void)
+             return;
+         }
+         sB.tsMove = ch->move;
+-        sB.tsSlot = ch->slot;
++        sB.tsSlot = 0;
+         sB.tsPA = 0;
++        sB.tsPartnerPct = PkbnPartner_PowerPct(ch->slot);
++        PlayLog_NoteChip(ch->move);
++        PKBN_LOG("partner chip: %s comes in (V%u)", sB.party[ch->owner].name, ch->slot);
+         BeginTimeStop(TS_BENCH, ch->owner, FALSE);
+         return;
+     }
++    if (ch->owner != CHIP_SHARED)
++    {
++        // a partner chip of the Pokémon already in battle: no switch, its level's power
++        sB.nextPowerPct = PkbnPartner_PowerPct(ch->slot);
++        PlayLog_NoteChip(ch->move);
++        ChainUse(ch->move, 0);
++        return;
++    }
+     if (!Chip_CanUse(&p->bm, ch->move))
+     {
+         // whoever is in now can't use it (the one who could fainted mid-queue): the copy is spent
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 30eaf71..22a546d 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -902,7 +902,10 @@ static void DrawChipInfo(u16 *fb)
+             snprintf(line, sizeof(line), "%u", gBattleMoves[ch->move].power);
+             TextBig(fb, ART_X + ART_W - Pkbn_EmTextWidth(line, PKBN_FONT_NORMAL), y - 2, line, COL_GAUGE_FULL);
+         }
+-        snprintf(line, sizeof(line), "%s  x%u LEFT", gPkbnKindNames[gPkbnMoveInfo[ch->move].kind], CopiesLeft(ch->move));
++        if (ch->owner != CHIP_SHARED)
++            snprintf(line, sizeof(line), "PARTNER V%u", ch->slot);
++        else
++            snprintf(line, sizeof(line), "%s  x%u LEFT", gPkbnKindNames[gPkbnMoveInfo[ch->move].kind], CopiesLeft(ch->move));
+         Text(fb, ART_X, y + 13, line, RGB(22, 26, 31));
+         if (ch->owner != CHIP_SHARED && ch->owner != sB.active)
+         {
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 5a6b5c3..2211d0f 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -598,6 +598,9 @@ static s32 CalcHitDamage(struct Attack *a, u8 defSide, u16 *eff, bool8 *crit)
+     // in battle we give half that: x1.5 (TUNE).
+     if (a->combo && (sB.comboMask & COMBO_DMG))
+         dmg = dmg * 15 / 10;
++    // partner chips V2 / V3 (POC-11): x1.3 / x1.6
++    if (a->powerPct && a->powerPct != 100)
++        dmg = dmg * a->powerPct / 100;
+     // type programs (Charcoal & co.): +10% each, like Gen 3's type items (src/pokemon.c:3173)
+     if (AttackNavi(a) && AttackNavi(a)->typePct[type])
+         dmg = dmg * (100 + AttackNavi(a)->typePct[type]) / 100;
+@@ -2200,8 +2203,10 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+     char line[40];
+ 
+     bool8 combo = sB.nextCombo;
++    u16 powerPct = sB.nextPowerPct ? sB.nextPowerPct : 100;
+     (void)slot;
+     sB.nextCombo = FALSE;
++    sB.nextPowerPct = 0;
+     if (move == MOVE_NONE || move >= MOVES_COUNT)
+         return;
+     // Chain payoff on a move that doesn't hit: the panel reward lands on the foe's panel.
+@@ -2372,6 +2377,7 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+     a->info = *info;
+     a->kind = kind;
+     a->combo = combo;
++    a->powerPct = powerPct;
+     a->user = *user;
+     a->userSlot = userSlot;
+     strncpy(a->userName, userName, sizeof(a->userName) - 1);
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index 9921746..3b30ff3 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -19,7 +19,7 @@
+ #include <stddef.h>
+ 
+ #define PKBN_SAVE_PATH    "pkbn.sav"
+-#define PKBN_SAVE_VERSION 2   // v2 (POC-10): chip pack, learned-move grants, candy, folder. Append-only: v1 is a prefix.
++#define PKBN_SAVE_VERSION 3   // v2 (POC-10): chip pack, grants, candy, folder; v3 (POC-11): partner chips. Append-only.
+ 
+ struct PkbnSaveFile
+ {
+@@ -38,8 +38,12 @@ struct PkbnSaveFile
+     u8 folderLetter[PKBN_FOLDER_SLOTS];
+     u8 folderCount;
+     u8 pad2[3];
++    // ---- v3 (POC-11): partner chips ----
++    struct PkbnPartnerSlot partners[PKBN_PARTNER_SLOTS];
+ };
+ 
++#define V2_SIZE offsetof(struct PkbnSaveFile, partners)
++
+ #define V1_SIZE offsetof(struct PkbnSaveFile, pack)
+ 
+ static struct PkbnSaveFile sSave;
+@@ -66,14 +70,16 @@ void PkbnSave_Read(void)
+     got = (f != NULL) ? fread(&tmp, 1, sizeof(tmp), f) : 0;
+     if (f != NULL)
+         fclose(f);
+-    if (got < V1_SIZE || memcmp(tmp.magic, "PKBNSAVE", 8) != 0
+-     || (tmp.version == PKBN_SAVE_VERSION ? got != sizeof(tmp) : tmp.version != 1))
++    if (got < V1_SIZE || memcmp(tmp.magic, "PKBNSAVE", 8) != 0 || tmp.version == 0 || tmp.version > PKBN_SAVE_VERSION
++     || (tmp.version == PKBN_SAVE_VERSION && got != sizeof(tmp)))
+     {
+         PkbnSave_Reset();
+         return;
+     }
+     if (tmp.version == 1)
+-        memset((u8 *)&tmp + V1_SIZE, 0, sizeof(tmp) - V1_SIZE); // v1 -> v2: an empty pack (filled by SyncLearned)
++        memset((u8 *)&tmp + V1_SIZE, 0, sizeof(tmp) - V1_SIZE); // v1 -> v3: an empty pack (filled by SyncLearned)
++    else if (tmp.version == 2)
++        memset((u8 *)&tmp + V2_SIZE, 0, sizeof(tmp) - V2_SIZE); // v2 -> v3: no partner chips yet
+     tmp.version = PKBN_SAVE_VERSION;
+     sSave = tmp;
+     for (i = sSave.ncpCount; i < NCP_COUNT; i++) // programs added since this file was written
+@@ -312,6 +318,12 @@ void PkbnPack_GrantEggMoves(struct Pokemon *mon)
+             }
+ }
+ 
++// ---- Partner chips (POC-11, design 10 §10.3) ----------------------------------------------------------------
++struct PkbnPartnerSlot *PkbnPartner_Slot(u8 i)
++{
++    return i < PKBN_PARTNER_SLOTS ? &sSave.partners[i] : NULL;
++}
++
+ u16 PkbnCandy_Get(u8 type)
+ {
+     return type < NUMBER_OF_MON_TYPES ? sSave.candy[type] : 0;
+-- 
+2.43.0
+

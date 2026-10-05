@@ -1,0 +1,580 @@
+From 87207c5fd04d1531b2fb7563e54a7c96a028c573 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Mon, 5 Oct 2026 19:52:36 +0300
+Subject: [PATCH 18/22] POC-11b: code picker for Ultra/Master Ball chips, Poke
+ Mart chip shelves
+
+- Ultra Ball (tiers 3-4) and Master Ball (every move) rewards ask for the code
+  (LEFT/RIGHT, A) on the post-battle screen
+- Poke Mart menu gets CHIPS: a per-town chip shelf (8 chips, curated by
+  progression; every other row in the move's second code), price 60 x MB
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/busting.h   |   6 +-
+ include/pkbn/chip_pack.h |   1 +
+ include/strings.h        |   1 +
+ src/pkbn/busting.c       |  27 +++++++-
+ src/pkbn/folder_ui.c     | 135 ++++++++++++++++++++++++++++++++++++---
+ src/pkbn/post_battle.c   |  71 +++++++++++++++++++-
+ src/pkbn/selftest.c      |  11 ++++
+ src/shop.c               |  29 +++++++++
+ src/strings.c            |   1 +
+ 9 files changed, 270 insertions(+), 12 deletions(-)
+
+diff --git a/include/pkbn/busting.h b/include/pkbn/busting.h
+index 1a538e6..68bd664 100644
+--- a/include/pkbn/busting.h
++++ b/include/pkbn/busting.h
+@@ -26,5 +26,9 @@ u8 Busting_Level(void);                              // 1..11 (11 = S); logs bot
+ void Busting_Reward(u8 level, char *msg, u32 size);  // grants it
+ void Busting_ScaleExp(u8 level);
+ u8 Capture_Grade(void);
+-void Capture_Reward(u8 grade, char *msg, u32 size);
++// Ultra / Master Ball rewards let the player pick the code: when canPick, the chips are left in gCapturePick
++// (not granted) and the post-battle screen asks; otherwise the code is chosen automatically.
++struct CapturePick { u16 move[MAX_MON_MOVES]; u8 copies[MAX_MON_MOVES]; u8 count; };
++extern struct CapturePick gCapturePick;
++void Capture_Reward(u8 grade, char *msg, u32 size, bool8 canPick);
+ #endif // GUARD_PKBN_BUSTING_H
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index a5921e6..065b320 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -28,6 +28,7 @@ u8 PkbnFolderEdit_Get(u16 *moves, u8 *letters);            // the FOLDER screen'
+ void PkbnFolderEdit_Set(const u16 *moves, const u8 *letters, u8 count);
+ u8 PkbnFolder_PartyBattleMons(struct BattlePokemon *out);    // the party as BattlePokemon (species/moves/types)
+ void PkbnFolderEdit_Open(MainCallback exitCallback);          // the FOLDER screen (src/pkbn/folder_ui.c)
++void PkbnChipShelf_Open(MainCallback exitCallback);           // a Poké Mart's chip shelf (same screen, one page)
+ void PkbnDraw_ChipIcon(u16 *fb, s32 x, s32 y, u16 move, bool8 dim);   // 22x16 BN-style icon (grid_draw.c)
+ void PkbnPack_GrantTM(u16 item, u16 count);
+ void PkbnPack_GrantRelearned(u16 move);
+diff --git a/include/strings.h b/include/strings.h
+index cce6797..81ffff1 100755
+--- a/include/strings.h
++++ b/include/strings.h
+@@ -2150,6 +2150,7 @@ extern const u8 gText_Trade4[];
+ extern const u8 gText_Summary5[];
+ extern const u8 gText_PkbnNaviCust[];
+ extern const u8 gText_PkbnFolder[];
++extern const u8 gText_PkbnChips[];
+ extern const u8 gText_Switch2[];
+ extern const u8 gText_Item[];
+ extern const u8 gText_NotPkmnOtherTrainerWants[];
+diff --git a/src/pkbn/busting.c b/src/pkbn/busting.c
+index c053c03..b9fd51a 100644
+--- a/src/pkbn/busting.c
++++ b/src/pkbn/busting.c
+@@ -392,14 +392,37 @@ static u8 BallLane(u16 ball, u16 move, u8 *copies)
+     return RandomLane(move, FALSE);   // Great Ball, and themed balls without their lane (decision 2026-10-05)
+ }
+ 
+-void Capture_Reward(u8 grade, char *msg, u32 size)
++struct CapturePick gCapturePick;
++
++void Capture_Reward(u8 grade, char *msg, u32 size, bool8 canPick)
+ {
+     struct Pokemon *mon = &gEnemyParty[sB.enemySlot];
+     u16 ball = sB.ballItem, m1, m2;
+     u8 tier = sTierTable[grade][Random() % 16], copies, i;
+     PickMoves(mon, &m1, &m2);
+     msg[0] = '\0';
+-    if (ball == ITEM_MASTER_BALL)
++    memset(&gCapturePick, 0, sizeof(gCapturePick));
++    if (ball == ITEM_MASTER_BALL && canPick)
++    {
++        for (i = 0; i < MAX_MON_MOVES; i++)
++        {
++            u16 mv = GetMonData(mon, MON_DATA_MOVE1 + i);
++            if (PkbnFolder_MoveIsChip(mv))
++            {
++                gCapturePick.move[gCapturePick.count] = mv;
++                gCapturePick.copies[gCapturePick.count++] = 1;
++            }
++        }
++        snprintf(msg, size, "MASTER BALL: A CHIP OF EVERY MOVE! PICK THEIR CODES.");
++    }
++    else if (ball == ITEM_ULTRA_BALL && canPick && tier >= 3 && m1 != MOVE_NONE)
++    {
++        gCapturePick.move[0] = tier == 4 ? m2 : m1;
++        gCapturePick.copies[0] = 1;
++        gCapturePick.count = 1;
++        snprintf(msg, size, "ULTRA BALL: A CHIP OF ITS MOVE! PICK ITS CODE.");
++    }
++    else if (ball == ITEM_MASTER_BALL)
+     {
+         // Master Ball: 1 copy of every move it knew (Khaled, 2026-10-05)
+         u8 n = 0;
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index e525a83..26bbe59 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -21,6 +21,9 @@
+ #include "pokemon_storage_system.h"
+ #include "pokemon_summary_screen.h"
+ #include "sound.h"
++#include "overworld.h"
++#include "constants/region_map_sections.h"
++#include "money.h"
+ #include "constants/items.h"
+ #include "constants/songs.h"
+ #include "pkbn/chip_pack.h"
+@@ -42,7 +45,7 @@ extern const struct Evolution gEvolutionTable[][EVOS_PER_MON];
+ #define ROW_H 11
+ #define PANEL_X 164
+ 
+-enum { PAGE_FOLDER, PAGE_PACK, PAGE_CANDY, PAGE_COUNT };
++enum { PAGE_FOLDER, PAGE_PACK, PAGE_CANDY, PAGE_COUNT, PAGE_SHELF = PAGE_COUNT };   // SHELF: the Poké Mart's chip shelf
+ 
+ struct PackRow { u16 move; u8 letter; };
+ struct CandyRow { u16 move; u8 letter; u8 needLevel; u16 species; };   // needLevel 0 = buyable now
+@@ -52,7 +55,10 @@ static struct
+ {
+     MainCallback exit;
+     u8 page;
+-    u8 cursor[PAGE_COUNT], top[PAGE_COUNT];
++    u8 cursor[PAGE_COUNT + 1], top[PAGE_COUNT + 1];
++    bool8 shelfMode;
++    struct CandyRow shelf[16];
++    u8 shelfCount;
+     u16 fMove[FOLDER_MAX];
+     u8 fLetter[FOLDER_MAX];
+     u8 fCount, fMax;
+@@ -247,6 +253,79 @@ static void BuildCandy(void)
+             }
+ }
+ 
++// ---- Poké Mart chip shelves (design 08 §4, POC-11) ----------------------------------------------------------
++// Each Mart sells a fixed set of chips (TUNE: curated per town, roughly following the game's progression).
++// Every other row offers the move's second code, so shelves also sell codes learning doesn't give.
++// Price: 60 x MB (design 08 §4).
++struct ShelfStock { u8 mapsec; u16 moves[8]; };
++static const struct ShelfStock sShelves[] =
++{
++    { MAPSEC_OLDALE_TOWN,     { MOVE_TACKLE, MOVE_POUND, MOVE_SCRATCH, MOVE_GROWL, MOVE_LEER, MOVE_POISON_STING, MOVE_ABSORB, MOVE_GUST } },
++    { MAPSEC_PETALBURG_CITY,  { MOVE_TACKLE, MOVE_QUICK_ATTACK, MOVE_HEADBUTT, MOVE_GROWL, MOVE_SAND_ATTACK, MOVE_ABSORB, MOVE_PECK, MOVE_WATER_GUN } },
++    { MAPSEC_RUSTBORO_CITY,   { MOVE_ROCK_THROW, MOVE_MUD_SLAP, MOVE_ROCK_TOMB, MOVE_EMBER, MOVE_WATER_GUN, MOVE_BITE, MOVE_PECK, MOVE_CONFUSION } },
++    { MAPSEC_SLATEPORT_CITY,  { MOVE_WATER_GUN, MOVE_BUBBLE, MOVE_WATER_PULSE, MOVE_SUPERSONIC, MOVE_WING_ATTACK, MOVE_HEADBUTT, MOVE_KARATE_CHOP, MOVE_LOW_KICK } },
++    { MAPSEC_MAUVILLE_CITY,   { MOVE_THUNDER_SHOCK, MOVE_SPARK, MOVE_SHOCK_WAVE, MOVE_QUICK_ATTACK, MOVE_THUNDER_WAVE, MOVE_SWIFT, MOVE_BITE, MOVE_EMBER } },
++    { MAPSEC_VERDANTURF_TOWN, { MOVE_MAGICAL_LEAF, MOVE_RAZOR_LEAF, MOVE_MEGA_DRAIN, MOVE_SLEEP_POWDER, MOVE_STUN_SPORE, MOVE_PSYBEAM, MOVE_CONFUSION, MOVE_ABSORB } },
++    { MAPSEC_FALLARBOR_TOWN,  { MOVE_EMBER, MOVE_FLAME_WHEEL, MOVE_MUD_SHOT, MOVE_ASTONISH, MOVE_ANCIENT_POWER, MOVE_SAND_ATTACK, MOVE_ROCK_TOMB, MOVE_SPARK } },
++    { MAPSEC_LAVARIDGE_TOWN,  { MOVE_FLAME_WHEEL, MOVE_FIRE_PUNCH, MOVE_DIG, MOVE_ROCK_SLIDE, MOVE_SUNNY_DAY, MOVE_MUD_SHOT, MOVE_EMBER, MOVE_ROCK_TOMB } },
++    { MAPSEC_FORTREE_CITY,    { MOVE_AERIAL_ACE, MOVE_WING_ATTACK, MOVE_SHADOW_PUNCH, MOVE_FAINT_ATTACK, MOVE_SECRET_POWER, MOVE_SAFEGUARD, MOVE_MAGICAL_LEAF, MOVE_ASTONISH } },
++    { MAPSEC_LILYCOVE_CITY,   { MOVE_BUBBLE_BEAM, MOVE_ICY_WIND, MOVE_AURORA_BEAM, MOVE_BODY_SLAM, MOVE_RETURN, MOVE_PROTECT, MOVE_DOUBLE_TEAM, MOVE_LIGHT_SCREEN } },
++    { MAPSEC_MOSSDEEP_CITY,   { MOVE_PSYCHIC, MOVE_CALM_MIND, MOVE_CONFUSION, MOVE_EXTRASENSORY, MOVE_ICE_BEAM, MOVE_REFLECT, MOVE_PSYBEAM, MOVE_SHADOW_PUNCH } },
++    { MAPSEC_SOOTOPOLIS_CITY, { MOVE_SURF, MOVE_WATERFALL, MOVE_DIVE, MOVE_RAIN_DANCE, MOVE_MUDDY_WATER, MOVE_BUBBLE_BEAM, MOVE_ICY_WIND, MOVE_WATER_PULSE } },
++    { MAPSEC_EVER_GRANDE_CITY,{ MOVE_THUNDERBOLT, MOVE_FLAMETHROWER, MOVE_ICE_BEAM, MOVE_EARTHQUAKE, MOVE_SHADOW_BALL, MOVE_DRAGON_CLAW, MOVE_CRUNCH, MOVE_SLUDGE_BOMB } },
++};
++
++static u32 ShelfPrice(u16 move)
++{
++    return 60 * Chip_MB(move);
++}
++
++static void BuildShelf(void)
++{
++    const struct ShelfStock *st = &sShelves[0];   // anywhere else: Oldale's stock
++    s32 i;
++    for (i = 0; i < (s32)ARRAY_COUNT(sShelves); i++)
++        if (sShelves[i].mapsec == gMapHeader.regionMapSectionId)
++            st = &sShelves[i];
++    sF.shelfCount = 0;
++    for (i = 0; i < 8; i++)
++    {
++        u16 mv = st->moves[i];
++        const struct PkbnMoveInfo *info = &gPkbnMoveInfo[mv];
++        if (!PkbnFolder_MoveIsChip(mv) || info->laneCount == 0)
++            continue;
++        sF.shelf[sF.shelfCount].move = mv;
++        sF.shelf[sF.shelfCount].letter = info->lanes[(i & 1) && info->laneCount > 1 ? 1 : 0];
++        sF.shelfCount++;
++    }
++}
++
++static void BuyShelf(void)
++{
++    struct CandyRow *r;
++    u32 price;
++    if (sF.shelfCount == 0)
++        return;
++    r = &sF.shelf[sF.cursor[PAGE_SHELF]];
++    price = ShelfPrice(r->move);
++    if (!IsEnoughMoney(&gSaveBlock1Ptr->money, price))
++    {
++        Note("YOU DON'T HAVE ENOUGH MONEY");
++        PlaySE(SE_FAILURE);
++        return;
++    }
++    RemoveMoney(&gSaveBlock1Ptr->money, price);
++    PkbnPack_Add(r->move, r->letter, 1);
++    BuildPack();
++    PlaySE(SE_SHOP);
++    {
++        char nm[MOVE_NAME_LENGTH + 1], line[64];
++        MoveName(nm, sizeof(nm), r->move);
++        snprintf(line, sizeof(line), "BOUGHT %s %c FOR %u", nm, PkbnFolder_LetterChar(r->letter), (unsigned)price);
++        Note(line);
++    }
++}
++
+ static u16 CandyCost(u16 move, u8 letter)
+ {
+     return (Chip_MB(move) + 3) / 4 + (letter != gPkbnMoveInfo[move].lanes[0] ? 2 : 0);
+@@ -275,7 +354,8 @@ static void LoadFolder(void)
+ 
+ static u8 RowCount(void)
+ {
+-    return sF.page == PAGE_FOLDER ? sF.groupCount : sF.page == PAGE_PACK ? sF.packCount : sF.candyCount;
++    return sF.page == PAGE_FOLDER ? sF.groupCount : sF.page == PAGE_PACK ? sF.packCount
++         : sF.page == PAGE_SHELF ? sF.shelfCount : sF.candyCount;
+ }
+ 
+ static void RowChip(u8 row, u16 *move, u8 *letter)
+@@ -284,6 +364,8 @@ static void RowChip(u8 row, u16 *move, u8 *letter)
+         *move = sF.groups[row].move, *letter = sF.groups[row].letter;
+     else if (sF.page == PAGE_PACK)
+         *move = sF.pack[row].move, *letter = sF.pack[row].letter;
++    else if (sF.page == PAGE_SHELF)
++        *move = sF.shelf[row].move, *letter = sF.shelf[row].letter;
+     else
+         *move = sF.candy[row].move, *letter = sF.candy[row].letter;
+ }
+@@ -293,6 +375,13 @@ static void DrawTabs(u16 *fb)
+     static const char *const names[PAGE_COUNT] = { "FOLDER", "PACK", "CANDY" };
+     s32 i, x = 4;
+     char line[32];
++    if (sF.shelfMode)
++    {
++        Pkbn_DrawEmText(fb, 6, 0, "CHIP SHELF", PKBN_FONT_NORMAL, RGB(31, 26, 6), RGB(2, 2, 5));
++        snprintf(line, sizeof(line), "MONEY %u", (unsigned)GetMoney(&gSaveBlock1Ptr->money));
++        Text(fb, CW - 4 - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), 4, line, RGB(31, 31, 31));
++        return;
++    }
+     for (i = 0; i < PAGE_COUNT; i++)
+     {
+         s32 w = Pkbn_EmTextWidth(names[i], PKBN_FONT_NORMAL) + 10;
+@@ -318,7 +407,7 @@ static void DrawList(u16 *fb)
+         *top = *cur - LIST_ROWS + 1;
+     Pkbn_FillRect(fb, LIST_X - 2, LIST_Y - 2, PANEL_X - LIST_X - 2, LIST_ROWS * ROW_H + 4, RGB(2, 3, 8));
+     {
+-        static const char *const qtyHead[PAGE_COUNT] = { "QTY", "IN/OWN", "CANDY" };
++        static const char *const qtyHead[PAGE_COUNT + 1] = { "QTY", "IN/OWN", "CANDY", "PRICE" };
+         Text(fb, LIST_X + 96, LIST_Y - 14, qtyHead[sF.page], RGB(12, 14, 20));
+         Text(fb, PANEL_X - 8 - Pkbn_EmTextWidth("LIMIT", PKBN_FONT_SMALL), LIST_Y - 14, "LIMIT", RGB(12, 14, 20));
+     }
+@@ -354,6 +443,14 @@ static void DrawList(u16 *fb)
+             if (InFolder(mv, -1) >= Chip_CopyCap(mv))
+                 rcol = RGB(31, 20, 6);
+         }
++        else if (sF.page == PAGE_SHELF)
++        {
++            u32 price = ShelfPrice(mv);
++            snprintf(qty, sizeof(qty), "%u", (unsigned)price);
++            if (GetMoney(&gSaveBlock1Ptr->money) < price)
++                col = RGB(16, 18, 22);
++            snprintf(right, sizeof(right), "%u/%u", InFolder(mv, -1), Chip_CopyCap(mv));
++        }
+         else
+         {
+             const struct CandyRow *r = &sF.candy[row];
+@@ -459,10 +556,11 @@ static void DrawPanel(u16 *fb)
+ 
+ static void DrawHints(u16 *fb)
+ {
+-    static const char *const hints[PAGE_COUNT] = {
++    static const char *const hints[PAGE_COUNT + 1] = {
+         "A:TAKE OUT  SELECT:AUTO  L/R:PAGE  B:DONE",
+         "A:ADD  START:PP UP  SELECT:PP MAX  B:DONE",
+         "A:BUY  SELECT:CODE (+2)  L/R:PAGE  B:DONE",
++        "A:BUY  B:DONE",
+     };
+     Pkbn_FillRect(fb, 0, CH - 24, CW, 24, RGB(1, 2, 5));
+     if (sF.noteTimer)
+@@ -638,7 +736,7 @@ static void HandleInput(u16 keys)
+         *cur = *cur >= LIST_ROWS ? *cur - LIST_ROWS : 0;
+     if (keys & DPAD_RIGHT)
+         *cur = n ? (*cur + LIST_ROWS < n ? *cur + LIST_ROWS : n - 1) : 0;
+-    if (keys & (L_BUTTON | R_BUTTON))
++    if ((keys & (L_BUTTON | R_BUTTON)) && !sF.shelfMode)
+     {
+         sF.page = (sF.page + ((keys & R_BUTTON) ? 1 : PAGE_COUNT - 1)) % PAGE_COUNT;
+         PlaySE(SE_SELECT);
+@@ -673,6 +771,10 @@ static void HandleInput(u16 keys)
+         if (keys & SELECT_BUTTON)
+             UsePP(TRUE);
+         break;
++    case PAGE_SHELF:
++        if (keys & A_BUTTON)
++            BuyShelf();
++        break;
+     case PAGE_CANDY:
+         if (keys & A_BUTTON)
+             Buy();
+@@ -720,7 +822,26 @@ static void CB2_Folder(void)
+     HandleInput(keys);
+ }
+ 
++static void OpenCommon(MainCallback exitCallback);
++
++void PkbnChipShelf_Open(MainCallback exitCallback)
++{
++    OpenCommon(exitCallback);
++    sF.shelfMode = TRUE;
++    sF.page = PAGE_SHELF;
++    BuildShelf();
++    gPkbnCanvasOverlay = Draw;
++    SetMainCallback2(CB2_Folder);
++}
++
+ void PkbnFolderEdit_Open(MainCallback exitCallback)
++{
++    OpenCommon(exitCallback);
++    gPkbnCanvasOverlay = Draw;
++    SetMainCallback2(CB2_Folder);
++}
++
++static void OpenCommon(MainCallback exitCallback)
+ {
+     s32 i;
+     memset(&sF, 0, sizeof(sF));
+@@ -741,8 +862,6 @@ void PkbnFolderEdit_Open(MainCallback exitCallback)
+     BuildCandy();
+     sKeys = getenv("PKBN_TEST_FOLDER_KEYS");
+     sKeyClock = 0;
+-    gPkbnCanvasOverlay = Draw;
+-    SetMainCallback2(CB2_Folder);
+ }
+ 
+ #endif // PORTABLE
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index 7c854f8..46719fe 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -39,6 +39,7 @@
+ #include "pkbn/battle_stub.h"
+ #include "pkbn/render.h"
+ #include "pkbn/chip_pack.h"
++#include "pkbn/move_table.h"
+ #include "pkbn/playlog.h"
+ #include "constants/items.h"
+ #include "pkbn/grid_battle.h"
+@@ -66,6 +67,7 @@ enum
+     PB_BUSTING,       // Busting Level + reward (POC-10b, design 09)
+     PB_CAPTURE,       // Capture Grade + reward (POC-10b, design 10 §1)
+     PB_CLEAR_GRADE_EXP,
++    PB_CODE_PICK,     // Ultra / Master Ball: the player picks the chip's code (POC-11)
+     PB_CLEAR_GRADE_NICK,
+ };
+ 
+@@ -84,6 +86,7 @@ struct PostBattle
+     u8 nick[POKEMON_NAME_LENGTH + 1];
+     bool8 autopilot;
+     char candyMsg[64];
++    u8 pickIdx, pickLane;
+     char bonusMsg[128];      // Pokédex milestone / shiny chips (POC-10c)
+     char bigGrade[4];        // shown big while the Busting Level / Capture Grade text is up
+     bool8 bigCapture;
+@@ -96,6 +99,7 @@ static struct PostBattle sPB;
+ static void CB2_PkbnPostBattle(void);
+ static void GrantCatchCandy(u16 species, bool8 first);
+ static void CatchBonuses(struct Pokemon *mon, bool8 first);
++static void StepCodePick(void);
+ 
+ // ---- text ----------------------------------------------------------------------------------------
+ 
+@@ -404,6 +408,62 @@ static void CatchBonuses(struct Pokemon *mon, bool8 first)
+         PKBN_LOG("catch bonus: %s", sPB.bonusMsg);
+ }
+ 
++// The code picker (Ultra / Master Ball): LEFT/RIGHT through the move's codes (and * when it allows it), A takes it.
++static u8 PickLanes(u16 move, u8 *out)
++{
++    const struct PkbnMoveInfo *info = &gPkbnMoveInfo[move];
++    u8 i, n = 0;
++    for (i = 0; i < info->laneCount; i++)
++        out[n++] = info->lanes[i];
++    return n;
++}
++
++static void StepCodePick(void)
++{
++    u8 lanes[8], n;
++    u16 move;
++    char nm[MOVE_NAME_LENGTH + 1], row[64];
++    s32 i, x;
++    if (sPB.pickIdx >= gCapturePick.count)
++    {
++        gCapturePick.count = 0;
++        sPB.bigGrade[0] = '\0';
++        sPB.step = PB_NICK_ASK;
++        return;
++    }
++    move = gCapturePick.move[sPB.pickIdx];
++    n = PickLanes(move, lanes);
++    if (n == 0)
++    {
++        sPB.pickIdx++;
++        return;
++    }
++    if (gMain.newKeys & DPAD_LEFT)
++        sPB.pickLane = (sPB.pickLane + n - 1) % n, PlaySE(SE_SELECT);
++    if (gMain.newKeys & DPAD_RIGHT)
++        sPB.pickLane = (sPB.pickLane + 1) % n, PlaySE(SE_SELECT);
++    if (sPB.pickLane >= n)
++        sPB.pickLane = 0;
++    Pkbn_GameStringToAscii(nm, gMoveNames[move], sizeof(nm));
++    snprintf(sPB.lines[0], sizeof(sPB.lines[0]), "PICK A CODE FOR %s:", nm);
++    for (i = 0, x = 0; i < n && x < (s32)sizeof(row) - 6; i++)
++        x += snprintf(row + x, sizeof(row) - x, i == sPB.pickLane ? "[%c] " : " %c  ", PkbnFolder_LetterChar(lanes[i]));
++    snprintf(sPB.lines[1], sizeof(sPB.lines[1]), "%s", row);
++    snprintf(sPB.lines[2], sizeof(sPB.lines[2]), "LEFT/RIGHT: CODE   A: TAKE IT");
++    sPB.lineCount = 3;
++    sPB.prompt = FALSE;
++    if (sPB.autopilot)   // self-tests: PKBN_TEST_CODE_PICK=n takes the n-th code
++        sPB.pickLane = (u8)(atoi(getenv("PKBN_TEST_CODE_PICK") ? getenv("PKBN_TEST_CODE_PICK") : "0") % n);
++    if ((gMain.newKeys & A_BUTTON) || sPB.autopilot)
++    {
++        PkbnPack_Add(move, lanes[sPB.pickLane], gCapturePick.copies[sPB.pickIdx]);
++        PKBN_LOG("code picked: move %u code %c", move, PkbnFolder_LetterChar(lanes[sPB.pickLane]));
++        PlaySE(SE_SELECT);
++        sPB.pickIdx++;
++        sPB.pickLane = 0;
++    }
++}
++
+ static void StepGiveCaught(void)
+ {
+     struct Pokemon *mon = &gEnemyParty[sB.enemySlot];
+@@ -584,7 +644,7 @@ static void CB2_PkbnPostBattle(void)
+             u8 level = capture ? Capture_Grade() : Busting_Level();
+             char lv[4];
+             if (capture)
+-                Capture_Reward(level, sMsg, sizeof(sMsg));
++                Capture_Reward(level, sMsg, sizeof(sMsg), !sPB.autopilot || getenv("PKBN_TEST_CODE_PICK") != NULL);
+             else
+             {
+                 Busting_ScaleExp(level);
+@@ -603,8 +663,17 @@ static void CB2_PkbnPostBattle(void)
+         sPart = 0;
+         Say(capture ? PB_NICK_ASK : PB_EXP_NEXT, "%s", sMsg);
+         sPB.next = capture ? PB_CLEAR_GRADE_NICK : PB_CLEAR_GRADE_EXP;
++        if (capture && gCapturePick.count)
++        {
++            sPB.next = PB_CODE_PICK;
++            sPB.pickIdx = 0;
++            sPB.pickLane = 0;
++        }
+         break;
+     }
++    case PB_CODE_PICK:
++        StepCodePick();
++        break;
+     case PB_NICK_ASK:
+         if (!sPB.prompt)
+         {
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index 64e0fac..98df092 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -16,6 +16,7 @@
+ #include "constants/moves.h"
+ #include "pkbn/move_table.h"
+ #include "item.h"
++#include "money.h"
+ #include "battle_setup.h"
+ #include "pkbn/grid_battle.h"
+ #include "pkbn/render.h"
+@@ -527,6 +528,16 @@ void Pkbn_SelfTestMaybeStart(void)
+                     t++;
+             }
+     }
++    if (getenv("PKBN_TEST_MONEY") != NULL)
++        SetMoney(&gSaveBlock1Ptr->money, (u32)atoi(getenv("PKBN_TEST_MONEY")));
++    if (getenv("PKBN_TEST_SHELF") != NULL)
++    {
++        // the Poké Mart chip shelf (driven by PKBN_TEST_FOLDER_KEYS), then fight
++        PkbnChipShelf_Open(CB2_SelfTestEditorDone);
++        sInnerOverlay = gPkbnCanvasOverlay;
++        gPkbnCanvasOverlay = WrappedEditorOverlay;
++        return;
++    }
+     if (getenv("PKBN_TEST_FOLDER_KEYS") != NULL)
+     {
+         // open the FOLDER screen first, drive it with the scripted keys, then fight
+diff --git a/src/shop.c b/src/shop.c
+index 5549de0..d9f35e7 100644
+--- a/src/shop.c
++++ b/src/shop.c
+@@ -156,6 +156,9 @@ static void Task_ReturnToItemListAfterItemPurchase(u8 taskId);
+ static void Task_ReturnToItemListAfterDecorationPurchase(u8 taskId);
+ static void Task_HandleShopMenuBuy(u8 taskId);
+ static void Task_HandleShopMenuSell(u8 taskId);
++#ifdef PORTABLE
++static void Task_HandleShopMenuChips(u8 taskId);
++#endif
+ static void BuyMenuPrintItemDescriptionAndShowItemIcon(s32 item, bool8 onInit, struct ListMenu *list);
+ static void BuyMenuPrintPriceInList(u8 windowId, u32 itemId, u8 y);
+ 
+@@ -169,6 +172,9 @@ static const struct MenuAction sShopMenuActions_BuySellQuit[] =
+ {
+     { gText_ShopBuy, {.void_u8=Task_HandleShopMenuBuy} },
+     { gText_ShopSell, {.void_u8=Task_HandleShopMenuSell} },
++#ifdef PORTABLE
++    { gText_PkbnChips, {.void_u8=Task_HandleShopMenuChips} },   // pkbn: the Mart's chip shelf
++#endif
+     { gText_ShopQuit, {.void_u8=Task_HandleShopMenuQuit} }
+ };
+ 
+@@ -351,6 +357,9 @@ static u8 CreateShopMenu(u8 martType)
+     {
+         struct WindowTemplate winTemplate = sShopMenuWindowTemplates[WIN_BUY_SELL_QUIT];
+         winTemplate.width = GetMaxWidthInMenuTable(sShopMenuActions_BuySellQuit, ARRAY_COUNT(sShopMenuActions_BuySellQuit));
++#ifdef PORTABLE
++        winTemplate.height = ARRAY_COUNT(sShopMenuActions_BuySellQuit) * 2;   // pkbn: room for CHIPS
++#endif
+         sMartInfo.windowId = AddWindow(&winTemplate);
+         sMartInfo.menuActions = sShopMenuActions_BuySellQuit;
+         numMenuItems = ARRAY_COUNT(sShopMenuActions_BuySellQuit);
+@@ -428,6 +437,26 @@ static void Task_HandleShopMenuSell(u8 taskId)
+     FadeScreen(FADE_TO_BLACK, 0);
+ }
+ 
++#ifdef PORTABLE
++static void CB2_ExitChipShelf(void)
++{
++    gFieldCallback = MapPostLoadHook_ReturnToShopMenu;
++    SetMainCallback2(CB2_ReturnToField);
++}
++
++static void CB2_GoToChipShelf(void)
++{
++    PkbnChipShelf_Open(CB2_ExitChipShelf);
++}
++
++static void Task_HandleShopMenuChips(u8 taskId)
++{
++    gTasks[taskId].ptr.funcPtr = CB2_GoToChipShelf;
++    gTasks[taskId].func = Task_GoToBuyOrSellMenu;
++    FadeScreen(FADE_TO_BLACK, 0);
++}
++#endif
++
+ void CB2_ExitSellMenu(void)
+ {
+     gFieldCallback = MapPostLoadHook_ReturnToShopMenu;
+diff --git a/src/strings.c b/src/strings.c
+index 171a880..b7efa26 100644
+--- a/src/strings.c
++++ b/src/strings.c
+@@ -367,6 +367,7 @@ const u8 gText_Switch2[] = _("SWITCH");
+ const u8 gText_Summary5[] = _("SUMMARY");
+ const u8 gText_PkbnNaviCust[] = _("NAVICUST");
+ const u8 gText_PkbnFolder[] = _("FOLDER");
++const u8 gText_PkbnChips[] = _("CHIPS");
+ const u8 gText_Moves[] = _("MOVES"); // Unused
+ const u8 gText_Enter[] = _("ENTER");
+ const u8 gText_NoEntry[] = _("NO ENTRY");
+-- 
+2.43.0
+
