@@ -291,3 +291,80 @@ PP1..4). Examples:
 **Questions:**
 - P with PP option (a) or (b)?
 - Should the 30-chip folder also cap chips per Pokémon? Without one, a single Pokémon could fill it. TUNE, e.g. 12.
+
+---
+
+## 10. How big should the folder be with 1–6 Pokémon? (2026-10-05)
+
+Decided in §9: the move pool, with copies as stamina (option b). The question here is size. You proposed
+`30 + 5 per extra Pokémon` (55 with a full party). `tools/folder_size_sim.py` tests that against the alternatives.
+
+**Simulation inputs** (all TUNE):
+- Emerald's real battle mix: 70% wild (1 enemy), 30% trainers. Trainer party sizes come from
+  `src/data/trainer_parties.h`: 1 → 305 parties, 2 → 318, 3 → 135, 4 → 36, 5 → 25, 6 → 35.
+- 4 chip uses per KO: Gen 3 damage at equal level, plus misses and status.
+- 2 chips used per Custom.
+- The Pokémon on the field faints after 3–6 Customs.
+- No reshuffle.
+
+### 10.1 What size actually controls
+
+1. **Depth.** Does a deck run out mid-battle? A Pokémon on the field draws `5 + 2 × (Customs − 1)` chips:
+   - a normal stay of up to 6 Customs → **15 chips**;
+   - one Pokémon sweeping a 6-Pokémon team (Wallace) → **27 chips**.
+
+   BN6's 30 is almost exactly the "sweep a full team" number.
+2. **Copy value.** How much one extra copy raises the chance that move is in the hand. Bigger decks dilute it
+   (§3.1).
+3. **Presence.** In a shared deck, a hand often holds nothing for the Pokémon on the field. You then have to switch
+   (a "forced" switch).
+
+### 10.2 Results (n = party size)
+
+| design | n | chips | forced switch | copy value |
+|---|---|---|---|---|
+| A: shared 30 (BN) | 1 / 3 / 6 | 30 | 0% / 6% / **65%** | +11 / +10 / +8 pts |
+| **B: shared 30+5(n−1), lead holds 30** | 1 / 3 / 6 | 30 / 40 / 55 | 0% / 3% / **25%** | +11 / +9 / **+6** pts |
+| B2: same size, split evenly | 1 / 3 / 6 | 30 / 40 / 55 | 0% / 30% / **62%** | +11 / +7 / +5 pts |
+| **C: own deck of 15 per Pokémon + bench slot** | 1 / 3 / 6 | 15 / 45 / 90 | 0% / 0% / 0% | **+15 / +15 / +14** pts |
+
+- Copy value is in percentage points of "this move is in the hand", per extra copy.
+- No design ran a battle dry more than 6% of the time.
+
+**Reading it:**
+- **Any single shared deck** loses one way or the other as the party grows. If it stays small (A), the lead gets
+  crowded out. If it grows (B), copies matter half as much.
+- **Your +5 rule is the best shared option.** It works because it really means *"a BN folder for the lead plus 5 per
+  bench Pokémon"*. Even so, with a full party:
+  - a quarter of Customs force a switch;
+  - an extra copy of the lead's move is worth half what it is in BN.
+- **Per-Pokémon decks (C)** keep BN's maths identical at every party size, which is exactly why BN gives every Navi
+  its own folder.
+
+### 10.3 Proposal: one FOLDER screen, one section per Pokémon
+
+Each party Pokémon has its own section of the folder, from 0 up to **S_max** chips.
+
+**The hand:**
+- 5 chips drawn from the **Pokémon in battle's** section;
+- plus 1 **bench slot**, drawn from a mixed deck of every benched Pokémon's chips. It replaces today's generic
+  Switch slot. Using it brings that Pokémon in, as in design 01, so tag-team play stays a choice and is never forced.
+
+**Section size:**
+- **15** is the smallest size that never ran dry in a normal fight (10 ran dry in 75% of 3-enemy battles).
+- **30** lets one Pokémon sweep a 6-Pokémon team.
+- Proposal: S_max = 30 (BN), no minimum. Sections under 15 reshuffle as a fallback (§3.6).
+
+**How many chips that is in total:**
+- up to 30 per Pokémon (180 with 6);
+- in practice it's limited by **pack copies** (the economy) and the per-move caps;
+- a Pokémon with 6 moves in its pool and base chips only has a 6-chip section until you invest in it.
+
+**What the player thinks about:**
+- "how deep is each Pokémon's kit", instead of "how do 6 Pokémon share 30 slots".
+- Copy caps (§2.3) count **per section**, as BN6 counts per folder.
+
+**Open:**
+- Should S_max grow with level (e.g. 15 + level/4, capped at 30) so early folders stay small?
+- Should one copy be usable in only one section at a time (the BN item feel; the pack drains faster), or in every
+  section (easier)?
