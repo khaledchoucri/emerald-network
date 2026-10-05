@@ -3,6 +3,7 @@
 **Patches:** on top of 0001–0022.
 - `poc/patches/0023-POC-12a-Struggle-chip-when-the-folder-is-used-up-tes.patch`
 - `poc/patches/0024-POC-12b-test-bot-PKBN_BOT-smart-dodges-lines-up-chip.patch`
+- `poc/patches/0025-POC-12c-Busting-Level-counts-every-damaging-enemy-at.patch`
 
 **New tools:** `tools/bot_compare.py` runs the same battles with the old autopilot and the new bot. The test list in
 `scripts/owtests.sh` grows to 13 checks.
@@ -90,7 +91,19 @@ The old autopilot is still the default, so the regression baselines hold. All su
 - Proposed fix for a later round: count every damaging hit taken, and/or score damage taken as a share of max HP.
 - Moving costs the steps point (+1 for 2 steps or fewer). That is BN6's rule, and the bot feels it in k3/k6.
 
+## 12c — hits taken now count (user decision)
+
+- **Busting Level, hits:** every enemy attack that does damage now counts once, however many hits it has. A stun or
+  push without damage still counts as before. The scale is still BN6's: 0 → +1, 1 → 0, 2 → −1, 3 → −2, 4+ → −3
+  (design 09 §2 updated).
+- **Bot reaction time:** the bot now reacts to a warning only after 15 frames (1/4 s, `PKBN_BOT_REACT`). Without it,
+  it dodged almost everything.
+- **Results on the same 17 battles:** the bot averages L8.9 (it was L9.2). The old autopilot averages L8.5 (it was
+  L9.4), because it stands still and gets hit.
+  - Hard fights now score lower: Pidgeotto L7 with 4+ hits, the Poochyena trio fight L6, Koffing L7.
+  - Quick clean wins still score L9–S. That is BN's intent: delete fast and don't get hit.
+- **Regressions:** every fight log is identical. Only the Busting lines and the rewards rolled from them differ.
+
 ## Open
 
-- Hit counting in the Busting Level (above). It's a design decision, so it waits for you.
 - The bot's own weights (TUNE). It never switches Pokémon and never plans chains or Program Advances.

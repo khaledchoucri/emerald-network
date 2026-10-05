@@ -1,0 +1,135 @@
+From 6a1f38d787bb54a67a851e3aa7e26196ade8fc8d Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Mon, 5 Oct 2026 22:52:38 +0300
+Subject: [PATCH] POC-12c: Busting Level counts every damaging enemy attack;
+ test bot reacts after 1/4 s
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/busting.h |  3 +++
+ src/pkbn/bot.c         | 21 ++++++++++++++++++---
+ src/pkbn/busting.c     | 18 +++++++++++++++---
+ src/pkbn/grid_moves.c  |  2 ++
+ 4 files changed, 38 insertions(+), 6 deletions(-)
+
+diff --git a/include/pkbn/busting.h b/include/pkbn/busting.h
+index 8ef35fe..e5e2094 100644
+--- a/include/pkbn/busting.h
++++ b/include/pkbn/busting.h
+@@ -12,6 +12,8 @@ struct PkbnBustStats
+     bool8 fainted;       // a player Pokémon fainted
+     u8 balls;            // balls thrown
+     bool8 prevStun;
++    u16 lastHitSerial;   // POC-12: the last enemy attack counted (one count per attack, however many hits)
++    u32 lastHitFrame;
+     u8 deleteRun;        // POC-11 packs: foes deleted in the current 10-frame window
+     u8 multiDelete;      // largest such run (BN6 Unk_1b)
+     u32 deleteUntil;
+@@ -20,6 +22,7 @@ struct PkbnBustStats
+ void Busting_Reset(void);
+ void Busting_OnFightFrame(void);
+ void Busting_NotePush(void);
++void Busting_NoteHit(u16 attackSerial);
+ void Busting_NoteStep(void);
+ void Busting_NoteChain(u8 chips, bool8 programAdvance);
+ void Busting_NoteCounter(void);
+diff --git a/src/pkbn/bot.c b/src/pkbn/bot.c
+index ab0200c..6aed657 100644
+--- a/src/pkbn/bot.c
++++ b/src/pkbn/bot.c
+@@ -5,7 +5,7 @@
+ // What it does (all TUNE, it is a test tool, not a rule of the game):
+ //  - Custom: picks the chips worth most against the target - expected damage from Moves_EstimateDamage as a share
+ //    of the target's HP, small fixed values for status / stats / healing - up to 3 per Custom.
+-//  - Fight: steps off panels an enemy attack is about to hit, walks to a panel from which the next chip reaches the
++//  - Fight: steps off panels an enemy attack is about to hit (after a 1/4 s reaction time), walks to a panel from which the next chip reaches the
+ //    target (Moves_WouldHit, the real shapes), fires, and uses the buster when nothing is queued.
+ //  - Opens the Custom screen only when its queue is empty (the old bot threw queued chips away).
+ #include "pkbn/grid_internal.h"
+@@ -20,6 +20,17 @@
+ #define BOT_GIVE_UP   150   // frames to wait for a good position before firing anyway
+ 
+ static u16 sWaitFrames;
++static u32 sThreatSince;   // frame the current panel became threatened (0 = safe)
++
++// Human reaction time: the bot only reacts to a warning after this many frames (PKBN_BOT_REACT, default 15 = 1/4 s;
++// TUNE). Without it the bot dodged nearly everything and every Busting Level looked perfect.
++static u32 ReactFrames(void)
++{
++    static s32 sReact = -1;
++    if (sReact < 0)
++        sReact = getenv("PKBN_BOT_REACT") ? atoi(getenv("PKBN_BOT_REACT")) : 15;
++    return (u32)sReact;
++}
+ static u8 sLastQueue;
+ 
+ static s32 ChipScore(u8 handPos)
+@@ -148,8 +159,12 @@ void PkbnBot_Fight(u16 *held, u16 *pressed)
+         *pressed = L_BUTTON;
+         return;
+     }
+-    // 1. get out of the way
+-    if (Moves_PanelThreatened(SIDE_ENEMY, p->x, p->y))
++    // 1. get out of the way (after a human reaction time)
++    if (!Moves_PanelThreatened(SIDE_ENEMY, p->x, p->y))
++        sThreatSince = 0;
++    else if (sThreatSince == 0)
++        sThreatSince = sB.frame;
++    if (sThreatSince && sB.frame - sThreatSince >= ReactFrames())
+     {
+         static const s8 sDir[4][2] = { {0, -1}, {0, 1}, {-1, 0}, {1, 0} };
+         s32 d;
+diff --git a/src/pkbn/busting.c b/src/pkbn/busting.c
+index 15c799c..79a10a7 100644
+--- a/src/pkbn/busting.c
++++ b/src/pkbn/busting.c
+@@ -60,17 +60,29 @@ void Busting_OnFightFrame(void)
+ {
+     struct Fighter *p = &sB.f[SIDE_PLAYER];
+     sB.bust.fightFrames++;
+-    // BN6 counter 3: hits that put the Navi into a flinch/paralysis/freeze/bubble/push state (asm/asm00_2.s:18305..)
+-    if (p->stun && !sB.bust.prevStun)
++    // BN6 counter 3: hits that put the Navi into a flinch/paralysis/freeze/bubble/push state (asm/asm00_2.s:18305..).
++    // ADAPT (POC-12): few Pokémon attacks stun or push, so "no hits" was nearly free. Every attack that does damage
++    // now counts once (Busting_NoteHit); a stun that comes without damage (a paralysis jolt) still counts here.
++    if (p->stun && !sB.bust.prevStun && sB.frame - sB.bust.lastHitFrame > 1)
+         sB.bust.hits++;
+     sB.bust.prevStun = p->stun != 0;
+ }
+ 
+-void Busting_NotePush(void)
++void Busting_NoteHit(u16 attackSerial)
+ {
++    if (attackSerial == sB.bust.lastHitSerial && attackSerial != 0)
++        return;   // multi-hit attacks count once
++    sB.bust.lastHitSerial = attackSerial;
++    sB.bust.lastHitFrame = sB.frame;
+     sB.bust.hits++;
+ }
+ 
++void Busting_NotePush(void)
++{
++    if (sB.bust.lastHitFrame != sB.frame)
++        sB.bust.hits++;   // a push without damage; with damage it was counted by Busting_NoteHit
++}
++
+ void Busting_NoteStep(void)
+ {
+     if (sB.bust.steps < 0xFFFF)
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 7a9b6ee..b27bc11 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -892,6 +892,8 @@ static void ApplyHit(struct Attack *a, bool8 last)
+     def->bm.hp -= dmg;
+     def->hurtFlash = 8;
+     def->lastHitFrame = sB.frame ? sB.frame : 1;
++    if (defSide == SIDE_PLAYER && dmg > 0)
++        Busting_NoteHit(a->serial);   // POC-12: every attack that hurts counts against the Busting Level
+     if (IS_TYPE_PHYSICAL(type))
+         def->lastPhysDamage = dmg;
+     if (def->charging)
+-- 
+2.43.0
+
