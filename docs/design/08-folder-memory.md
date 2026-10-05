@@ -296,7 +296,7 @@ PP1..4). Examples:
 
 ## 10. How big should the folder be with 1–6 Pokémon? (2026-10-05)
 
-Decided in §9: the move pool, with copies as stamina (option b). The question here is size. You proposed
+Decided in §9: the move pool. PP vs copies-as-stamina is still open; the simulation assumes copies (option b). The question here is size. You proposed
 `30 + 5 per extra Pokémon` (55 with a full party). `tools/folder_size_sim.py` tests that against the alternatives.
 
 **Simulation inputs** (all TUNE):
@@ -353,7 +353,7 @@ Each party Pokémon has its own section of the folder, from 0 up to **S_max** ch
 **Section size:**
 - **15** is the smallest size that never ran dry in a normal fight (10 ran dry in 75% of 3-enemy battles).
 - **30** lets one Pokémon sweep a 6-Pokémon team.
-- Proposal: S_max = 30 (BN), no minimum. Sections under 15 reshuffle as a fallback (§3.6).
+- Proposal: S_max = 30 (BN), **minimum 15** (see §10.4).
 
 **How many chips that is in total:**
 - up to 30 per Pokémon (180 with 6);
@@ -368,3 +368,37 @@ Each party Pokémon has its own section of the folder, from 0 up to **S_max** ch
 - Should S_max grow with level (e.g. 15 + level/4, capped at 30) so early folders stay small?
 - Should one copy be usable in only one section at a time (the BN item feel; the pack drains faster), or in every
   section (easier)?
+
+### 10.4 The minimum and free fill (2026-10-05)
+
+**Why a minimum is needed.** Without one, the smallest section is the best:
+- 5 chips show every chip every turn;
+- that's vanilla's "all 4 moves, always", with no reason to own copies.
+
+BN avoids this by requiring exactly 30.
+
+**The rule:**
+- **Section size:** 15 to 30.
+- **Free fill:** empty slots up to 15 get free copies of the Pokémon's own pool moves.
+  - They're spread evenly over the whole pool, using each move's first code.
+  - You can't pick the fill or leave moves out of it.
+
+  | pool | fill |
+  |---|---|
+  | {Tackle} | 15 × Tackle |
+  | {Scratch, Growl} | 8 + 7 |
+  | 5 moves | 3 each |
+
+- **Caps:** fill goes over the copy caps only when the pool is too small to reach 15. That's 1–2-move Pokémon such as
+  Magikarp or Unown, which are weak anyway. You can't build "15 × Hyper Beam", because the pool always holds every
+  move learned.
+- **Your own chips replace fill:** base chips you place and pack copies. Buy 4 Ember → 5 Ember, and the other 10 spread
+  over the rest. Growl leaves once you've placed enough of your own chips. Going above 15 takes real chips only.
+- **Copy value grows with the pool.** Late game, with 10 moves, fill gives 1–2 copies each:
+
+  | Flamethrower copies in 15 | in the opening hand |
+  |---|---|
+  | 2 | 57% |
+  | 4 | 85% |
+
+  So copies are what make a grown Pokémon consistent.
