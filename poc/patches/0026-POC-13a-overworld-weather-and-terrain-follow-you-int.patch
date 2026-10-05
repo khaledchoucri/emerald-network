@@ -1,0 +1,155 @@
+From 9790f0a910fbd962e19723c51e559ae208a91bf0 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Mon, 5 Oct 2026 23:05:09 +0300
+Subject: [PATCH 26/32] POC-13a: overworld weather and terrain follow you into
+ battle
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |  1 +
+ src/pkbn/grid_battle.c       |  2 ++
+ src/pkbn/grid_draw.c         |  5 +++-
+ src/pkbn/grid_field.c        | 50 ++++++++++++++++++++++++++++++++++++
+ src/pkbn/owtest.c            |  9 +++++++
+ 5 files changed, 66 insertions(+), 1 deletion(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 8280337..0bc95db 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -325,6 +325,7 @@ bool8 Moves_WouldHit(u8 kind, u16 move, s8 x, s8 y, s8 tx, s8 ty);
+ 
+ // grid_field.c
+ void Field_Init(void);
++void Field_StartConditions(void);   // overworld weather and terrain (real maps only)
+ void Field_Update(void);          // per fight frame: panels, poison, timers
+ void Field_EndTurn(void);         // every CUSTOM_FRAMES of fight time
+ bool8 Field_CanStand(u8 side, s8 x, s8 y);
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 39a963b..7450821 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -627,6 +627,8 @@ static void Begin(void)
+     // battle_main.c:672 (Nature Power, Secret Power read it)
+     gBattleEnvironment = (gMapHeader.mapLayout != NULL) ? BattleSetup_GetEnvironmentId() : BATTLE_ENVIRONMENT_GRASS;
+     Field_Init();
++    if (gMapHeader.mapLayout != NULL && getenv("PKBN_SELFTEST") == NULL)
++        Field_StartConditions();   // self-tests have no map: their battles start as before
+ 
+     for (i = 0; i < PARTY_SIZE; i++)
+     {
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index cf5b4e7..eff8ac6 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -617,7 +617,10 @@ static void DrawGauge(u16 *fb, u32 t)
+     if (WeatherName())
+     {
+         char line[20];
+-        snprintf(line, sizeof(line), "%s %u", WeatherName(), sB.weatherTurns);
++        if (sB.weatherTurns)
++            snprintf(line, sizeof(line), "%s %u", WeatherName(), sB.weatherTurns);
++        else
++            snprintf(line, sizeof(line), "%s", WeatherName());   // overworld weather: no end (POC-13)
+         Text(fb, x + w + 6, y - 4, line, RGB(20, 28, 31));
+     }
+ }
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index bceddbe..a5862bf 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -7,6 +7,9 @@
+ //    sandstorm / hail 1/16, Ingrain 1/16 (battle_util.c DoBattlerEndTurnEffects / DoFieldEndTurnEffects).
+ //  - Sleep 2-5 turns, confusion 2-5 turns, freeze thaws 20% (Gen 3). Review rule: sleep breaks when hit.
+ #include "pkbn/grid_internal.h"
++#include "field_weather.h"
++#include "random.h"
++#include "constants/weather.h"
+ #include "random.h"
+ #include "sound.h"
+ #include "constants/abilities.h"
+@@ -42,6 +45,53 @@ void Field_Init(void)
+     sB.weatherTurns = 0;
+ }
+ 
++// POC-13: the overworld follows you into battle.
++//  - Weather: Emerald starts a battle with the map's weather (ABILITYEFFECT_SWITCH_IN_WEATHER, battle_util.c:2490-2530):
++//    rain / thunderstorm / downpour -> permanent rain, sandstorm -> sandstorm, drought -> sun. Permanent = no turn
++//    count (weatherTurns 0), as Gen 3's overworld weather never runs out.
++//  - Terrain (our design, TUNE): a battle in grass starts with 2 grass panels on each side, a cave or mountain battle
++//    with 1 cracked panel on each side. They don't fade.
++void Field_StartConditions(void)
++{
++    s32 side, n;
++    switch (GetCurrentWeather())
++    {
++    case WEATHER_RAIN:
++    case WEATHER_RAIN_THUNDERSTORM:
++    case WEATHER_DOWNPOUR:
++        sB.weather = B_WEATHER_RAIN_TEMPORARY | B_WEATHER_RAIN_PERMANENT;
++        SetMsg("IT IS RAINING.", 70);                 // sText_ItIsRaining
++        break;
++    case WEATHER_SANDSTORM:
++        sB.weather = B_WEATHER_SANDSTORM;
++        SetMsg("A SANDSTORM IS RAGING.", 70);         // sText_SandstormIsRaging
++        break;
++    case WEATHER_DROUGHT:
++        sB.weather = B_WEATHER_SUN;
++        SetMsg("THE SUNLIGHT IS STRONG.", 70);        // sText_SunlightStrong
++        break;
++    }
++    if (sB.weather)
++        PKBN_LOG("overworld weather %u -> battle weather %x (permanent)", GetCurrentWeather(), sB.weather);
++    for (side = 0; side < 2; side++)
++    {
++        u8 type = PANEL_NORMAL;
++        n = 0;
++        if (gBattleEnvironment == BATTLE_ENVIRONMENT_GRASS || gBattleEnvironment == BATTLE_ENVIRONMENT_LONG_GRASS)
++            type = PANEL_GRASS, n = 2;
++        else if (gBattleEnvironment == BATTLE_ENVIRONMENT_CAVE || gBattleEnvironment == BATTLE_ENVIRONMENT_MOUNTAIN)
++            type = PANEL_CRACKED, n = 1;
++        while (n > 0)
++        {
++            s8 x = (side == SIDE_PLAYER ? 0 : PLAYER_COLS) + Random() % PLAYER_COLS, y = Random() % GRID_ROWS;
++            if (sB.panel[y][x] != PANEL_NORMAL || (y == 1 && (x == 1 || x == 4)))
++                continue;   // not where the fighters start
++            sB.panel[y][x] = type;   // no timer: terrain stays
++            n--;
++        }
++    }
++}
++
+ void Field_SetPanel(s8 x, s8 y, u8 type)
+ {
+     if (!InGrid(x, y))
+diff --git a/src/pkbn/owtest.c b/src/pkbn/owtest.c
+index 5d463fa..5c9bd24 100644
+--- a/src/pkbn/owtest.c
++++ b/src/pkbn/owtest.c
+@@ -12,6 +12,7 @@
+ //                                      (held 4 frames, then 6 frames released); Hn+key holds it n frames (H40R
+ //                                      walks right); Mn taps A for n frames; P dumps a frame now; Q quits.
+ //                                      Titem runs "additem item, 1" as a script.
++//                                      Vn sets the field weather to n (3 rain, 8 sandstorm, 12 drought).
+ //                                      Y waits until the message box has finished printing (text speed varies).
+ //                                      Gsp:lv starts a wild battle (species / level numbers) as if met in grass.
+ //                                      J before G lets that battle bring a pack from the map's own grass table
+@@ -125,6 +126,14 @@ u16 PkbnOwTest_Keys(void)
+             printf("[pkbn-owtest] wild battle: species %u lv %u\n", sp, lv);
+             continue;
+         }
++        if (c == 'V')   // Vn: the field weather becomes n (constants/weather.h), as a coord weather event would set it
++        {
++            extern void SetCurrentAndNextWeatherNoDelay(u8 weather);
++            u8 w = (u8)strtoul(sScript, (char **)&sScript, 10);
++            SetCurrentAndNextWeatherNoDelay(w);
++            printf("[pkbn-owtest] weather %u\n", w);
++            continue;
++        }
+         if (c == 'J')   // J: the next G battle may bring a pack from this map's grass table (as a grass encounter)
+         {
+             extern bool8 PkbnWild_AllowPackHere(void);
+-- 
+2.43.0
+

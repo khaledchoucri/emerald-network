@@ -1,0 +1,61 @@
+From 44ff14338f08684668930fd65ff6705bef7aaa67 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 01:49:34 +0300
+Subject: [PATCH 32/32] POC-13g: battle messages fit and sit under the intro
+ banner
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h | 2 +-
+ src/pkbn/grid_draw.c         | 6 ++++--
+ src/pkbn/grid_field.c        | 2 +-
+ 3 files changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index aa9d707..8e9c795 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -244,7 +244,7 @@ struct GridBattle
+     u8 fxSide[GRID_ROWS][GRID_COLS];
+     u8 fxPA[GRID_ROWS][GRID_COLS];
+     u16 attackSerial;
+-    char msg[40];
++    char msg[56];
+     u16 msgTimer;
+     char banner[40];
+     u8 outcome;
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 724c8b2..5869ad1 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -1379,9 +1379,11 @@ void Draw_Overlay(u16 *fb)
+         DrawPicker(fb);
+     if (sB.msgTimer && sB.state != ST_TIMESTOP && sB.state != ST_CUSTOM)
+     {
++        // under the intro / send-out banner while it shows (switch-in abilities, overworld weather: POC-13)
++        s32 my = (sB.state == ST_INTRO || sB.state == ST_SENDOUT) ? 60 : 38;
+         bw = Pkbn_EmTextWidth(sB.msg, PKBN_FONT_SMALL);
+-        Draw_Box(fb, (CW - bw) / 2 - 5, 38, bw + 10, 12, COL_BOX, RGB(14, 16, 22), 11);
+-        TextCentered(fb, CW / 2, 36, sB.msg, COL_GAUGE_FULL, FALSE);
++        Draw_Box(fb, (CW - bw) / 2 - 5, my, bw + 10, 12, COL_BOX, RGB(14, 16, 22), 11);
++        TextCentered(fb, CW / 2, my - 2, sB.msg, COL_GAUGE_FULL, FALSE);
+     }
+     if (sB.flashTimer && sB.state != ST_CUSTOM && sB.state != ST_TIMESTOP)
+     {
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index b42549e..63178eb 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -104,7 +104,7 @@ bool8 Field_Floats(const struct Fighter *f)
+ 
+ static void SayAbility(const struct Fighter *f, const char *what)
+ {
+-    char line[48], ab[ABILITY_NAME_LENGTH + 1];
++    char line[64], ab[ABILITY_NAME_LENGTH + 1];
+     Pkbn_GameStringToAscii(ab, gAbilityNames[f->bm.ability], sizeof(ab));
+     snprintf(line, sizeof(line), "%s'S %s %s", f->name, ab, what);
+     SetMsg(line, 70);
+-- 
+2.43.0
+

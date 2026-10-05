@@ -1,0 +1,263 @@
+From e15f32694e00122c6aa170a20c3833e2d6bb58a4 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 01:03:10 +0300
+Subject: [PATCH 29/32] POC-13d: three folders (BN6 Folder 1 / Folder 2 /
+ extra), START on the FOLDER page equips the next; pkbn.sav v4
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/chip_pack.h |  5 +++-
+ src/pkbn/folder_ui.c     | 25 +++++++++++++---
+ src/pkbn/grid_draw.c     |  8 ++---
+ src/pkbn/pkbn_save.c     | 63 +++++++++++++++++++++++++++++++++-------
+ src/pkbn/selftest.c      | 13 +++++++--
+ 5 files changed, 93 insertions(+), 21 deletions(-)
+
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index 131aede..f342c9a 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -16,6 +16,7 @@
+ #define PACK_MAX     99          // BN6 pack cap per chip/code
+ #define CANDY_MAX    9999
+ #define PKBN_FOLDER_SLOTS FOLDER_MAX
++#define PKBN_FOLDERS 3              // BN6: Folder 1, Folder 2, the extra folder (POC-13)
+ 
+ // Partner chips (POC-11, design 10 §10.3): earned at fixed story points, each assigned to one Pokémon (by its
+ // Navi ID) and one of its moves. In battle it switches that Pokémon in and uses the move (costing the Custom),
+@@ -35,7 +36,9 @@ void PkbnPack_SyncLearned(void);
+ void PkbnPack_SetGranted(u16 move);
+ // Self-tests: the pre-POC-10 folder order (party slot, move slot, copy) so scripted picks keep their meaning.
+ void PkbnFolder_SortForTests(struct Folder *folder, const struct BattlePokemon *party, u8 partyCount);
+-u8 PkbnFolderEdit_Get(u16 *moves, u8 *letters);            // the FOLDER screen's folder; 0 = auto-build
++u8 PkbnFolderEdit_Get(u16 *moves, u8 *letters);            // the equipped folder; 0 = auto-build
++u8 PkbnFolder_Equipped(void);                               // 0-2
++void PkbnFolder_Equip(u8 n);
+ void PkbnFolderEdit_Set(const u16 *moves, const u8 *letters, u8 count);
+ u8 PkbnFolder_PartyBattleMons(struct BattlePokemon *out);    // the party as BattlePokemon (species/moves/types)
+ void PkbnFolderEdit_Open(MainCallback exitCallback);          // the FOLDER screen (src/pkbn/folder_ui.c)
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index 5c65261..31ff8fd 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -497,7 +497,8 @@ static void DrawTabs(u16 *fb)
+         Pkbn_DrawEmText(fb, x + 5, 3, names[i], PKBN_FONT_SMALL, on ? RGB(31, 26, 6) : RGB(14, 16, 22), RGB(2, 2, 5));
+         x += w + 2;
+     }
+-    snprintf(line, sizeof(line), "%u/%u CHIPS%s", sF.fCount, sF.fMax, sF.edited ? "" : " (AUTO)");
++    // POC-13: which of the 3 folders is equipped (the one shown is the one you fight with)
++    snprintf(line, sizeof(line), "F%u  %u/%u%s", PkbnFolder_Equipped() + 1, sF.fCount, sF.fMax, sF.edited ? "" : " AUTO");
+     Text(fb, CW - 4 - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), 4, line, sF.fCount > sF.fMax ? RGB(31, 10, 8) : RGB(31, 31, 31));
+ }
+ 
+@@ -535,10 +536,12 @@ static void DrawList(u16 *fb)
+                 mega += Chip_Class(sF.fMove[j]) == CHIP_MEGA;
+                 giga += Chip_Class(sF.fMove[j]) == CHIP_GIGA;
+             }
++            s32 cx = LIST_X + 2;
+             snprintf(cl, sizeof(cl), "MEGA %u/5", mega);
+-            Text(fb, LIST_X + 122, LIST_Y - 14, cl, RGB(10, 20, 31));
++            Text(fb, cx, LIST_Y - 14, cl, RGB(10, 20, 31));
++            cx += Pkbn_EmTextWidth(cl, PKBN_FONT_SMALL) + 6;
+             snprintf(cl, sizeof(cl), "GIGA %u/1", giga);
+-            Text(fb, LIST_X + 170, LIST_Y - 14, cl, RGB(31, 12, 24));
++            Text(fb, cx, LIST_Y - 14, cl, RGB(31, 12, 24));
+         }
+     }
+     for (i = 0; i < LIST_ROWS && *top + i < n; i++)
+@@ -693,7 +696,7 @@ static void DrawPanel(u16 *fb)
+ static void DrawHints(u16 *fb)
+ {
+     static const char *const hints[PAGE_COUNT + 1] = {
+-        "A:TAKE OUT  SELECT:AUTO  L/R:PAGE  B:DONE",
++        "A:TAKE OUT  SELECT:AUTO  START:FOLDER  B:DONE",
+         "A:ADD  START:PP UP  SELECT:PP MAX  B:DONE",
+         "A:BUY  SELECT:CODE (+2)  L/R:PAGE  B:DONE",
+         "A:POKEMON  SELECT:MOVE  L/R:PAGE  B:DONE",
+@@ -903,6 +906,20 @@ static void HandleInput(u16 keys)
+             PlaySE(SE_SELECT);
+             Note("AUTO-BUILT FROM YOUR PACK");
+         }
++        if (keys & START_BUTTON)
++        {
++            // next folder (BN6: Folder 1 / Folder 2 / extra); the one you leave on is equipped
++            char line[40];
++            Save();
++            PkbnFolder_Equip((PkbnFolder_Equipped() + 1) % PKBN_FOLDERS);
++            sF.edited = PkbnFolderEdit_Get(sF.fMove, sF.fLetter) > 0;
++            LoadFolder();
++            BuildGroups();
++            sF.cursor[PAGE_FOLDER] = sF.top[PAGE_FOLDER] = 0;
++            PlaySE(SE_SELECT);
++            snprintf(line, sizeof(line), "FOLDER %u EQUIPPED%s", PkbnFolder_Equipped() + 1, sF.edited ? "" : " (AUTO-BUILT)");
++            Note(line);
++        }
+         break;
+     case PAGE_PACK:
+         if ((keys & A_BUTTON) && sF.packCount)
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 3267468..1a21c17 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -834,10 +834,10 @@ static void DrawChipFace(u16 *fb, const struct FolderChip *ch, s32 x, s32 y, boo
+         u16 c = Chip_Class(ch->move) == CHIP_GIGA ? RGB(31, 12, 24) : RGB(10, 20, 31);
+         if (dim)
+             c = Gfx_Blend(c, COL_BLACK, 8);
+-        Pkbn_FillRect(fb, x, y, SLOT_W - 2, 1, c);
+-        Pkbn_FillRect(fb, x, y + SLOT_H - 1, SLOT_W - 2, 1, c);
+-        Pkbn_FillRect(fb, x, y, 1, SLOT_H, c);
+-        Pkbn_FillRect(fb, x + SLOT_W - 3, y, 1, SLOT_H, c);
++        Pkbn_FillRect(fb, x, y, SLOT_W - 2, 2, c);
++        Pkbn_FillRect(fb, x, y + SLOT_H - 2, SLOT_W - 2, 2, c);
++        Pkbn_FillRect(fb, x, y, 2, SLOT_H, c);
++        Pkbn_FillRect(fb, x + SLOT_W - 4, y, 2, SLOT_H, c);
+     }
+ }
+ 
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index 3b30ff3..ffcf13e 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -19,7 +19,8 @@
+ #include <stddef.h>
+ 
+ #define PKBN_SAVE_PATH    "pkbn.sav"
+-#define PKBN_SAVE_VERSION 3   // v2 (POC-10): chip pack, grants, candy, folder; v3 (POC-11): partner chips. Append-only.
++#define PKBN_SAVE_VERSION 4   // v2 (POC-10): chip pack, grants, candy, folder; v3 (POC-11): partner chips;
++                              // v4 (POC-13): folders 2 and 3 and which one is equipped. Append-only.
+ 
+ struct PkbnSaveFile
+ {
+@@ -40,14 +41,24 @@ struct PkbnSaveFile
+     u8 pad2[3];
+     // ---- v3 (POC-11): partner chips ----
+     struct PkbnPartnerSlot partners[PKBN_PARTNER_SLOTS];
++    // ---- v4 (POC-13): BN6 has Folder 1, Folder 2 and an extra folder; folder 1 is the v2 folder above ----
++    u16 extraMove[PKBN_FOLDERS - 1][PKBN_FOLDER_SLOTS];
++    u8 extraLetter[PKBN_FOLDERS - 1][PKBN_FOLDER_SLOTS];
++    u8 extraCount[PKBN_FOLDERS - 1];
++    u8 activeFolder;          // 0 = folder 1
+ };
+ 
++#define V3_SIZE offsetof(struct PkbnSaveFile, extraMove)
+ #define V2_SIZE offsetof(struct PkbnSaveFile, partners)
+ 
+ #define V1_SIZE offsetof(struct PkbnSaveFile, pack)
+ 
+ static struct PkbnSaveFile sSave;
+ 
++// Self-tests of the v3 -> v4 migration: where v3 files end, and how long a v4 file is.
++u32 PkbnSave_V3Size(void) { return V3_SIZE; }
++u32 PkbnSave_Size(void) { return sizeof(struct PkbnSaveFile); }
++
+ void PkbnSave_Reset(void)
+ {
+     s32 i;
+@@ -79,7 +90,9 @@ void PkbnSave_Read(void)
+     if (tmp.version == 1)
+         memset((u8 *)&tmp + V1_SIZE, 0, sizeof(tmp) - V1_SIZE); // v1 -> v3: an empty pack (filled by SyncLearned)
+     else if (tmp.version == 2)
+-        memset((u8 *)&tmp + V2_SIZE, 0, sizeof(tmp) - V2_SIZE); // v2 -> v3: no partner chips yet
++        memset((u8 *)&tmp + V2_SIZE, 0, sizeof(tmp) - V2_SIZE); // v2 -> v4: no partner chips yet
++    else if (tmp.version == 3)
++        memset((u8 *)&tmp + V3_SIZE, 0, sizeof(tmp) - V3_SIZE); // v3 -> v4: folders 2 and 3 empty, folder 1 equipped
+     tmp.version = PKBN_SAVE_VERSION;
+     sSave = tmp;
+     for (i = sSave.ncpCount; i < NCP_COUNT; i++) // programs added since this file was written
+@@ -231,23 +244,53 @@ void PkbnPack_SyncLearned(void)
+ }
+ 
+ // The FOLDER screen's folder (0 chips = auto-build)
++// The equipped folder's storage (POC-13: folder 1 = the v2 fields, folders 2-3 = v4).
++static void FolderStore(u8 n, u16 **moves, u8 **letters, u8 **count)
++{
++    if (n == 0 || n >= PKBN_FOLDERS)
++    {
++        *moves = sSave.folderMove, *letters = sSave.folderLetter, *count = &sSave.folderCount;
++        return;
++    }
++    *moves = sSave.extraMove[n - 1], *letters = sSave.extraLetter[n - 1], *count = &sSave.extraCount[n - 1];
++}
++
++u8 PkbnFolder_Equipped(void)
++{
++    return sSave.activeFolder < PKBN_FOLDERS ? sSave.activeFolder : 0;
++}
++
++void PkbnFolder_Equip(u8 n)
++{
++    sSave.activeFolder = n < PKBN_FOLDERS ? n : 0;
++}
++
+ u8 PkbnFolderEdit_Get(u16 *moves, u8 *letters)
+ {
+-    u8 n = sSave.folderCount > PKBN_FOLDER_SLOTS ? PKBN_FOLDER_SLOTS : sSave.folderCount;
+-    memcpy(moves, sSave.folderMove, n * sizeof(u16));
+-    memcpy(letters, sSave.folderLetter, n);
++    u16 *m;
++    u8 *l, *c, n;
++    FolderStore(PkbnFolder_Equipped(), &m, &l, &c);
++    n = *c > PKBN_FOLDER_SLOTS ? PKBN_FOLDER_SLOTS : *c;
++    memcpy(moves, m, n * sizeof(u16));
++    memcpy(letters, l, n);
+     return n;
+ }
+ 
+ void PkbnFolderEdit_Set(const u16 *moves, const u8 *letters, u8 count)
+ {
++    u16 *m;
++    u8 *l, *c;
++    FolderStore(PkbnFolder_Equipped(), &m, &l, &c);
+     if (count > PKBN_FOLDER_SLOTS)
+         count = PKBN_FOLDER_SLOTS;
+-    memset(sSave.folderMove, 0, sizeof(sSave.folderMove));
+-    memset(sSave.folderLetter, 0, sizeof(sSave.folderLetter));
+-    memcpy(sSave.folderMove, moves, count * sizeof(u16));
+-    memcpy(sSave.folderLetter, letters, count);
+-    sSave.folderCount = count;
++    memset(m, 0, PKBN_FOLDER_SLOTS * sizeof(u16));
++    memset(l, 0, PKBN_FOLDER_SLOTS);
++    if (count)
++    {
++        memcpy(m, moves, count * sizeof(u16));
++        memcpy(l, letters, count);
++    }
++    *c = count;
+ }
+ 
+ // ---- Other chip sources (POC-10c, design 08 §12 / design 10 §10) ----------------------------------------------
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index 1564415..e4f9f41 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -363,6 +363,8 @@ static void ApplyTestNaviCusts(void)
+ static void CB2_SelfTestEditorDone(void)
+ {
+     gPkbnCanvasOverlay = NULL;
++    if (getenv("PKBN_TEST_SAVE_AFTER") != NULL)
++        PkbnSave_Write();   // what the FOLDER screen left, for the migration test
+     SetMainCallback2(CB2_SelfTestBattle);
+ }
+ 
+@@ -498,8 +500,15 @@ void Pkbn_SelfTestMaybeStart(void)
+         struct PkbnNavi *nv;
+         PkbnSave_Read();
+         nv = PkbnSave_FindNavi((u16)atoi(getenv("PKBN_TEST_SIDECAR_READ")));
+-        printf("[pkbn-selftest] sidecar read: navi %s (%u parts), EMBER copies %u, candy NORMAL %u\n",
+-               nv ? "found" : "missing", nv ? nv->count : 0, PkbnPack_Total(MOVE_EMBER), PkbnCandy_Get(TYPE_NORMAL));
++        {
++            extern u32 PkbnSave_V3Size(void), PkbnSave_Size(void);
++            u16 m[PKBN_FOLDER_SLOTS];
++            u8 l[PKBN_FOLDER_SLOTS];
++            printf("[pkbn-selftest] sidecar read: navi %s (%u parts), EMBER copies %u, candy NORMAL %u, folder %u equipped, "
++                   "%u chips (v3 size %u, v4 size %u)\n", nv ? "found" : "missing", nv ? nv->count : 0,
++                   PkbnPack_Total(MOVE_EMBER), PkbnCandy_Get(TYPE_NORMAL), PkbnFolder_Equipped() + 1,
++                   PkbnFolderEdit_Get(m, l), (unsigned)PkbnSave_V3Size(), (unsigned)PkbnSave_Size());
++        }
+     }
+     ApplyTestNaviCusts();
+     SeedTestPack();
+-- 
+2.43.0
+

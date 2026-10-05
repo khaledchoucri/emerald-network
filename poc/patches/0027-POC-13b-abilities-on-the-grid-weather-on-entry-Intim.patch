@@ -1,0 +1,396 @@
+From 5b9c0b5ed366d683a5d2042964b8c1bfcadc35bf Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 00:58:00 +0300
+Subject: [PATCH 27/32] POC-13b: abilities on the grid - weather on entry,
+ Intimidate, contact abilities, Swift Swim/Chlorophyll, Speed Boost, Rain
+ Dish, Shed Skin, Early Bird, Truant, Natural Cure, Levitate floats, trapping
+ abilities
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |   6 ++
+ src/pkbn/grid_battle.c       |  20 +++-
+ src/pkbn/grid_field.c        | 193 +++++++++++++++++++++++++++++++++--
+ src/pkbn/grid_moves.c        |  12 +++
+ 4 files changed, 224 insertions(+), 7 deletions(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 0bc95db..8deb23f 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -118,6 +118,7 @@ struct Fighter
+     bool8 defenseCurl;
+     bool8 recharge;      // review: can't pick chips at the next Custom
+     bool8 fakeOutReady;  // Fake Out only works right after coming in
++    bool8 truantLoaf;    // Truant: this turn it loafs around (POC-13)
+     u8 rolloutCount, furyCount;
+     u16 bideFrames;
+     u16 bideDamage;
+@@ -341,6 +342,11 @@ void Field_ResetFighterConditions(struct Fighter *f);
+ void Field_PushBack(u8 side, u8 panels);
+ const char *Field_StatName(u8 stat);
+ void Field_NaviStatusBug(u8 side);
++// POC-13 abilities on the grid (src/pkbn/grid_field.c)
++void Field_OnEntry(u8 side);                   // Drizzle / Drought / Sand Stream / Intimidate
++void Field_ContactAbility(u8 defSide, u8 atkSide);
++bool8 Field_Floats(const struct Fighter *f);   // Levitate (or FlotShoe): panels do nothing
++const char *Field_EscapeBlocker(void);         // a foe's ability that stops the player running, or NULL
+ 
+ // grid_catch.c
+ u16 Catch_NextBall(u16 from, s8 dir);
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 7450821..f5c4248 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -234,6 +234,8 @@ static void DoSwitch(u8 target, bool8 keepStages)
+     // Gen 3: switching out clears stat stages unless it was Baton Pass (SwitchInClearSetData).
+     for (i = 0; i < NUM_BATTLE_STATS; i++)
+         sB.f[SIDE_PLAYER].bm.statStages[i] = DEFAULT_STAT_STAGE;
++    if (sB.f[SIDE_PLAYER].bm.ability == ABILITY_NATURAL_CURE && sB.f[SIDE_PLAYER].bm.hp)
++        sB.f[SIDE_PLAYER].bm.status1 = 0;   // Natural Cure: cured on switching out (battle_script_commands.c:9616)
+     SyncActiveToParty();
+     LoadActiveFromParty(target);
+     if (keepStages)
+@@ -252,6 +254,7 @@ static void DoSwitch(u8 target, bool8 keepStages)
+     }
+     sB.f[SIDE_PLAYER].iframes = SWITCH_IFRAMES;
+     sB.f[SIDE_PLAYER].lockout = 0;
++    Field_OnEntry(SIDE_PLAYER);
+     PKBN_LOG("switched in %s%s", sB.f[SIDE_PLAYER].name, keepStages ? " (Baton Pass: stages kept)" : "");
+ }
+ 
+@@ -731,6 +734,14 @@ static void Begin(void)
+         snprintf(sB.banner, sizeof(sB.banner), "A PACK OF %u WILD POKEMON APPEARED!", sB.foeCount);
+     else
+         snprintf(sB.banner, sizeof(sB.banner), "WILD %s APPEARED!", sB.f[SIDE_ENEMY].name);
++    // switch-in abilities, the player's side first, then each foe (POC-13)
++    Field_OnEntry(SIDE_PLAYER);
++    for (i = 0; i < sB.foeCount; i++)
++    {
++        Foe_Select(i);
++        Field_OnEntry(SIDE_ENEMY);
++    }
++    Foe_Select(0);
+     sB.state = ST_INTRO;
+     sB.timer = 70;
+     gPkbnCanvasOverlay = Overlay;
+@@ -1204,8 +1215,14 @@ static void UpdatePlayer(void)
+     {
+         if (sB.trainer)
+             SetMsg("NO RUNNING FROM A TRAINER BATTLE!", 50);
+-        else if (p->noEscape)
++        else if (p->noEscape && p->bm.ability != ABILITY_RUN_AWAY)   // Run Away beats Mean Look (battle_util.c:427)
+             SetMsg("CAN'T ESCAPE!", 40);
++        else if (Field_EscapeBlocker() != NULL)
++        {
++            char line[40];
++            snprintf(line, sizeof(line), "THE FOE'S %s PREVENTS ESCAPE!", Field_EscapeBlocker());
++            SetMsg(line, 50);
++        }
+         else
+         {
+             EndBattle(B_OUTCOME_RAN, "GOT AWAY SAFELY!");
+@@ -1771,6 +1788,7 @@ void CB2_PkbnGridBattle(void)
+             sB.f[SIDE_ENEMY].y = 1;
+             if (!Field_CanStand(SIDE_ENEMY, 4, 1))
+                 sB.f[SIDE_ENEMY].x = 5;
++            Field_OnEntry(SIDE_ENEMY);
+             sB.sentIn = 1 << sB.active; // a new opponent: EXP goes to whoever faces it
+             sB.aiAttackTimer = 90;
+             sB.state = ST_FIGHT;
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index a5862bf..b42549e 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -10,7 +10,8 @@
+ #include "field_weather.h"
+ #include "random.h"
+ #include "constants/weather.h"
+-#include "random.h"
++#include "pkbn/render.h"
++#include "data.h"
+ #include "sound.h"
+ #include "constants/abilities.h"
+ #include "constants/battle_move_effects.h"
+@@ -92,6 +93,148 @@ void Field_StartConditions(void)
+     }
+ }
+ 
++// ---- Abilities on the grid (POC-13) ------------------------------------------------------------------------
++// Gen 3 rules where the grid has the same situation; ADAPT where it needs a grid meaning (Levitate, Truant).
++
++bool8 Field_Floats(const struct Fighter *f)
++{
++    // FlotShoe program (BN6); ADAPT: a Levitate Pokémon floats too - no poison panels, no ice slides, no cracking
++    return (f->navi.flags & NCPF_FLOAT_SHOES) || f->bm.ability == ABILITY_LEVITATE;
++}
++
++static void SayAbility(const struct Fighter *f, const char *what)
++{
++    char line[48], ab[ABILITY_NAME_LENGTH + 1];
++    Pkbn_GameStringToAscii(ab, gAbilityNames[f->bm.ability], sizeof(ab));
++    snprintf(line, sizeof(line), "%s'S %s %s", f->name, ab, what);
++    SetMsg(line, 70);
++    PKBN_LOG("%s", line);
++}
++
++// Switch-in abilities (ABILITYEFFECT_ON_SWITCHIN, battle_util.c:2532-2565). Weather from an ability is permanent, as in
++// Gen 3 (B_WEATHER_*_PERMANENT); a weather move can still replace it.
++void Field_OnEntry(u8 side)
++{
++    struct Fighter *f = &sB.f[side];
++    if (f->bm.hp == 0)
++        return;
++    switch (f->bm.ability)
++    {
++    case ABILITY_DRIZZLE:
++        if (!(sB.weather & B_WEATHER_RAIN_PERMANENT))
++        {
++            sB.weather = B_WEATHER_RAIN_PERMANENT | B_WEATHER_RAIN_TEMPORARY;
++            sB.weatherTurns = 0;
++            SayAbility(f, "MADE IT RAIN!");                 // BattleScript_DrizzleActivates
++        }
++        break;
++    case ABILITY_SAND_STREAM:
++        if (!(sB.weather & B_WEATHER_SANDSTORM_PERMANENT))
++        {
++            sB.weather = B_WEATHER_SANDSTORM;
++            sB.weatherTurns = 0;
++            SayAbility(f, "WHIPPED UP A SANDSTORM!");       // BattleScript_SandstreamActivates
++        }
++        break;
++    case ABILITY_DROUGHT:
++        if (!(sB.weather & B_WEATHER_SUN_PERMANENT))
++        {
++            sB.weather = B_WEATHER_SUN;
++            sB.weatherTurns = 0;
++            SayAbility(f, "INTENSIFIED THE SUN'S RAYS!");   // BattleScript_DroughtActivates
++        }
++        break;
++    case ABILITY_INTIMIDATE:
++        if (side == SIDE_PLAYER && sB.foeCount > 1)
++        {
++            s32 k;
++            for (k = 0; k < sB.foeCount; k++)   // a pack: every foe out there
++            {
++                Foe_Select(k);
++                if (sB.f[SIDE_ENEMY].bm.hp)
++                    Field_ApplyStatStage(SIDE_ENEMY, STAT_ATK, -1, TRUE);
++            }
++        }
++        else if (sB.f[side ^ 1].bm.hp)
++            Field_ApplyStatStage(side ^ 1, STAT_ATK, -1, TRUE);   // BattleScript_IntimidateActivates
++        SayAbility(f, "CUTS THE FOE'S ATTACK!");
++        break;
++    }
++}
++
++// Contact abilities (ABILITYEFFECT_MOVE_END, battle_util.c:2767-2860): Rough Skin 1/16 of the attacker's max HP;
++// Static / Flame Body / Poison Point 1 in 3; Effect Spore 1 in 10 (sleep, poison or paralysis); Cute Charm 1 in 3.
++void Field_ContactAbility(u8 defSide, u8 atkSide)
++{
++    struct Fighter *d = &sB.f[defSide];
++    struct Fighter *a = &sB.f[atkSide];
++    if (a->bm.hp == 0)
++        return;
++    switch (d->bm.ability)
++    {
++    case ABILITY_ROUGH_SKIN:
++    {
++        s32 dmg = a->bm.maxHP / 16;
++        Moves_DamageFighter(atkSide, dmg ? dmg : 1, "IS HURT BY ROUGH SKIN!");
++        break;
++    }
++    case ABILITY_STATIC:
++        if (Random() % 3 == 0)
++            Field_TryStatus(atkSide, defSide, MOVE_NONE, STATUS1_PARALYSIS, FALSE);
++        break;
++    case ABILITY_FLAME_BODY:
++        if (Random() % 3 == 0)
++            Field_TryStatus(atkSide, defSide, MOVE_NONE, STATUS1_BURN, FALSE);
++        break;
++    case ABILITY_POISON_POINT:
++        if (Random() % 3 == 0)
++            Field_TryStatus(atkSide, defSide, MOVE_NONE, STATUS1_POISON, FALSE);
++        break;
++    case ABILITY_EFFECT_SPORE:
++        if (Random() % 10 == 0)
++        {
++            static const u32 sSpore[3] = { STATUS1_SLEEP, STATUS1_POISON, STATUS1_PARALYSIS };
++            Field_TryStatus(atkSide, defSide, MOVE_NONE, sSpore[Random() % 3], FALSE);
++        }
++        break;
++    case ABILITY_CUTE_CHARM:
++        if (Random() % 3 == 0 && !a->infatuated && a->bm.ability != ABILITY_OBLIVIOUS)
++        {
++            u8 g1 = GetGenderFromSpeciesAndPersonality(d->bm.species, d->bm.personality);
++            u8 g2 = GetGenderFromSpeciesAndPersonality(a->bm.species, a->bm.personality);
++            if (g1 != MON_GENDERLESS && g2 != MON_GENDERLESS && g1 != g2)
++            {
++                a->infatuated = TRUE;
++                SayAbility(d, "INFATUATED THE ATTACKER!");
++            }
++        }
++        break;
++    }
++}
++
++// Can't run (IsRunningFromBattleImpossible / battle_main.c:4036-4070): Run Away always escapes; a foe's Shadow Tag
++// traps; Arena Trap traps a non-Flying, non-Levitate Pokémon; Magnet Pull traps a Steel type.
++const char *Field_EscapeBlocker(void)
++{
++    const struct Fighter *p = &sB.f[SIDE_PLAYER];
++    s32 k;
++    if (p->bm.ability == ABILITY_RUN_AWAY)
++        return NULL;
++    for (k = 0; k < sB.foeCount; k++)
++    {
++        const struct Fighter *e = Foe_Get(k);
++        if (e->bm.hp == 0)
++            continue;
++        if (e->bm.ability == ABILITY_SHADOW_TAG)
++            return "SHADOW TAG";
++        if (e->bm.ability == ABILITY_ARENA_TRAP && p->bm.ability != ABILITY_LEVITATE && !HasType(p, TYPE_FLYING))
++            return "ARENA TRAP";
++        if (e->bm.ability == ABILITY_MAGNET_PULL && HasType(p, TYPE_STEEL))
++            return "MAGNET PULL";
++    }
++    return NULL;
++}
++
+ void Field_SetPanel(s8 x, s8 y, u8 type)
+ {
+     if (!InGrid(x, y))
+@@ -126,8 +269,8 @@ bool8 Field_CanStand(u8 side, s8 x, s8 y)
+         if (k >= 0 && k != sB.cur)
+             return FALSE;
+     }
+-    if (sB.panel[y][x] == PANEL_BROKEN && (sB.f[side].navi.flags & NCPF_AIR_SHOES))
+-        return TRUE;   // AirShoes program: holes don't matter (BN6)
++    if (sB.panel[y][x] == PANEL_BROKEN && ((sB.f[side].navi.flags & NCPF_AIR_SHOES) || sB.f[side].bm.ability == ABILITY_LEVITATE))
++        return TRUE;   // AirShoes program: holes don't matter (BN6); a Levitate Pokémon floats over them (POC-13)
+     return sB.panel[y][x] != PANEL_BROKEN;
+ }
+ 
+@@ -135,7 +278,7 @@ bool8 Field_CanStand(u8 side, s8 x, s8 y)
+ void Field_Step(u8 side, s8 nx, s8 ny)
+ {
+     struct Fighter *f = &sB.f[side];
+-    bool8 floats = (f->navi.flags & NCPF_FLOAT_SHOES) != 0;   // FlotShoe program: panels do nothing (BN6)
++    bool8 floats = Field_Floats(f);   // FlotShoe program / Levitate: panels do nothing
+     if (sB.panel[f->y][f->x] == PANEL_CRACKED && (nx != f->x || ny != f->y) && !floats)
+     {
+         Field_SetPanel(f->x, f->y, PANEL_BROKEN);
+@@ -363,6 +506,7 @@ void Field_ResetFighterConditions(struct Fighter *f)
+     f->confTurns = f->trapTurns = f->yawn = f->mistTurns = 0;
+     f->infatuated = f->seeded = f->nightmare = f->safeguard = f->magicCoat = FALSE;
+     f->focusEnergy = f->chargeNext = f->lockOnNext = f->rooted = FALSE;
++    f->truantLoaf = FALSE;
+     f->mudSport = f->waterSport = f->defenseCurl = f->recharge = FALSE;
+     f->fakeOutReady = TRUE;
+     f->rolloutCount = f->furyCount = 0;
+@@ -480,7 +624,7 @@ static void FighterFrame(u8 s)
+         NaviBugsTick(s);
+         if (f->bm.hp == 0)
+             return;
+-        if (sB.panel[f->y][f->x] == PANEL_POISON && !f->invuln && !(f->navi.flags & NCPF_FLOAT_SHOES)
++        if (sB.panel[f->y][f->x] == PANEL_POISON && !f->invuln && !Field_Floats(f)
+          && !HasType(f, TYPE_POISON) && !HasType(f, TYPE_STEEL))
+         {
+             if (sB.poisonTick[s] == 0)
+@@ -599,9 +743,12 @@ static void EndTurnFighter(u8 s)
+         }
+         if (f->bm.hp == 0)
+             return;
+-        // Sleep counts down (Gen 3 decrements on each move attempt; here once per turn).
++        // Sleep counts down (Gen 3 decrements on each move attempt; here once per turn). Early Bird: twice as fast
++        // (battle_util.c:2030).
+         if (f->bm.status1 & STATUS1_SLEEP)
+         {
++            if (f->bm.ability == ABILITY_EARLY_BIRD && (f->bm.status1 & STATUS1_SLEEP) > 1)
++                f->bm.status1 -= 1;
+             f->bm.status1 -= 1;
+             if ((f->bm.status1 & STATUS1_SLEEP) == 0)
+             {
+@@ -627,6 +774,40 @@ static void EndTurnFighter(u8 s)
+         if (f->yawn && --f->yawn == 0)
+             Field_TryStatus(s, s, MOVE_YAWN, STATUS1_SLEEP, FALSE);
+         f->fakeOutReady = FALSE;
++        // end-of-turn abilities (ABILITYEFFECT_ENDTURN, battle_util.c:2600-2656)
++        switch (f->bm.ability)
++        {
++        case ABILITY_RAIN_DISH:
++            if ((sB.weather & B_WEATHER_RAIN) && f->bm.hp < f->bm.maxHP)
++            {
++                Heal(f, Frac(f, 16));
++                SayAbility(f, "RESTORED ITS HP A LITTLE!");
++            }
++            break;
++        case ABILITY_SHED_SKIN:
++            if (f->bm.status1 && Random() % 3 == 0)
++            {
++                f->bm.status1 = 0;
++                f->nightmare = FALSE;
++                SayAbility(f, "CURED ITS PROBLEM!");
++            }
++            break;
++        case ABILITY_SPEED_BOOST:
++            if (f->bm.statStages[STAT_SPEED] < MAX_STAT_STAGE)
++            {
++                f->bm.statStages[STAT_SPEED]++;
++                SayAbility(f, "RAISED ITS SPEED!");
++            }
++            break;
++        case ABILITY_TRUANT:
++            f->truantLoaf ^= 1;   // ADAPT: it acts every other turn (gDisableStructs.truantCounter)
++            if (f->truantLoaf)
++            {
++                snprintf(line, sizeof(line), "%s IS LOAFING AROUND!", f->name);
++                SetMsg(line, 70);
++            }
++            break;
++        }
+     }
+ }
+ 
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index b27bc11..8c15d2c 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -150,6 +150,10 @@ s32 Moves_EffectiveSpeed(const struct Fighter *f)
+     s32 spd = (s32)f->bm.speed * gStatStageRatios[st][0] / gStatStageRatios[st][1];
+     if (f->bm.status1 & STATUS1_PARALYSIS)
+         spd /= 4; // Gen 3 paralysis quarters Speed
++    // Swift Swim in rain, Chlorophyll in sun: x2 (battle_main.c:4606-4613)
++    if ((f->bm.ability == ABILITY_SWIFT_SWIM && (sB.weather & B_WEATHER_RAIN))
++     || (f->bm.ability == ABILITY_CHLOROPHYLL && (sB.weather & B_WEATHER_SUN)))
++        spd *= 2;
+     return spd;
+ }
+ 
+@@ -954,6 +958,9 @@ static void ApplyHit(struct Attack *a, bool8 last)
+     }
+     if (a->move == MOVE_STRUGGLE && me)
+         Moves_DamageFighter(a->side, dmg / 4 ? dmg / 4 : 1, "IS HIT WITH RECOIL!");
++    // POC-13: the defender's contact abilities hit back (Gen 3 ABILITYEFFECT_MOVE_END, battle_util.c:2767-2860)
++    if (me && dmg > 0 && (m->flags & FLAG_MAKES_CONTACT))
++        Field_ContactAbility(defSide, a->side);
+ 
+     if (def->bm.hp == 0)
+         return;
+@@ -2253,6 +2260,11 @@ bool8 Field_CanAct(u8 side, bool8 announce)
+         if (announce) SayFighter(f, "IS FAST ASLEEP.", 40);
+         return FALSE;
+     }
++    if (f->truantLoaf)
++    {
++        if (announce) SayFighter(f, "IS LOAFING AROUND!", 40);   // Truant (BattleScript_TruantLoafingAround)
++        return FALSE;
++    }
+     if (f->bm.status1 & STATUS1_FREEZE)
+     {
+         if (announce) SayFighter(f, "IS FROZEN SOLID!", 40);
+-- 
+2.43.0
+

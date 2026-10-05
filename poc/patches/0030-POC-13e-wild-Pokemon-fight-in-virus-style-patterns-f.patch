@@ -1,0 +1,451 @@
+From 5022c7be98dcdb3491359889384c081175349ac3 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 01:09:26 +0300
+Subject: [PATCH 30/32] POC-13e: wild Pokemon fight in virus-style patterns
+ from their base stats; double battles (double trainers, two trainers) on the
+ grid
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |   3 +
+ src/pkbn/battle_stub.c       |  14 ++-
+ src/pkbn/busting.c           |   9 +-
+ src/pkbn/grid_battle.c       | 202 ++++++++++++++++++++++++++++++++---
+ src/pkbn/grid_draw.c         |   8 +-
+ src/pkbn/post_battle.c       |  16 ++-
+ src/pkbn/selftest.c          |   6 ++
+ 7 files changed, 238 insertions(+), 20 deletions(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 8deb23f..aa9d707 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -119,6 +119,7 @@ struct Fighter
+     bool8 recharge;      // review: can't pick chips at the next Custom
+     bool8 fakeOutReady;  // Fake Out only works right after coming in
+     bool8 truantLoaf;    // Truant: this turn it loafs around (POC-13)
++    u8 style;            // wild Pokémon's virus-style pattern (POC-13, STYLE_*); 0 = the old random pattern
+     u8 rolloutCount, furyCount;
+     u16 bideFrames;
+     u16 bideDamage;
+@@ -263,6 +264,7 @@ struct GridBattle
+     u8 foeCount;
+     u8 cur;
+     u8 foeSlot[MAX_FOES];      // gEnemyParty index of each foe
++    u8 enemyUsed;              // gEnemyParty slots that have come out (double battles, POC-13)
+     bool8 foeDown[MAX_FOES];   // fainted and handled (EXP given)
+     u16 foeAi[MAX_FOES][2];    // aiStepTimer / aiAttackTimer of the foes that aren't selected
+     // trainer battles
+@@ -288,6 +290,7 @@ struct GridBattle
+ #define COMBO_PANEL  (1 << 2)  // follow-up changes the target's panel by type
+ 
+ enum { INVULN_NONE, INVULN_AIR, INVULN_UNDERGROUND, INVULN_UNDERWATER };
++enum { STYLE_NONE, STYLE_BALANCED, STYLE_HARASSER, STYLE_BRUISER, STYLE_SNIPER, STYLE_TURRET, STYLE_COUNT };
+ enum { PH_CHARGE, PH_WAIT, PH_TRAVEL, PH_GAP, PH_UNDERGROUND }; // struct Attack phases
+ 
+ extern struct GridBattle sB;
+diff --git a/src/pkbn/battle_stub.c b/src/pkbn/battle_stub.c
+index 905e6b7..46606b7 100644
+--- a/src/pkbn/battle_stub.c
++++ b/src/pkbn/battle_stub.c
+@@ -64,8 +64,12 @@ bool8 PkbnBattle_ShouldHandle(void)
+         return FALSE;
+     if (gBattleTypeFlags == 0)
+         return TRUE;
+-    return GetMode() == PKBN_MODE_GRID && gBattleTypeFlags == BATTLE_TYPE_TRAINER
+-        && gTrainerBattleOpponent_A != TRAINER_SECRET_BASE && !gTrainers[gTrainerBattleOpponent_A].doubleBattle;
++    // POC-13: double battles too - a double-battle trainer (gTrainers[].doubleBattle) and two trainers at once
++    // (BattleSetup_StartTrainerBattle sets DOUBLE | TWO_OPPONENTS | TRAINER, battle_setup.c:1319). Both foes stand on
++    // the grid at once. Multi battles (an in-game partner) stay vanilla.
++    return GetMode() == PKBN_MODE_GRID && gTrainerBattleOpponent_A != TRAINER_SECRET_BASE
++        && (gBattleTypeFlags == BATTLE_TYPE_TRAINER
++            || gBattleTypeFlags == (BATTLE_TYPE_TRAINER | BATTLE_TYPE_DOUBLE | BATTLE_TYPE_TWO_OPPONENTS));
+ }
+ 
+ MainCallback PkbnBattle_GetEntryCallback(void)
+@@ -148,7 +152,11 @@ void PkbnContract_Enter(void)
+     // Trainer battles: the enemy party is built when the battle starts (CB2_InitBattleInternal,
+     // battle_main.c:697), not by the overworld.
+     if (gBattleTypeFlags & BATTLE_TYPE_TRAINER)
+-        CreateNPCTrainerParty(&gEnemyParty[0], gTrainerBattleOpponent_A, TRUE);
++    {
++        CreateNPCTrainerParty(&gEnemyParty[0], gTrainerBattleOpponent_A, TRUE);   // ORs in .doubleBattle (DOUBLE)
++        if (gBattleTypeFlags & BATTLE_TYPE_TWO_OPPONENTS)
++            CreateNPCTrainerParty(&gEnemyParty[PARTY_SIZE / 2], gTrainerBattleOpponent_B, FALSE);   // battle_main.c:697-699
++    }
+ 
+     // Pokédex "seen" for the first opponent (battle_script_commands.c:4707); later ones are
+     // marked when they come out.
+diff --git a/src/pkbn/busting.c b/src/pkbn/busting.c
+index 79a10a7..63fa519 100644
+--- a/src/pkbn/busting.c
++++ b/src/pkbn/busting.c
+@@ -309,7 +309,14 @@ void Busting_Reward(u8 level, char *msg, u32 size)
+ 
+     // BN6 picks a random enemy of the battle (asm/asm29.s:10960-10971); a wild pack too (POC-11)
+     if ((sB.trainer || sB.foeCount > 1) && sB.enemyCount)
+-        slot = Random() % sB.enemyCount;
++    {
++        s32 tries = 8;
++        do
++            slot = Random() % sB.enemyCount;   // two trainers leave gaps in gEnemyParty: skip them
++        while (GetMonData(&gEnemyParty[slot], MON_DATA_SPECIES) == SPECIES_NONE && --tries);
++        if (GetMonData(&gEnemyParty[slot], MON_DATA_SPECIES) == SPECIES_NONE)
++            slot = 0;
++    }
+     enemy = &gEnemyParty[slot];
+     lvl = GetMonData(enemy, MON_DATA_LEVEL);
+     PickMoves(enemy, &m1, &m2);
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index f5c4248..1749403 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -412,6 +412,74 @@ static void LoadPartyMember(u8 slot, struct Pokemon *mon)
+                  pm->navi.bug[4], pm->navi.bug[1], pm->navi.bug[3], pm->navi.bug[11], pm->navi.bug[12]);
+ }
+ 
++// ---- Wild Pokémon patterns (POC-13, our design - TUNE) ----------------------------------------------------------
++// BN viruses each have a pattern: Mettaurs track your row, Canodumbs sit at the back and fire. A wild Pokémon gets one
++// from its own base stats (gSpeciesInfo):
++//   HARASSER  fast (Speed is its best stat, or 90+): hugs the front column on your row, steps and attacks often,
++//             dodges more, likes priority moves
++//   BRUISER   physical hitter (Attack is its best stat): walks to the front on your row, likes swords and dashes
++//   SNIPER    special hitter (Sp. Atk is its best stat): middle column on your row, likes cannons, waves and balls
++//   TURRET    slow and bulky (Speed 45 or less, HP/Def/SpDef 80+): back column, rarely moves, likes bombs and
++//             attacks that land wherever you stand; dodges less
++//   BALANCED  the rest: wanders like before, one panel at a time
++static u8 StyleOf(u16 species)
++{
++    const struct SpeciesInfo *s = &gSpeciesInfo[species];
++    u8 best = s->baseAttack;
++    if (s->baseSpAttack > best) best = s->baseSpAttack;
++    if (s->baseSpeed >= 90 || (s->baseSpeed > best && s->baseSpeed >= s->baseDefense))
++        return STYLE_HARASSER;
++    if (s->baseSpeed <= 45 && (s->baseHP >= 80 || s->baseDefense >= 80 || s->baseSpDefense >= 80))
++        return STYLE_TURRET;
++    if (s->baseAttack >= s->baseSpAttack + 10)
++        return STYLE_BRUISER;
++    if (s->baseSpAttack >= s->baseAttack + 10)
++        return STYLE_SNIPER;
++    return STYLE_BALANCED;
++}
++
++static const char *const sStyleNames[STYLE_COUNT] = { "-", "BALANCED", "HARASSER", "BRUISER", "SNIPER", "TURRET" };
++// per style: step interval %, attack interval %, dodge %
++static const u8 sStyleStep[STYLE_COUNT]   = { 100, 100,  55,  80, 100, 250 };
++static const u8 sStyleAttack[STYLE_COUNT] = { 100, 100,  80, 100, 100, 110 };
++static const u8 sStyleDodge[STYLE_COUNT]  = { 100, 100, 130, 100, 100,  50 };
++
++static bool8 StyleLikes(u8 style, u16 move)
++{
++    u8 k = Moves_KindOf(move);
++    switch (style)
++    {
++    case STYLE_HARASSER: return gBattleMoves[move].priority > 0 || k == GK_DASH || k == GK_SWORD;
++    case STYLE_BRUISER:  return k == GK_SWORD || k == GK_LONGSWORD || k == GK_WIDESWORD || k == GK_LIFESWORD || k == GK_DASH
++                             || k == GK_LINE3 || k == GK_CONE;
++    case STYLE_SNIPER:   return k == GK_CANNON || k == GK_AIRSHOT || k == GK_VULCAN || k == GK_SPREADER || k == GK_WAVE
++                             || k == GK_SHOCKWAVE || k == GK_BALL;
++    case STYLE_TURRET:   return k == GK_BOMB || k == GK_FIREHIT || k == GK_GOLEMHIT || k == GK_METEORS || k == GK_LOCKON
++                             || k == GK_FIELD || Moves_IsPositionFree(k);
++    }
++    return FALSE;
++}
++
++// One step of the pattern: toward the style's column and (most styles) the player's row; 1 in 4 a random step.
++static void StyleStep(struct Fighter *e)
++{
++    static const s8 sCol[STYLE_COUNT] = { 0, 4, 3, 3, 4, 5 };
++    const struct Fighter *p = &sB.f[SIDE_PLAYER];
++    s8 gx = sCol[e->style], gy = (e->style == STYLE_TURRET || e->style == STYLE_BALANCED) ? (s8)(Random() % GRID_ROWS) : p->y;
++    s8 nx = e->x, ny = e->y;
++    if (e->style == STYLE_BALANCED || Random() % 4 == 0)
++    {
++        gx = PLAYER_COLS + Random() % (GRID_COLS - PLAYER_COLS);
++        gy = Random() % GRID_ROWS;
++    }
++    if (gy != e->y && Field_CanStand(SIDE_ENEMY, e->x, e->y + (gy > e->y ? 1 : -1)))
++        ny = e->y + (gy > e->y ? 1 : -1);
++    else if (gx != e->x && Field_CanStand(SIDE_ENEMY, e->x + (gx > e->x ? 1 : -1), e->y))
++        nx = e->x + (gx > e->x ? 1 : -1);
++    if (nx != e->x || ny != e->y)
++        Field_Step(SIDE_ENEMY, nx, ny);
++}
++
+ static void LoadEnemy(struct Pokemon *mon)
+ {
+     struct Fighter *f = &sB.f[SIDE_ENEMY];
+@@ -424,6 +492,9 @@ static void LoadEnemy(struct Pokemon *mon)
+     Gfx_LoadMonPic(&f->pic, f->bm.species, f->bm.personality, f->bm.otId);
+     Field_ResetFighterConditions(f);
+     memset(&f->navi, 0, sizeof(f->navi));
++    f->style = (!sB.trainer && getenv("PKBN_NO_STYLES") == NULL) ? StyleOf(f->bm.species) : STYLE_NONE;
++    if (f->style)
++        PKBN_LOG("%s fights as a %s", f->name, sStyleNames[f->style]);
+     if (sB.rivalTier)
+     {
+         // a rival's Pokémon run NaviCust programs (src/pkbn/rival.c)
+@@ -701,7 +772,28 @@ static void Begin(void)
+     sB.aiStepTimer = ENEMY_STEP_MIN;
+     sB.aiAttackTimer = 120;
+     sB.foeCount = 1;
+-    if (!sB.trainer && sB.enemyCount > 1)
++    sB.enemyUsed = 1;
++    if (sB.trainer && (gBattleTypeFlags & BATTLE_TYPE_DOUBLE))
++    {
++        // POC-13 double battles: both of the trainer's first two (or each trainer's first) on the grid at once
++        u8 second = (gBattleTypeFlags & BATTLE_TYPE_TWO_OPPONENTS) ? PARTY_SIZE / 2 : 1;
++        if (GetMonData(&gEnemyParty[second], MON_DATA_SPECIES) != SPECIES_NONE)
++        {
++            sB.foes[0] = sB.f[SIDE_ENEMY];
++            LoadEnemy(&gEnemyParty[second]);
++            sB.f[SIDE_ENEMY].x = 5;
++            sB.f[SIDE_ENEMY].y = 0;
++            sB.foes[1] = sB.f[SIDE_ENEMY];
++            sB.foeSlot[1] = second;
++            sB.foeAi[1][0] = ENEMY_STEP_MIN + 17;
++            sB.foeAi[1][1] = 170;
++            sB.foeCount = 2;
++            sB.enemyUsed |= 1 << second;
++            sB.f[SIDE_ENEMY] = sB.foes[0];
++            PKBN_LOG("double battle: slots 0 and %u out", second);
++        }
++    }
++    else if (!sB.trainer && sB.enemyCount > 1)
+     {
+         // the rest of the pack: back corners, attacks staggered (TUNE)
+         static const s8 sPos[MAX_FOES][2] = { {4, 1}, {5, 0}, {5, 2} };
+@@ -720,7 +812,15 @@ static void Begin(void)
+         sB.f[SIDE_ENEMY] = sB.foes[0];
+         PKBN_LOG("wild pack: %u Pokemon", sB.foeCount);
+     }
+-    if (sB.trainer)
++    if (sB.trainer && (gBattleTypeFlags & BATTLE_TYPE_TWO_OPPONENTS))
++    {
++        char a[16], b[16];
++        Pkbn_GameStringToAscii(a, gTrainers[gTrainerBattleOpponent_A].trainerName, sizeof(a));
++        Pkbn_GameStringToAscii(b, gTrainers[gTrainerBattleOpponent_B].trainerName, sizeof(b));
++        // sText_TwoTrainersWantToBattle (battle_message.c:1378), without the classes to fit
++        snprintf(sB.banner, sizeof(sB.banner), "%s AND %s WANT TO BATTLE!", a, b);
++    }
++    else if (sB.trainer)
+     {
+         char cls[16], nm[16];
+         Pkbn_GameStringToAscii(cls, gTrainerClassNames[gTrainers[gTrainerBattleOpponent_A].trainerClass], sizeof(cls));
+@@ -788,7 +888,8 @@ static u16 EnemyAttackInterval(void)
+     u32 spd = Moves_EffectiveSpeed(&sB.f[SIDE_ENEMY]);
+     if (spd > 100)
+         spd = 100;
+-    return (150 - spd / 2 + (Random() % 40)) * (20 - sB.rivalTier) / 20; // TUNE: faster Pokémon attack more often; rivals -5%/tier
++    return (150 - spd / 2 + (Random() % 40)) * (20 - sB.rivalTier) / 20      // TUNE: faster Pokémon attack more often; rivals -5%/tier
++         * sStyleAttack[sB.f[SIDE_ENEMY].style] / 100;                         // wild patterns (POC-13)
+ }
+ 
+ // ---- Per-state update -----------------------------------------------------------------
+@@ -1331,6 +1432,19 @@ static bool8 PickEnemyMove(u8 *outSlot)
+         *outSlot = top[Random() % nt];
+         return TRUE;
+     }
++    if (e->style)
++    {
++        // wild patterns (POC-13): 2 times in 3 a move that suits the style, when it has one
++        u8 liked[MAX_MON_MOVES], nl = 0;
++        for (i = 0; i < n; i++)
++            if (StyleLikes(e->style, e->bm.moves[options[i]]))
++                liked[nl++] = options[i];
++        if (nl && Random() % 3 != 0)
++        {
++            *outSlot = liked[Random() % nl];
++            return TRUE;
++        }
++    }
+     *outSlot = options[Random() % n];
+     return TRUE;
+ }
+@@ -1385,6 +1499,7 @@ static void EnemyDodge(void)
+     sp = Moves_EffectiveSpeed(p);
+     chance = 100 * se / (se + sp + 1);
+     chance = chance * (e->bm.statStages[STAT_EVASION] + 2) / (DEFAULT_STAT_STAGE + 2);
++    chance = chance * sStyleDodge[e->style] / 100;   // wild patterns (POC-13)
+     if (chance < 10) chance = 10;
+     if (chance > 85) chance = 85;
+     if ((s32)(Random() % 100) >= chance)
+@@ -1431,18 +1546,26 @@ static void UpdateOneEnemy(void)
+ 
+     if (sB.aiStepTimer && --sB.aiStepTimer == 0 && !e->hold)
+     {
+-        s32 tries = 6;
+-        while (tries--)
++        if (e->style)
+         {
+-            s8 x = PLAYER_COLS + (Random() % (GRID_COLS - PLAYER_COLS));
+-            s8 y = Random() % GRID_ROWS;
+-            if (Field_CanStand(SIDE_ENEMY, x, y))
++            StyleStep(e);
++            sB.aiStepTimer = (ENEMY_STEP_MIN + (Random() % ENEMY_STEP_RAND)) * sStyleStep[e->style] / 100;
++        }
++        else
++        {
++            s32 tries = 6;
++            while (tries--)
+             {
+-                Field_Step(SIDE_ENEMY, x, y);
+-                break;
++                s8 x = PLAYER_COLS + (Random() % (GRID_COLS - PLAYER_COLS));
++                s8 y = Random() % GRID_ROWS;
++                if (Field_CanStand(SIDE_ENEMY, x, y))
++                {
++                    Field_Step(SIDE_ENEMY, x, y);
++                    break;
++                }
+             }
++            sB.aiStepTimer = ENEMY_STEP_MIN + (Random() % ENEMY_STEP_RAND);
+         }
+-        sB.aiStepTimer = ENEMY_STEP_MIN + (Random() % ENEMY_STEP_RAND);
+         if (e->bm.status1 & STATUS1_PARALYSIS)
+             sB.aiStepTimer *= 4; // Gen 3 paralysis quarters Speed
+     }
+@@ -1589,6 +1712,59 @@ static void UpdateThrow(void)
+     sB.state = ST_FIGHT;
+ }
+ 
++// Double battles (POC-13): the trainer whose Pokémon fainted sends out their next one into that spot (two trainers:
++// each from their own half of gEnemyParty, as CreateNPCTrainerParty laid them out). FALSE if they have none left.
++static bool8 SendOutReplacement(u8 k)
++{
++    u8 from = 0, to = PARTY_SIZE, i;
++    char nm[16], mon[16];
++    u16 trainer = gTrainerBattleOpponent_A;
++    if (gBattleTypeFlags & BATTLE_TYPE_TWO_OPPONENTS)
++    {
++        if (sB.foeSlot[k] >= PARTY_SIZE / 2)
++            from = PARTY_SIZE / 2, trainer = gTrainerBattleOpponent_B;
++        else
++            to = PARTY_SIZE / 2;
++    }
++    for (i = from; i < to; i++)
++        if (!(sB.enemyUsed & (1 << i)) && GetMonData(&gEnemyParty[i], MON_DATA_SPECIES) != SPECIES_NONE
++         && GetMonData(&gEnemyParty[i], MON_DATA_HP) > 0)
++            break;
++    if (i >= to)
++        return FALSE;
++    {
++        s8 x = sB.f[SIDE_ENEMY].x, y = sB.f[SIDE_ENEMY].y;
++        LoadEnemy(&gEnemyParty[i]);
++        sB.f[SIDE_ENEMY].x = x;
++        sB.f[SIDE_ENEMY].y = y;
++        if (!Field_CanStand(SIDE_ENEMY, x, y))
++        {
++            s32 r, c;
++            for (r = 0; r < GRID_ROWS; r++)
++                for (c = PLAYER_COLS; c < GRID_COLS; c++)
++                    if (Field_CanStand(SIDE_ENEMY, c, r))
++                        sB.f[SIDE_ENEMY].x = c, sB.f[SIDE_ENEMY].y = r;
++        }
++    }
++    sB.foeSlot[k] = i;
++    sB.enemySlot = i;
++    sB.foeDown[k] = FALSE;
++    sB.enemyUsed |= 1 << i;
++    sB.aiAttackTimer = 90;
++    sB.f[SIDE_ENEMY].iframes = SWITCH_IFRAMES;
++    Field_OnEntry(SIDE_ENEMY);
++    Pkbn_GameStringToAscii(nm, gTrainers[trainer].trainerName, sizeof(nm));
++    Pkbn_GameStringToAscii(mon, gSpeciesNames[sB.f[SIDE_ENEMY].bm.species], sizeof(mon));
++    {
++        char line[40];
++        snprintf(line, sizeof(line), "%s SENT OUT %s!", nm, mon);
++        SetMsg(line, 70);
++        PKBN_LOG("%s", line);
++    }
++    PlaySE(SE_FAINT);
++    return TRUE;
++}
++
+ // A pack (POC-11): each foe that goes down gives its EXP at once; the battle is won when the last one falls.
+ static bool8 CheckPackFaints(void)
+ {
+@@ -1609,8 +1785,10 @@ static bool8 CheckPackFaints(void)
+         for (i = 0; i < MAX_ATTACKS; i++)   // a deleted virus's attacks go with it (BN)
+             if (sB.attacks[i].active && sB.attacks[i].side == SIDE_ENEMY && sB.attacks[i].foe == k)
+                 sB.attacks[i].active = FALSE;
+-        snprintf(text, sizeof(text), "WILD %s FAINTED!", sB.f[SIDE_ENEMY].name);
++        snprintf(text, sizeof(text), sB.trainer ? "FOE %s FAINTED!" : "WILD %s FAINTED!", sB.f[SIDE_ENEMY].name);
+         PKBN_LOG("pack: %s down, %u left", sB.f[SIDE_ENEMY].name, Foe_LiveCount());
++        if (sB.trainer && SendOutReplacement(k))
++            continue;
+         if (Foe_LiveCount() == 0)
+         {
+             EndBattle(B_OUTCOME_WON, text);
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 1a21c17..724c8b2 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -585,11 +585,15 @@ static void DrawEnemyHud(u16 *fb)
+     {
+         // the trainer's remaining Pokémon
+         s32 i;
++        s32 n = 0;
+         for (i = 0; i < sB.enemyCount; i++)
+         {
+             bool8 alive = GetMonData(&gEnemyParty[i], MON_DATA_HP) > 0 || (i == sB.enemySlot && f->bm.hp);
+-            Pkbn_FillRect(fb, CW - 8 - i * 7, 21, 5, 5, COL_BLACK);
+-            Pkbn_FillRect(fb, CW - 7 - i * 7, 22, 3, 3, alive ? RGB(31, 8, 8) : RGB(10, 10, 12));
++            if (GetMonData(&gEnemyParty[i], MON_DATA_SPECIES) == SPECIES_NONE)
++                continue;   // two trainers: the gap between their halves (POC-13)
++            Pkbn_FillRect(fb, CW - 8 - n * 7, 21, 5, 5, COL_BLACK);
++            Pkbn_FillRect(fb, CW - 7 - n * 7, 22, 3, 3, alive ? RGB(31, 8, 8) : RGB(10, 10, 12));
++            n++;
+         }
+     }
+ }
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index 46719fe..dbbaabd 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -242,10 +242,22 @@ static u8 TrainerLoseText(char *dst, u32 size)
+     return dst[0] != '\0';
+ }
+ 
+-// GetTrainerMoneyToGive (battle_script_commands.c:5598), single trainer.
++// GetTrainerMoneyToGive (battle_script_commands.c:5598): x2 for a double battle against one trainer; two trainers
++// each pay their own (Cmd_getmoneyreward, :5654).
++static u32 TrainerMoneyOf(u16 trainerId);
+ static u32 TrainerMoney(void)
+ {
+-    const struct Trainer *t = &gTrainers[gTrainerBattleOpponent_A];
++    u32 m = TrainerMoneyOf(gTrainerBattleOpponent_A);
++    if (gBattleTypeFlags & BATTLE_TYPE_TWO_OPPONENTS)
++        m += TrainerMoneyOf(gTrainerBattleOpponent_B);
++    else if (gBattleTypeFlags & BATTLE_TYPE_DOUBLE)
++        m *= 2;
++    return m;
++}
++
++static u32 TrainerMoneyOf(u16 trainerId)
++{
++    const struct Trainer *t = &gTrainers[trainerId];
+     u32 lastMonLevel = 0, i, j, cls, multiplier = 1;
+     switch (t->partyFlags)
+     {
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index e4f9f41..d044806 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -491,6 +491,12 @@ void Pkbn_SelfTestMaybeStart(void)
+     {
+         gBattleTypeFlags = BATTLE_TYPE_TRAINER;
+         gTrainerBattleOpponent_A = (u16)atoi(getenv("PKBN_TEST_TRAINER"));
++        // PKBN_TEST_TRAINER_B=id: two trainers at once (POC-13 doubles)
++        if (getenv("PKBN_TEST_TRAINER_B") != NULL)
++        {
++            gBattleTypeFlags = BATTLE_TYPE_TRAINER | BATTLE_TYPE_DOUBLE | BATTLE_TYPE_TWO_OPPONENTS;
++            gTrainerBattleOpponent_B = (u16)atoi(getenv("PKBN_TEST_TRAINER_B"));
++        }
+     }
+     gMain.savedCallback = CB2_SelfTestDone;
+     PkbnSave_Reset();
+-- 
+2.43.0
+

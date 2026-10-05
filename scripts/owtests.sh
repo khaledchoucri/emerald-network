@@ -52,3 +52,10 @@ bt shiny_catch "283:14:33/45,288:5:33/45" "IT'S SHINY! GOT 2 \* CHIPS" PKBN_TEST
 # the folder used up with nothing usable in hand -> a Struggle chip (status-only 18-chip folder vs Wailmer)
 bt struggle "283:14:45/193/300/182,313:20:150" "folder used up: STRUGGLE chip" PKBN_TEST_PACK_LEARNED=1 \
     PKBN_TEST_PACK="45:A:5,193:A:5,300:A:5,182:A:5,156:A:5,104:A:5"
+# POC-13: rain on the map is rain in battle (Route 120, field weather set to rain)
+run weather_rain 0:35:10:10 "W200,V3,W30,G288:20,W200,Q" "battle weather 5 (permanent)" PKBN_OW_AUTOBATTLE=1
+# (species / move numbers: Swampert, Tyranitar, Manectric...)
+# POC-13: a switch-in ability (Tyranitar's Sand Stream) and a double battle against two trainers
+bt sand_stream "285:50:57/89,248:40:242/157" "WHIPPED UP A SANDSTORM"
+bt two_trainers "285:50:57/89/58/182|338:45:209/85/44/98,288:3:45" \
+    "SENT OUT MACHOKE" PKBN_BOT=smart PKBN_TEST_TRAINER=29 PKBN_TEST_TRAINER_B=30

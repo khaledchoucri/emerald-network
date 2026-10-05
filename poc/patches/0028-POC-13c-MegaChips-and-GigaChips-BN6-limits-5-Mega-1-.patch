@@ -1,0 +1,223 @@
+From f65104378a095dd72d116dbe2a2221ce345c01bc Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 01:01:13 +0300
+Subject: [PATCH 28/32] POC-13c: MegaChips and GigaChips (BN6 limits: 5 Mega, 1
+ Giga, 1 of each)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/chip_pack.h |  6 +++-
+ src/pkbn/folder.c        | 62 ++++++++++++++++++++++++++++++++++++++--
+ src/pkbn/folder_ui.c     | 27 +++++++++++++++++
+ src/pkbn/grid_draw.c     | 18 ++++++++++++
+ 4 files changed, 109 insertions(+), 4 deletions(-)
+
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index 69117ca..131aede 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -50,7 +50,11 @@ void PkbnCandy_Add(u8 type, s32 n);
+ 
+ // Chips (src/pkbn/folder.c)
+ u8 Chip_MB(u16 move);
+-u8 Chip_CopyCap(u16 move);                 // BN6: <=19 MB -> 5, 20-29 -> 4, 30-39 -> 3, 40-49 -> 2, else 1
++u8 Chip_CopyCap(u16 move);                 // Mega / Giga chips: 1 (POC-13)
++enum { CHIP_STANDARD, CHIP_MEGA, CHIP_GIGA };
++u8 Chip_Class(u16 move);
++u8 Chip_ClassMax(u8 cls);                    // 5 MegaChips, 1 GigaChip (BN6 MegaMan)
++bool8 Chip_ClassFits(const u16 *moves, u8 n, u16 mv);                 // BN6: <=19 MB -> 5, 20-29 -> 4, 30-39 -> 3, 40-49 -> 2, else 1
+ bool8 Chip_SpeciesCanLearn(u16 species, u16 move);
+ bool8 Chip_CanUse(const struct BattlePokemon *bm, u16 move);   // can learn it, or knows it
+ u8 Chip_FolderSize(u8 partyCount);         // 30 + 2 per extra Pokémon (design 08 §11.1)
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index a36dbc8..1487df4 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -42,12 +42,67 @@ u8 Chip_MB(u16 move)
+     return move < MOVES_COUNT ? gPkbnMoveMB[move] : 99;
+ }
+ 
++// BN6 chip classes (POC-13). BN6 MegaMan starts with room for 5 MegaChips and 1 GigaChip (byte_80210DD +6/+7,
++// bn6f data/dat01.s:295, read by init_8013B64, asm/asm00_2.s:10942-10945) and allows "only 1 of the same MegaChip /
++// GigaChip" (CompText86CF1A8 unk4/unk5). Which moves are Mega or Giga is our design (TUNE): Giga = the legendaries'
++// signature moves; Mega = damaging moves of 36 MB or more (power 120+) and the one-hit KO moves.
++u8 Chip_Class(u16 move)
++{
++    switch (move)
++    {
++    case MOVE_SACRED_FIRE: case MOVE_AEROBLAST: case MOVE_MIST_BALL: case MOVE_LUSTER_PURGE:
++    case MOVE_DOOM_DESIRE: case MOVE_PSYCHO_BOOST:
++        return CHIP_GIGA;
++    }
++    if (gBattleMoves[move].effect == EFFECT_OHKO || (gBattleMoves[move].power > 1 && Chip_MB(move) >= 36))
++        return CHIP_MEGA;
++    return CHIP_STANDARD;
++}
++
++u8 Chip_ClassMax(u8 cls)
++{
++    return cls == CHIP_GIGA ? 1 : cls == CHIP_MEGA ? 5 : 0xFF;
++}
++
++// Can `mv` join a folder holding moves[0..n)? Only the class rule: room for another distinct Mega / Giga chip.
++bool8 Chip_ClassFits(const u16 *moves, u8 n, u16 mv)
++{
++    u8 cls = Chip_Class(mv), distinct = 0;
++    s32 i, j;
++    if (cls == CHIP_STANDARD)
++        return TRUE;
++    for (i = 0; i < n; i++)
++    {
++        if (moves[i] == mv)
++            return TRUE;   // already counted (the copy cap of 1 handles the rest)
++        if (Chip_Class(moves[i]) != cls)
++            continue;
++        for (j = 0; j < i; j++)
++            if (moves[j] == moves[i])
++                break;
++        if (j == i)
++            distinct++;
++    }
++    return distinct < Chip_ClassMax(cls);
++}
++
+ u8 Chip_CopyCap(u16 move)
+ {
+     u8 mb = Chip_MB(move); // BN6 sub_8135500 (bn6f asm/asm36.s:10634)
++    if (Chip_Class(move) != CHIP_STANDARD)
++        return 1;          // "only 1 of the same MegaChip / GigaChip"
+     return mb <= 19 ? 5 : mb <= 29 ? 4 : mb <= 39 ? 3 : mb <= 49 ? 2 : 1;
+ }
+ 
++static bool8 FolderClassFits(const struct Folder *folder, u16 mv)
++{
++    u16 moves[FOLDER_MAX];
++    s32 i;
++    for (i = 0; i < folder->count; i++)
++        moves[i] = folder->chips[i].move;
++    return Chip_ClassFits(moves, folder->count, mv);
++}
++
+ bool8 Chip_SpeciesCanLearn(u16 species, u16 move)
+ {
+     if (species == SPECIES_NONE || species >= NUM_SPECIES || move == MOVE_NONE || move >= MOVES_COUNT)
+@@ -188,7 +243,8 @@ void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party,
+                 for (p = 0; p < partyCount; p++)
+                     if (Chip_CanUse(&party[p], em[i]))
+                         break;
+-                if (p == partyCount || same >= Chip_CopyCap(em[i]) || sameCode >= PkbnPack_Get(em[i], el[i]))
++                if (p == partyCount || same >= Chip_CopyCap(em[i]) || sameCode >= PkbnPack_Get(em[i], el[i])
++                 || !FolderClassFits(folder, em[i]))
+                     continue;
+                 folder->chips[folder->count].move = em[i];
+                 folder->chips[folder->count].letter = el[i];
+@@ -220,7 +276,7 @@ void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party,
+         {
+             u32 v = 0;
+             mv = cand[i];
+-            if (used[mv] >= Chip_CopyCap(mv) || used[mv] >= PkbnPack_Total(mv))
++            if (used[mv] >= Chip_CopyCap(mv) || used[mv] >= PkbnPack_Total(mv) || !FolderClassFits(folder, mv))
+                 continue;
+             for (p = 0; p < partyCount; p++)
+                 if (Chip_CanUse(&party[p], mv))
+@@ -250,7 +306,7 @@ void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party,
+             ch->slot = 0;
+         }
+         used[mv]++;
+-        for (p = 0; p < partyCount; p++)
++        for (p = 0; p < partyCount && p < PKBN_PARTY_MAX; p++)
+             if (Chip_CanUse(&party[p], mv))
+                 usable[p]++;
+     }
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index ff5098d..5c65261 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -521,6 +521,25 @@ static void DrawList(u16 *fb)
+         }
+         Text(fb, LIST_X + 96, LIST_Y - 14, qtyHead[sF.page], RGB(12, 14, 20));
+         Text(fb, PANEL_X - 8 - Pkbn_EmTextWidth("LIMIT", PKBN_FONT_SMALL), LIST_Y - 14, "LIMIT", RGB(12, 14, 20));
++        if (sF.page == PAGE_FOLDER)
++        {
++            // POC-13: Mega / Giga chips in the folder against BN6's 5 / 1
++            char cl[24];
++            u8 mega = 0, giga = 0, j, k;
++            for (j = 0; j < sF.fCount; j++)
++            {
++                for (k = 0; k < j && sF.fMove[k] != sF.fMove[j]; k++)
++                    ;
++                if (k < j)
++                    continue;
++                mega += Chip_Class(sF.fMove[j]) == CHIP_MEGA;
++                giga += Chip_Class(sF.fMove[j]) == CHIP_GIGA;
++            }
++            snprintf(cl, sizeof(cl), "MEGA %u/5", mega);
++            Text(fb, LIST_X + 122, LIST_Y - 14, cl, RGB(10, 20, 31));
++            snprintf(cl, sizeof(cl), "GIGA %u/1", giga);
++            Text(fb, LIST_X + 170, LIST_Y - 14, cl, RGB(31, 12, 24));
++        }
+     }
+     for (i = 0; i < LIST_ROWS && *top + i < n; i++)
+     {
+@@ -579,6 +598,10 @@ static void DrawList(u16 *fb)
+             }
+             snprintf(right, sizeof(right), "%u/%u", InFolder(mv, -1), Chip_CopyCap(mv));
+         }
++        if (Chip_Class(mv) == CHIP_MEGA && col == RGB(31, 31, 31))
++            col = RGB(14, 24, 31);   // MegaChips blue, GigaChips pink (BN)
++        else if (Chip_Class(mv) == CHIP_GIGA && col == RGB(31, 31, 31))
++            col = RGB(31, 16, 26);
+         if (row == *cur)
+             Pkbn_FillRect(fb, LIST_X - 1, y - 1, PANEL_X - LIST_X - 4, ROW_H, RGB(8, 14, 28));
+         // small type-coloured chip mark + code letter
+@@ -736,6 +759,10 @@ static void AddToFolder(u16 mv, u8 letter)
+         Note("THE FOLDER IS FULL");
+     else if (InFolder(mv, letter) >= PkbnPack_Get(mv, letter))
+         Note("ALL YOUR COPIES ARE IN ALREADY");
++    else if (Chip_Class(mv) != CHIP_STANDARD && !Chip_ClassFits(sF.fMove, sF.fCount, mv))
++        Note(Chip_Class(mv) == CHIP_GIGA ? "YOU CAN USE ONLY 1 GIGACHIP" : "YOU CAN USE ONLY 5 MEGACHIPS");   // CompText86CF1A8 unk6/7
++    else if (Chip_Class(mv) != CHIP_STANDARD && InFolder(mv, -1) >= 1)
++        Note(Chip_Class(mv) == CHIP_GIGA ? "ONLY 1 OF THE SAME GIGACHIP" : "ONLY 1 OF THE SAME MEGACHIP");  // unk4/5
+     else if (InFolder(mv, -1) >= Chip_CopyCap(mv))
+     {
+         char line[64], nm[MOVE_NAME_LENGTH + 1];
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index eff8ac6..3267468 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -828,6 +828,17 @@ static void DrawChipFace(u16 *fb, const struct FolderChip *ch, s32 x, s32 y, boo
+         BlitIconCropped(fb, sB.party[ch->owner].icon[0], x - 1, y - 2, dim);
+     else
+         DrawChipIcon(fb, x, y + 1, ch->move, dim);
++    if (ch->owner == CHIP_SHARED && Chip_Class(ch->move) != CHIP_STANDARD)
++    {
++        // POC-13: BN's chip colours - MegaChips blue, GigaChips pink - as a frame round the slot
++        u16 c = Chip_Class(ch->move) == CHIP_GIGA ? RGB(31, 12, 24) : RGB(10, 20, 31);
++        if (dim)
++            c = Gfx_Blend(c, COL_BLACK, 8);
++        Pkbn_FillRect(fb, x, y, SLOT_W - 2, 1, c);
++        Pkbn_FillRect(fb, x, y + SLOT_H - 1, SLOT_W - 2, 1, c);
++        Pkbn_FillRect(fb, x, y, 1, SLOT_H, c);
++        Pkbn_FillRect(fb, x + SLOT_W - 3, y, 1, SLOT_H, c);
++    }
+ }
+ 
+ static void DrawSlotFrame(u16 *fb, s32 x, s32 y, s32 w, s32 h, u16 base, bool8 dim)
+@@ -928,6 +939,13 @@ static void DrawChipInfo(u16 *fb)
+         Gfx_Draw(fb, &icon, ART_X, y, 0, 0, 0);
+         ChipName(line, sizeof(line), ch->move);
+         TextBig(fb, ART_X + 35, y - 2, line, COL_WHITE);
++        if (ch->owner == CHIP_SHARED && Chip_Class(ch->move) != CHIP_STANDARD)
++        {
++            bool8 giga = Chip_Class(ch->move) == CHIP_GIGA;
++            s32 tx = ART_X + 35 + Pkbn_EmTextWidth(line, PKBN_FONT_NORMAL) + 4;
++            Draw_Box(fb, tx, y + 1, giga ? 24 : 26, 9, giga ? RGB(24, 6, 18) : RGB(6, 12, 26), giga ? RGB(31, 12, 24) : RGB(10, 20, 31), 16);
++            Text(fb, tx + 2, y - 2, giga ? "GIGA" : "MEGA", COL_WHITE);
++        }
+         if (gBattleMoves[ch->move].power > 1)
+         {
+             snprintf(line, sizeof(line), "%u", gBattleMoves[ch->move].power);
+-- 
+2.43.0
+

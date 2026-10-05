@@ -1,0 +1,47 @@
+From bbccbb3b5424fb204ce4d9064c3d75e39688e803 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 01:42:02 +0300
+Subject: [PATCH 31/32] POC-13f: a kept hand the active Pokemon can't use goes
+ back under the pile; double-battle and ability tests
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/grid_battle.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 1749403..e5b6e8e 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -560,6 +560,27 @@ static void RefillHand(void)
+             else
+                 PkbnFolder_Discard(&sB.folder, sB.hand[i]);
+         }
++    // POC-13: a kept hand that the Pokémon in battle can't use at all goes back under the pile (not discarded - copies
++    // are stamina) and the hand is redrawn. Without it a hand of teammates' chips could stay stuck for the whole battle.
++    if (n > 0 && sB.folder.pileCount > 0 && sB.folder.pileCount + n <= FOLDER_MAX)
++    {
++        bool8 any = FALSE;
++        SyncActiveToParty();
++        for (i = 0; i < n; i++)
++        {
++            const struct FolderChip *c = &sB.folder.chips[keep[i]];
++            if (c->owner != CHIP_SHARED ? PartyAlive(c->owner) : Chip_CanUse(&sB.f[SIDE_PLAYER].bm, c->move))
++                any = TRUE;
++        }
++        if (!any)
++        {
++            memmove(sB.folder.pile + n, sB.folder.pile, sB.folder.pileCount);
++            memcpy(sB.folder.pile, keep, n);   // the bottom: drawn last
++            sB.folder.pileCount += n;
++            PKBN_LOG("hand of %u chips %s can't use: back under the pile", (unsigned)n, sB.f[SIDE_PLAYER].name);
++            n = 0;
++        }
++    }
+     memcpy(sB.hand, keep, n);
+     sB.handCount = n;
+     sB.handSize = HandSizeNow();
+-- 
+2.43.0
+
