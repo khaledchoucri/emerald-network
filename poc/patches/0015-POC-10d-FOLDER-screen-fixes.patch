@@ -1,0 +1,404 @@
+From eaff9e136b6c4597539a4949488d75ad93b5be83 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Mon, 5 Oct 2026 15:46:37 +0300
+Subject: [PATCH] POC-10d: FOLDER screen fixes - grouped rows, copy limits
+ shown, candy unlock rule
+
+- Folder page groups chips (move + code) with a quantity; every page shows each
+  move's copies in the folder against its MB limit (LIMIT column, panel line,
+  clear message when the limit stops an add)
+- Candy shop: a move unlocks at the level the Pokemon learns it (only an
+  evolved form's level-1 moves need the move's MB in level) - a Lv5 Wingull now
+  unlocks Water Gun; moves still to come are listed greyed with their level
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/folder_ui.c | 197 +++++++++++++++++++++++++++++++++----------
+ 1 file changed, 153 insertions(+), 44 deletions(-)
+
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index 14984ec..417bc6c 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -5,8 +5,12 @@
+ //   FOLDER  the chips battles draw from. A: take a chip out. SELECT: auto-build again. B: save and leave.
+ //   PACK    every chip you own. A: put one in the folder. START: use a PP UP on it (+1 copy).
+ //           SELECT: use a PP MAX on it (copies of that move up to its cap).
+-//   CANDY   chips you can buy with type candy: moves of that type a Pokémon you own has reached by level-up
+-//           (and at least the move's MB in level). A: buy (cost MB/4). SELECT: change the code (+2 candy).
++//   CANDY   chips you can buy with type candy: moves of that type a Pokémon you own has reached by level-up.
++//           (An evolved form's level-1 moves - Raichu's Thunderbolt - need the move's MB in level.) Moves your
++//           Pokémon will learn later are listed greyed with the level they need. A: buy (cost MB/4).
++//           SELECT: change the code (+2 candy).
++// Lists are grouped by chip (move + code) with quantities, sorted by type; every row shows the copy limit
++// (BN6: how many copies of one chip a folder may hold, set by its MB).
+ #include "pkbn/grid_vfx.h"   // first: it pulls in <stdlib.h> before global.h's macros
+ #include "global.h"
+ #include "battle_main.h"
+@@ -25,21 +29,23 @@
+ 
+ #ifdef PORTABLE
+ #include <stdio.h>
++extern const struct Evolution gEvolutionTable[][EVOS_PER_MON];
+ #include <string.h>
+ 
+ #define CW PKBN_CANVAS_W
+ #define CH PKBN_CANVAS_H
+ #define RGB PKBN_RGB
+ #define LIST_X 4
+-#define LIST_Y 24
+-#define LIST_ROWS 12
++#define LIST_Y 33
++#define LIST_ROWS 11
+ #define ROW_H 11
+ #define PANEL_X 164
+ 
+ enum { PAGE_FOLDER, PAGE_PACK, PAGE_CANDY, PAGE_COUNT };
+ 
+ struct PackRow { u16 move; u8 letter; };
+-struct CandyRow { u16 move; u8 letter; };
++struct CandyRow { u16 move; u8 letter; u8 needLevel; u16 species; };   // needLevel 0 = buyable now
++struct GroupRow { u16 move; u8 letter; u8 count; };
+ 
+ static struct
+ {
+@@ -55,8 +61,10 @@ static struct
+     u16 partyIcon[PKBN_PARTY_MAX][32 * 32];
+     struct PackRow pack[400];
+     u16 packCount;
+-    struct CandyRow candy[300];
++    struct CandyRow candy[400];
+     u16 candyCount;
++    struct GroupRow groups[FOLDER_MAX];
++    u8 groupCount;
+     char note[64];
+     u16 noteTimer;
+     u32 t;
+@@ -89,6 +97,28 @@ static u8 InFolder(u16 move, s32 letter)   // letter < 0: any code
+     return n;
+ }
+ 
++// The folder as grouped rows: one per chip (move + code) with its count, sorted by type, move, code.
++static void BuildGroups(void)
++{
++    u8 t, l;
++    u16 mv;
++    sF.groupCount = 0;
++    for (t = 0; t < NUMBER_OF_MON_TYPES; t++)
++        for (mv = 1; mv < MOVES_COUNT; mv++)
++            if (gBattleMoves[mv].type == t && InFolder(mv, -1))
++                for (l = 0; l < PACK_LETTERS; l++)
++                {
++                    u8 n = InFolder(mv, l);
++                    if (n)
++                    {
++                        sF.groups[sF.groupCount].move = mv;
++                        sF.groups[sF.groupCount].letter = l;
++                        sF.groups[sF.groupCount].count = n;
++                        sF.groupCount++;
++                    }
++                }
++}
++
+ static bool8 PartyCanUse(u16 move)
+ {
+     s32 p;
+@@ -116,9 +146,14 @@ static void BuildPack(void)
+                     }
+ }
+ 
+-// Candy shop (design 10 §10.1): moves in the level-up learnset of a Pokémon you own, once it has reached
+-// max(the level it learns the move at, the move's MB).
+-static void ConsiderLearnset(u16 species, u8 level, bool8 *ok)
++// Candy shop (design 10 §10.1): moves in the level-up learnset of a Pokémon you own, once it has reached the
++// level it learns them at. Exception: an evolved form's level-1 moves (Raichu's Thunderbolt, Weezing's
++// Self-Destruct) need the move's MB in level, so evolving early doesn't unlock strong chips.
++static bool8 sIsEvolved[NUM_SPECIES];
++static u8 sNeed[MOVES_COUNT];        // lowest level still needed (0 = unlocked), 0xFF = no owned Pokémon learns it
++static u16 sBy[MOVES_COUNT];
++
++static void ConsiderLearnset(u16 species, u8 level)
+ {
+     const u16 *ls;
+     s32 i;
+@@ -129,39 +164,56 @@ static void ConsiderLearnset(u16 species, u8 level, bool8 *ok)
+     {
+         u16 mv = ls[i] & LEVEL_UP_MOVE_ID;
+         u8 lv = ls[i] >> 9;
+-        u8 need = lv > Chip_MB(mv) ? lv : Chip_MB(mv);
+-        if (mv < MOVES_COUNT && level >= need && PkbnFolder_MoveIsChip(mv))
+-            ok[mv] = TRUE;
++        u8 need = lv;
++        u8 missing;
++        if (mv >= MOVES_COUNT || !PkbnFolder_MoveIsChip(mv))
++            continue;
++        if (lv <= 1 && sIsEvolved[species] && Chip_MB(mv) > need)
++            need = Chip_MB(mv);
++        missing = level >= need ? 0 : need;
++        if (sNeed[mv] == 0xFF || missing < sNeed[mv])
++            sNeed[mv] = missing, sBy[mv] = species;
+     }
+ }
+ 
+ static void BuildCandy(void)
+ {
+-    static bool8 ok[MOVES_COUNT];
+-    s32 i, j;
++    s32 i, j, k, pass;
+     u16 mv;
+     u8 t;
+-    memset(ok, 0, sizeof(ok));
++    memset(sIsEvolved, 0, sizeof(sIsEvolved));
++    for (i = 1; i < NUM_SPECIES; i++)
++        for (k = 0; k < EVOS_PER_MON; k++)
++            if (gEvolutionTable[i][k].targetSpecies && gEvolutionTable[i][k].targetSpecies < NUM_SPECIES)
++                sIsEvolved[gEvolutionTable[i][k].targetSpecies] = TRUE;
++    memset(sNeed, 0xFF, sizeof(sNeed));
+     for (i = 0; i < PARTY_SIZE; i++)
+-        if (!GetMonData(&gPlayerParty[i], MON_DATA_IS_EGG))
+-            ConsiderLearnset(GetMonData(&gPlayerParty[i], MON_DATA_SPECIES), GetMonData(&gPlayerParty[i], MON_DATA_LEVEL), ok);
++        if (GetMonData(&gPlayerParty[i], MON_DATA_SPECIES) && !GetMonData(&gPlayerParty[i], MON_DATA_IS_EGG))
++            ConsiderLearnset(GetMonData(&gPlayerParty[i], MON_DATA_SPECIES), GetMonData(&gPlayerParty[i], MON_DATA_LEVEL));
+     for (i = 0; i < TOTAL_BOXES_COUNT; i++)
+         for (j = 0; j < IN_BOX_COUNT; j++)
+             if (GetBoxMonDataAt(i, j, MON_DATA_SPECIES) && !GetBoxMonDataAt(i, j, MON_DATA_IS_EGG))
+             {
+                 struct BoxPokemon *bm = GetBoxedMonPtr(i, j);
+-                ConsiderLearnset(GetBoxMonData(bm, MON_DATA_SPECIES), GetLevelFromBoxMonExp(bm), ok);
++                ConsiderLearnset(GetBoxMonData(bm, MON_DATA_SPECIES), GetLevelFromBoxMonExp(bm));
+             }
++    // buyable rows first (types you have candy for first), then the locked ones greyed with their level
+     sF.candyCount = 0;
+-    for (j = 0; j < 2; j++)   // types you have candy for first
+-    for (t = 0; t < NUMBER_OF_MON_TYPES; t++)
+-        if ((PkbnCandy_Get(t) > 0) == (j == 0))
+-        for (mv = 1; mv < MOVES_COUNT; mv++)
+-            if (ok[mv] && gBattleMoves[mv].type == t && sF.candyCount < ARRAY_COUNT(sF.candy))
++    for (pass = 0; pass < 3; pass++)
++        for (t = 0; t < NUMBER_OF_MON_TYPES; t++)
++            for (mv = 1; mv < MOVES_COUNT; mv++)
+             {
+-                sF.candy[sF.candyCount].move = mv;
+-                sF.candy[sF.candyCount].letter = gPkbnMoveInfo[mv].lanes[0];
+-                sF.candyCount++;
++                bool8 open = sNeed[mv] == 0, have = PkbnCandy_Get(t) > 0;
++                if (sNeed[mv] == 0xFF || gBattleMoves[mv].type != t || sF.candyCount >= ARRAY_COUNT(sF.candy))
++                    continue;
++                if ((pass == 0 && open && have) || (pass == 1 && open && !have) || (pass == 2 && !open))
++                {
++                    struct CandyRow *r = &sF.candy[sF.candyCount++];
++                    r->move = mv;
++                    r->letter = gPkbnMoveInfo[mv].lanes[0];
++                    r->needLevel = sNeed[mv];
++                    r->species = sBy[mv];
++                }
+             }
+ }
+ 
+@@ -193,13 +245,13 @@ static void LoadFolder(void)
+ 
+ static u8 RowCount(void)
+ {
+-    return sF.page == PAGE_FOLDER ? sF.fCount : sF.page == PAGE_PACK ? sF.packCount : sF.candyCount;
++    return sF.page == PAGE_FOLDER ? sF.groupCount : sF.page == PAGE_PACK ? sF.packCount : sF.candyCount;
+ }
+ 
+ static void RowChip(u8 row, u16 *move, u8 *letter)
+ {
+     if (sF.page == PAGE_FOLDER)
+-        *move = sF.fMove[row], *letter = sF.fLetter[row];
++        *move = sF.groups[row].move, *letter = sF.groups[row].letter;
+     else if (sF.page == PAGE_PACK)
+         *move = sF.pack[row].move, *letter = sF.pack[row].letter;
+     else
+@@ -235,36 +287,59 @@ static void DrawList(u16 *fb)
+     if (*cur >= *top + LIST_ROWS)
+         *top = *cur - LIST_ROWS + 1;
+     Pkbn_FillRect(fb, LIST_X - 2, LIST_Y - 2, PANEL_X - LIST_X - 2, LIST_ROWS * ROW_H + 4, RGB(2, 3, 8));
++    {
++        static const char *const qtyHead[PAGE_COUNT] = { "QTY", "IN/OWN", "CANDY" };
++        Text(fb, LIST_X + 96, LIST_Y - 14, qtyHead[sF.page], RGB(12, 14, 20));
++        Text(fb, PANEL_X - 8 - Pkbn_EmTextWidth("LIMIT", PKBN_FONT_SMALL), LIST_Y - 14, "LIMIT", RGB(12, 14, 20));
++    }
+     for (i = 0; i < LIST_ROWS && *top + i < n; i++)
+     {
+         u8 row = *top + i;
+         u16 mv;
+         u8 letter;
+-        char nm[MOVE_NAME_LENGTH + 1], right[16];
++        char nm[MOVE_NAME_LENGTH + 1], right[16], qty[12];
+         s32 y = LIST_Y + i * ROW_H;
+         bool8 dim = FALSE;
+-        u16 col = RGB(31, 31, 31);
++        u16 col = RGB(31, 31, 31), rcol = RGB(16, 20, 26);
+         RowChip(row, &mv, &letter);
+         MoveName(nm, sizeof(nm), mv);
+         if (sF.page == PAGE_FOLDER)
+         {
++            // "x3" copies of this chip, then this move's copies in the folder against its limit
+             dim = !PartyCanUse(mv);
+-            snprintf(right, sizeof(right), "MB%u", Chip_MB(mv));
++            snprintf(qty, sizeof(qty), "x%u", sF.groups[row].count);
++            snprintf(right, sizeof(right), "%u/%u", InFolder(mv, -1), Chip_CopyCap(mv));
++            if (InFolder(mv, -1) >= Chip_CopyCap(mv))
++                rcol = RGB(31, 20, 6);
+         }
+         else if (sF.page == PAGE_PACK)
+         {
++            // owned copies of this chip (in the folder / owned), then the move's limit
+             u8 have = PkbnPack_Get(mv, letter), used = InFolder(mv, letter);
+             dim = !PartyCanUse(mv);
+-            snprintf(right, sizeof(right), "%u/%u", used, have);
++            snprintf(qty, sizeof(qty), "%u/%u", used, have);
++            snprintf(right, sizeof(right), "%u/%u", InFolder(mv, -1), Chip_CopyCap(mv));
+             if (used >= have)
+                 col = RGB(16, 18, 22);
++            if (InFolder(mv, -1) >= Chip_CopyCap(mv))
++                rcol = RGB(31, 20, 6);
+         }
+         else
+         {
++            const struct CandyRow *r = &sF.candy[row];
+             u16 cost = CandyCost(mv, letter);
+-            snprintf(right, sizeof(right), "%u", cost);
+-            if (PkbnCandy_Get(gBattleMoves[mv].type) < cost)
+-                col = RGB(16, 18, 22);
++            if (r->needLevel)
++            {
++                snprintf(qty, sizeof(qty), "LV%u", r->needLevel);
++                col = RGB(14, 14, 16);
++            }
++            else
++            {
++                snprintf(qty, sizeof(qty), "%u", cost);
++                if (PkbnCandy_Get(gBattleMoves[mv].type) < cost)
++                    col = RGB(16, 18, 22);
++            }
++            snprintf(right, sizeof(right), "%u/%u", InFolder(mv, -1), Chip_CopyCap(mv));
+         }
+         if (row == *cur)
+             Pkbn_FillRect(fb, LIST_X - 1, y - 1, PANEL_X - LIST_X - 4, ROW_H, RGB(8, 14, 28));
+@@ -273,9 +348,10 @@ static void DrawList(u16 *fb)
+         Text(fb, LIST_X + 7, y - 2, nm, dim ? RGB(14, 14, 16) : col);
+         {
+             char c[2] = { PkbnFolder_LetterChar(letter), 0 };
+-            Text(fb, LIST_X + 92, y - 2, c, RGB(31, 26, 6));
++            Text(fb, LIST_X + 84, y - 2, c, RGB(31, 26, 6));
+         }
+-        Text(fb, PANEL_X - 8 - Pkbn_EmTextWidth(right, PKBN_FONT_SMALL), y - 2, right, dim ? RGB(14, 14, 16) : col);
++        Text(fb, LIST_X + 96, y - 2, qty, dim ? RGB(14, 14, 16) : col);
++        Text(fb, PANEL_X - 8 - Pkbn_EmTextWidth(right, PKBN_FONT_SMALL), y - 2, right, dim ? RGB(14, 14, 16) : rcol);
+     }
+     if (n == 0)
+         Text(fb, LIST_X + 4, LIST_Y, sF.page == PAGE_CANDY ? "NOTHING TO BUY YET" : "NO CHIPS", RGB(16, 18, 22));
+@@ -311,16 +387,24 @@ static void DrawPanel(u16 *fb)
+     else
+         snprintf(line, sizeof(line), "%s", gPkbnKindNames[gPkbnMoveInfo[mv].kind]);
+     Text(fb, x + 2, y + 36, line, RGB(22, 26, 31));
+-    snprintf(line, sizeof(line), "MB %u  UP TO %u IN", Chip_MB(mv), Chip_CopyCap(mv));
+-    Text(fb, x + 2, y + 47, line, RGB(22, 26, 31));
+-    snprintf(line, sizeof(line), "OWN %u  IN FOLDER %u", PkbnPack_Total(mv), InFolder(mv, -1));
++    snprintf(line, sizeof(line), "LIMIT %u (MB %u)", Chip_CopyCap(mv), Chip_MB(mv));
++    Text(fb, x + 2, y + 47, line, InFolder(mv, -1) >= Chip_CopyCap(mv) ? RGB(31, 20, 6) : RGB(31, 31, 31));
++    snprintf(line, sizeof(line), "IN FOLDER %u  OWN %u", InFolder(mv, -1), PkbnPack_Total(mv));
+     Text(fb, x + 2, y + 58, line, RGB(22, 26, 31));
+     if (sF.page == PAGE_CANDY)
+     {
+-        char tn[16];
++        const struct CandyRow *r = &sF.candy[sF.cursor[PAGE_CANDY]];
++        char tn[16], sp[16];
+         Pkbn_GameStringToAscii(tn, gTypeNames[gBattleMoves[mv].type], sizeof(tn));
+         snprintf(line, sizeof(line), "%s CANDY %u", tn, PkbnCandy_Get(gBattleMoves[mv].type));
+         Text(fb, x + 2, y + 69, line, RGB(31, 26, 6));
++        Pkbn_GameStringToAscii(sp, gSpeciesNames[r->species], sizeof(sp));
++        if (r->needLevel)
++            snprintf(line, sizeof(line), "%s AT LV%u", sp, r->needLevel);
++        else
++            snprintf(line, sizeof(line), "FROM %s", sp);
++        Text(fb, x + 2, y + 80, line, r->needLevel ? RGB(16, 18, 22) : RGB(22, 26, 31));
++        return;   // (no room for the party row on this page)
+     }
+     // who can use it (party icons, info only - chips themselves never show a Pokémon)
+     Text(fb, x + 2, y + 80, "USABLE BY", RGB(14, 16, 22));
+@@ -375,13 +459,21 @@ static void Leave(void)
+ 
+ static void TakeOut(void)
+ {
+-    u8 i = sF.cursor[PAGE_FOLDER];
+-    if (sF.fCount == 0)
++    struct GroupRow *g;
++    s32 i;
++    if (sF.groupCount == 0)
++        return;
++    g = &sF.groups[sF.cursor[PAGE_FOLDER]];
++    for (i = sF.fCount - 1; i >= 0; i--)
++        if (sF.fMove[i] == g->move && sF.fLetter[i] == g->letter)
++            break;
++    if (i < 0)
+         return;
+     for (; i + 1 < sF.fCount; i++)
+         sF.fMove[i] = sF.fMove[i + 1], sF.fLetter[i] = sF.fLetter[i + 1];
+     sF.fCount--;
+     sF.edited = TRUE;
++    BuildGroups();
+     PlaySE(SE_SELECT);
+ }
+ 
+@@ -392,7 +484,12 @@ static void AddToFolder(u16 mv, u8 letter)
+     else if (InFolder(mv, letter) >= PkbnPack_Get(mv, letter))
+         Note("ALL YOUR COPIES ARE IN ALREADY");
+     else if (InFolder(mv, -1) >= Chip_CopyCap(mv))
+-        Note("NO MORE COPIES OF THIS MOVE (MB LIMIT)");
++    {
++        char line[64], nm[MOVE_NAME_LENGTH + 1];
++        MoveName(nm, sizeof(nm), mv);
++        snprintf(line, sizeof(line), "LIMIT: %u %s PER FOLDER (MB %u)", Chip_CopyCap(mv), nm, Chip_MB(mv));
++        Note(line);
++    }
+     else if (!PartyCanUse(mv))
+         Note("NOBODY IN THE PARTY CAN USE IT");
+     else
+@@ -401,6 +498,7 @@ static void AddToFolder(u16 mv, u8 letter)
+         sF.fLetter[sF.fCount] = letter;
+         sF.fCount++;
+         sF.edited = TRUE;
++        BuildGroups();
+         PlaySE(SE_SELECT);
+         Note("ADDED TO THE FOLDER");
+         return;
+@@ -444,6 +542,15 @@ static void Buy(void)
+     if (sF.candyCount == 0)
+         return;
+     r = &sF.candy[sF.cursor[PAGE_CANDY]];
++    if (r->needLevel)
++    {
++        char line[64], sp[16];
++        Pkbn_GameStringToAscii(sp, gSpeciesNames[r->species], sizeof(sp));
++        snprintf(line, sizeof(line), "LOCKED: %s LEARNS IT AT LV%u", sp, r->needLevel);
++        Note(line);
++        PlaySE(SE_FAILURE);
++        return;
++    }
+     cost = CandyCost(r->move, r->letter);
+     type = gBattleMoves[r->move].type;
+     if (PkbnCandy_Get(type) < cost)
+@@ -512,6 +619,7 @@ static void HandleInput(u16 keys)
+             sF.edited = FALSE;
+             PkbnFolderEdit_Set(NULL, NULL, 0);
+             LoadFolder();
++            BuildGroups();
+             PlaySE(SE_SELECT);
+             Note("AUTO-BUILT FROM YOUR PACK");
+         }
+@@ -587,6 +695,7 @@ void PkbnFolderEdit_Open(MainCallback exitCallback)
+     }
+     sF.edited = PkbnFolderEdit_Get(sF.fMove, sF.fLetter) > 0;
+     LoadFolder();
++    BuildGroups();
+     BuildPack();
+     BuildCandy();
+     sKeys = getenv("PKBN_TEST_FOLDER_KEYS");
+-- 
+2.43.0
+
