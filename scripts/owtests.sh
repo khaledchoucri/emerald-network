@@ -93,3 +93,6 @@ bt shield_program "285:30:57/89/58/182,288:3:45" "B+back program 1" PKBN_TEST_NC
     PKBN_TEST_TRAINER=265
 # POC-16e: Omega Kyogre as a NET CHALLENGE self-test (it starts as a boss with its rules: boss + nothing heals)
 bt omega_kyogre "257:90:299/24/7/89|282:90:94/85/247/104,74:5" "KYOGRE, tier 5, 1 at once, 0 s, rules 3" PKBN_BOT=smart PKBN_TEST_CHALLENGE=21
+# POC-17d: the place shapes the field - Fiery Path is lava; Route 120's grass burns away under Combusken's Ember
+run field_lava 24:14:10:10 "W200,G288:20,W60,P,W200,P,W400,P,W10,Q" "place field: map 180e" PKBN_OW_AUTOBATTLE=1
+run field_grass 0:35:10:10 "W200,G288:20,W60,P,W200,P,W400,P,W10,Q" "panel react: type 10" PKBN_OW_AUTOBATTLE=1

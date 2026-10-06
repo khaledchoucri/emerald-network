@@ -1,0 +1,30 @@
+From f001ee2cbff80545124f5c7cc170ad9bedd8638c Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 19:59:48 +0300
+Subject: [PATCH 56/59] POC-17a: the Omega legendaries fight with the Omega AI
+
+NET CHALLENGE boss battles (Groudon, Kyogre, Rayquaza) set sB.omega: aims ahead, counter-chips,
+punishes end lag, guards against PAs and GigaChips, faster and more evasive, earlier PAs, and the
+red Omega banner.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/grid_battle.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 763eca3..97cd40d 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -921,6 +921,7 @@ static void Begin(void)
+             // POC-16e Omega legendaries: the boss battle's phases and signature PA (POC-14h)
+             sB.boss = BossOf(c->mons[0].species);
+             sB.bossTimer = sB.fastPhases ? BOSS_PHASE_FRAMES_LOW / 2 : BOSS_PHASE_FRAMES / 2;
++            sB.omega = TRUE;   // POC-17a: the Omega legendaries fight with the Omega AI (Khaled)
+         }
+         PKBN_LOG("net challenge %u: %s, tier %u, %u at once, %u s, rules %x", sB.challenge - 1, c->name, c->tier, c->together,
+                  c->seconds, c->rules);
+-- 
+2.43.0
+

@@ -1,0 +1,449 @@
+From 8f3c999127eb6d4bddce9a4a04412dc7f20329f2 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 20:49:00 +0300
+Subject: [PATCH 57/59] POC-17b: Pokemon move with their own Emerald
+ animations; big moves get a moment
+
+- Emerald's per-species front animations (sMonFrontAnimIdsTable, pokemon_animation.c) run on
+  a puppet sprite the grid owns; its x2/y2, affine matrix (gOamMatrices) and palette glow drive
+  our drawing (Gfx_DrawAffine). They play when a Pokemon comes out, and at double speed through
+  every wind-up and strike, then ease back (TUNE). PKBN_NO_MON_ANIMS=1 turns them off.
+- MegaChips: a 12-frame dark flash with the user lit and rimmed. PAs and GigaChips: a 28-frame
+  cut-in - the stage goes black, lines burst out of the user, it's drawn larger, others go dark,
+  then a white flash. The fight waits for it (sB.cinemaT); PKBN_NO_CINEMA=1 turns it off.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/gfx.h           |   1 +
+ include/pkbn/grid_internal.h |   4 +-
+ src/pkbn/gfx.c               |  19 ++++
+ src/pkbn/grid_battle.c       |   6 ++
+ src/pkbn/grid_draw.c         | 177 ++++++++++++++++++++++++++++++++++-
+ src/pkbn/grid_moves.c        |  18 ++++
+ src/pokemon.c                |   8 ++
+ src/pokemon_animation.c      |  20 ++++
+ 8 files changed, 250 insertions(+), 3 deletions(-)
+
+diff --git a/include/pkbn/gfx.h b/include/pkbn/gfx.h
+index 486bb90..34cae70 100644
+--- a/include/pkbn/gfx.h
++++ b/include/pkbn/gfx.h
+@@ -60,6 +60,7 @@ struct PkbnImage Gfx_TypeIcon(u8 type);
+ u16 Gfx_Blend(u16 a, u16 b, u8 amt16);           // amt16 = 0 -> a, 16 -> b
+ void Gfx_FillBlend(u16 *fb, s32 x, s32 y, s32 w, s32 h, u16 color, u8 amt16);
+ void Gfx_Darken(u16 *fb, s32 x, s32 y, s32 w, s32 h, u8 amt16);
++void Gfx_DrawAffine(u16 *fb, const struct PkbnImage *img, s32 x, s32 y, s16 a, s16 b, s16 c, s16 d, u32 flags, u16 color, u8 amt);
+ void Gfx_DrawOmega(u16 *fb, s32 x, s32 y, bool8 big, s32 scale, u16 color);   // POC-16: 9 / 13 px tall x scale
+ void Gfx_Ellipse(u16 *fb, s32 cx, s32 cy, s32 rx, s32 ry, u16 color, u8 amt16);
+ 
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 823fedc..17bf9e1 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -200,7 +200,7 @@ struct Attack
+ };
+ 
+ // Visual events (POC-15): the rules post what happened, the drawing code plays it. Visual only.
+-enum { VEV_USE, VEV_LAUNCH, VEV_PUSH, VEV_STAT, VEV_ANIM, VEV_SHAKE, VEV_PAFORM };
++enum { VEV_USE, VEV_LAUNCH, VEV_PUSH, VEV_STAT, VEV_ANIM, VEV_SHAKE, VEV_PAFORM, VEV_CINEMA };
+ struct VisEvent
+ {
+     u32 serial;
+@@ -230,6 +230,7 @@ struct GridBattle
+     bool8 struggleLogged;
+     bool8 fullSynchro;         // POC-14: BN6 Full Synchro after a counter hit (next chip x2)
+     u8 hitStop;                // POC-16a: frames the fight stays frozen after a big hit
++    u8 cinemaT;                // POC-17b: frames the fight waits for a big move's cut-in (the pictures keep moving)
+     bool8 omega;               // POC-16d: an Ω Leader rematch (tier-6 AI, levels +5)
+     bool8 noHeal;              // POC-16e: a challenge where nothing heals
+     bool8 fastPhases;          // POC-16e: boss phases at the fast rhythm from the start
+@@ -372,6 +373,7 @@ void Vis_Post(u8 ev, u8 side, u16 move, u8 kind, s8 arg, s8 x, s8 y);   // POC-1
+ void Vis_StatusAnim(u8 side, u8 anim);                  // POC-15e: B_ANIM_STATUS_* on that side (its sounds)
+ void Vis_GeneralAnim(u8 side, u8 anim, bool8 self);     // POC-15e: B_ANIM_* from that side (self: on itself)
+ void Vis_Shake(u8 level, u8 frames);                    // POC-16a: BN6 camera shake (camera_initShakeEffect)
++void Vis_Cinema(u8 side, u8 level);                     // POC-17b: 1 MegaChip flash, 2 PA / GigaChip cut-in
+ u8 Moves_Windup(u8 side, u8 kind, bool8 fast);
+ extern bool8 gPkbnNoWindup;                           // POC-15: BN wind-up frames before an attack
+ void Moves_Update(void);
+diff --git a/src/pkbn/gfx.c b/src/pkbn/gfx.c
+index 83892ad..fe523de 100644
+--- a/src/pkbn/gfx.c
++++ b/src/pkbn/gfx.c
+@@ -134,6 +134,25 @@ void Gfx_DrawScaled(u16 *fb, const struct PkbnImage *img, s32 x, s32 y, s32 sx25
+     }
+ }
+ 
++// POC-17b: an image through a GBA OAM affine matrix (a, b, c, d in 8.8, screen -> texture, as gOamMatrices holds it),
++// double-size like ST_OAM_AFFINE_DOUBLE, around the image's centre. GFX_FLIPX mirrors the whole transformed picture.
++void Gfx_DrawAffine(u16 *fb, const struct PkbnImage *img, s32 x, s32 y, s16 a, s16 b, s16 c, s16 d, u32 flags, u16 color, u8 amt)
++{
++    s32 cx = x + img->ox + img->w / 2, cy = y + img->oy + img->h / 2, dx, dy;
++    for (dy = -img->h; dy < img->h; dy++)
++        for (dx = -img->w; dx < img->w; dx++)
++        {
++            s32 ux = (flags & GFX_FLIPX) ? -dx : dx;
++            s32 tx = ((a * ux + b * dy) >> 8) + img->w / 2, ty = ((c * ux + d * dy) >> 8) + img->h / 2;
++            u8 idx;
++            if (tx < 0 || ty < 0 || tx >= img->w || ty >= img->h)
++                continue;
++            idx = img->px[ty * img->w + tx];
++            if (idx)
++                Plot(fb, cx + dx, cy + dy, img->pal[idx], flags & ~GFX_FLIPX, color, amt);
++        }
++}
++
+ void Gfx_FillBlend(u16 *fb, s32 x, s32 y, s32 w, s32 h, u16 color, u8 amt)
+ {
+     s32 i, j;
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 97cd40d..b1dfa0c 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -2658,6 +2658,12 @@ void CB2_PkbnGridBattle(void)
+             sB.stopKeys |= gMain.newKeys;
+             break;
+         }
++        if (sB.cinemaT)
++        {
++            sB.cinemaT--;   // POC-17b: a big move's cut-in
++            sB.stopKeys |= gMain.newKeys;
++            break;
++        }
+         if (sB.stopKeys)
+         {
+             gMain.newKeys |= sB.stopKeys;
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 2f77120..6684447 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -11,6 +11,8 @@
+ #include "sound.h"
+ #include "m4a.h"
+ #include "pkbn/leader.h"
++#include "palette.h"
++#include "sprite.h"
+ #include "battle_setup.h"
+ #include "pkbn/chip_pack.h"
+ #include "data.h"
+@@ -366,6 +368,113 @@ static u32 sLastSoundT[NVIS];
+ 
+ static u8 sAppearT[NVIS];    // frames left of the send-out grow (Emerald's Poké Ball release)
+ 
++// ---- POC-17b: each Pokémon moves the way it does in Emerald ----------------------------------------------------------
++// Emerald gives every species a front animation (sMonFrontAnimIdsTable, pokemon.c) and plays it when the Pokémon appears
++// in battle (pokemon_animation.c). Here Emerald's own animation code runs on a puppet sprite the grid owns: each frame
++// we read back its offset (x2, y2), its affine matrix (gOamMatrices) and its palette glow, and draw our picture with
++// them. It plays when a Pokémon comes out, and at double speed as it winds up and strikes (TUNE: then eased back).
++extern u8 Pkbn_FrontAnimId(u16 species);
++extern void Pkbn_MonAnimStart(struct Sprite *sprite, u8 animId);
++extern bool8 Pkbn_MonAnimDone(struct Sprite *sprite);
++
++#define PUPPET_MATRIX  31                       // an OAM matrix the grid battle has to itself
++#define PUPPET_PAL     15                       // and an OBJ palette slot, for the glow animations
++#define PUPPET_GREY    RGB(16, 16, 16)
++#define PUPPET_EASE    6
++
++struct MonPuppet
++{
++    struct Sprite spr;
++    bool8 on;
++    u8 speed;
++    u16 t, maxT;
++    u8 ease;                                    // frames of easing back to rest
++    s16 a, b, c, d, x2, y2;                     // this frame's pose
++    u16 tint;
++    u8 tintAmt;
++    bool8 hidden;
++};
++static struct MonPuppet sPuppet[NVIS];
++
++// POC-17b: a big move's cut-in (VEV_CINEMA)
++static u8 sCinemaT, sCinemaLen, sCinemaLevel, sCinemaV;
++#include "trig.h"
++
++static void Puppet_Start(u8 v, u16 species, u8 speed, u16 maxT)
++{
++    struct MonPuppet *p = &sPuppet[v];
++    if (species == SPECIES_NONE || getenv("PKBN_NO_MON_ANIMS") != NULL)
++        return;
++    memset(p, 0, sizeof(*p));
++    p->spr.oam.matrixNum = PUPPET_MATRIX;
++    p->spr.oam.paletteNum = PUPPET_PAL;
++    p->spr.oam.affineMode = ST_OAM_AFFINE_OFF;
++    p->spr.animEnded = TRUE;                    // nothing else animates it: WaitAnimEnd ends at once
++    p->spr.data[2] = species;
++    p->a = p->d = 256;
++    p->on = TRUE;
++    p->speed = speed;
++    p->maxT = maxT;
++    Pkbn_MonAnimStart(&p->spr, Pkbn_FrontAnimId(species));
++}
++
++static void Puppet_Step(u8 v)
++{
++    struct MonPuppet *p = &sPuppet[v];
++    u8 k;
++    if (!p->on)
++        return;
++    if (p->ease)
++    {
++        // back to rest: blend the last pose toward the identity
++        p->a = 256 + (p->a - 256) * (p->ease - 1) / p->ease;
++        p->d = 256 + (p->d - 256) * (p->ease - 1) / p->ease;
++        p->b = p->b * (p->ease - 1) / p->ease;
++        p->c = p->c * (p->ease - 1) / p->ease;
++        p->x2 = p->x2 * (p->ease - 1) / p->ease;
++        p->y2 = p->y2 * (p->ease - 1) / p->ease;
++        p->tintAmt = p->tintAmt * (p->ease - 1) / p->ease;
++        p->hidden = FALSE;
++        if (--p->ease == 0)
++            p->on = FALSE;
++        return;
++    }
++    for (k = 0; k < p->speed && !Pkbn_MonAnimDone(&p->spr); k++)
++    {
++        s32 i;
++        for (i = 0; i < 16; i++)
++            gPlttBufferUnfaded[OBJ_PLTT_ID(PUPPET_PAL) + i] = gPlttBufferFaded[OBJ_PLTT_ID(PUPPET_PAL) + i] = PUPPET_GREY;
++        p->spr.callback(&p->spr);
++    }
++    p->x2 = p->spr.x2;
++    p->y2 = p->spr.y2;
++    p->hidden = p->spr.invisible;
++    if (p->spr.oam.affineMode != ST_OAM_AFFINE_OFF)
++    {
++        p->a = gOamMatrices[PUPPET_MATRIX].a, p->b = gOamMatrices[PUPPET_MATRIX].b;
++        p->c = gOamMatrices[PUPPET_MATRIX].c, p->d = gOamMatrices[PUPPET_MATRIX].d;
++    }
++    else
++        p->a = p->d = 256, p->b = p->c = 0;
++    {
++        // a glow blends the palette toward a colour: grey in, the blend's direction and size out
++        u16 f = gPlttBufferFaded[OBJ_PLTT_ID(PUPPET_PAL) + 1];
++        s32 r = (f & 31) - 16, g = ((f >> 5) & 31) - 16, bl = ((f >> 10) & 31) - 16, m = abs(r);
++        if (abs(g) > m) m = abs(g);
++        if (abs(bl) > m) m = abs(bl);
++        if (m)
++        {
++            p->tint = RGB(16 + r * 15 / m, 16 + g * 15 / m, 16 + bl * 15 / m);
++            p->tintAmt = (u8)(m > 15 ? 15 : m);
++        }
++        else
++            p->tintAmt = 0;
++    }
++    if (++p->t >= p->maxT || Pkbn_MonAnimDone(&p->spr))
++        p->ease = PUPPET_EASE;
++}
++
++
+ static u8 VS(u8 side)
+ {
+     return side == SIDE_PLAYER ? 0 : 1 + sB.cur;
+@@ -392,6 +501,8 @@ static void ResetVisuals(void)
+     memset(sAnimSoundLast, 0, sizeof(sAnimSoundLast));
+     sAnimSoundFree = 0;
+     sShakeT = 0;
++    memset(sPuppet, 0, sizeof(sPuppet));
++    sCinemaT = 0;
+     sPAAnimT = sCloseT = 0;
+     sWasCustom = FALSE;
+     memset(sLastSoundMove, 0, sizeof(sLastSoundMove));
+@@ -733,6 +844,30 @@ static void DrawFighter(u16 *fb, u8 side)
+         s32 k = 16 - sAppearT[VS(side)];
+         Gfx_DrawScaled(fb, &img, x + dx, y - lift, 32 + k * 14, 32 + k * 14, flags | GFX_TINT, COL_WHITE, (u8)(16 - k));
+     }
++    else if (sCinemaT && sCinemaV != VS(side) && sCinemaLevel)
++        Gfx_Draw(fb, &img, x + dx, y - lift, flags | GFX_TINT, COL_BLACK, sCinemaLevel >= 2 ? 11 : 7);   // in the dark
++    else if (sCinemaT && sCinemaV == VS(side))
++    {
++        // POC-17b: in its moment the user is lit, a white rim around it (and larger for a PA or GigaChip)
++        s32 sc = sCinemaLevel >= 2 ? 256 + 64 * (sCinemaLen - sCinemaT < 6 ? sCinemaLen - sCinemaT : 6) / 6 : 256;
++        static const s8 sRim[4][2] = { {-1, 0}, {1, 0}, {0, -1}, {0, 1} };
++        s32 q;
++        for (q = 0; q < 4; q++)
++            Gfx_DrawScaled(fb, &img, x + dx + sRim[q][0], y - lift + sRim[q][1], sc, sc, flags | GFX_SOLID, COL_WHITE, 16);
++        Gfx_DrawScaled(fb, &img, x + dx, y - lift, sc, sc, flags | GFX_TINT, COL_WHITE, (u8)((sTick & 2) ? 4 : 1));
++    }
++    else if (sPuppet[VS(side)].on)
++    {
++        // POC-17b: its Emerald animation's pose (mirrored with the picture on the player's side)
++        const struct MonPuppet *pp = &sPuppet[VS(side)];
++        if (!pp->hidden)
++        {
++            if (amt == 0 && pp->tintAmt)
++                flags |= GFX_TINT, color = pp->tint, amt = pp->tintAmt;
++            Gfx_DrawAffine(fb, &img, x + dx + ((flags & GFX_FLIPX) ? -pp->x2 : pp->x2), y - lift + pp->y2,
++                           pp->a, pp->b, pp->c, pp->d, flags, color, amt);
++        }
++    }
+     else
+         Gfx_Draw(fb, &img, x + dx, y - lift, flags, color, amt);
+     Gfx_ClipBottom(9999);
+@@ -1624,8 +1759,9 @@ static void VisTrack(u8 s, u8 v)
+         sPushT[v]--;
+     if (sDashT[v])
+         sDashT[v]--;
+-    if (sAppearT[v])
+-        sAppearT[v]--;
++    if (sAppearT[v] && --sAppearT[v] == 0 && f->bm.hp)
++        Puppet_Start(v, f->bm.species, 1, 150);   // out of the ball: its Emerald animation (POC-17b)
++    Puppet_Step(v);
+ }
+ 
+ static u16 *sDrawFb;
+@@ -1806,6 +1942,9 @@ void Draw_Overlay(u16 *fb)
+             switch (e->ev)
+             {
+             case VEV_USE:
++                // POC-17b: its own motion through the wind-up and strike, twice as fast (TUNE)
++                Puppet_Start(v, e->side == SIDE_PLAYER ? sB.f[SIDE_PLAYER].bm.species : Foe_Get(e->foe)->bm.species, 2,
++                             (u16)(e->arg + PoseHold(e->kind) + 8));
+                 ScheduleMoveSounds(e->move, e->side, v);
+                 sWindT[v] = (u8)e->arg;
+                 sPoseLen[v] = sPoseT[v] = PoseHold(e->kind);
+@@ -1865,6 +2004,11 @@ void Draw_Overlay(u16 *fb)
+                 sPAAnimT = PA_ANIM;
+                 break;
+             }
++            case VEV_CINEMA:
++                sCinemaT = sCinemaLen = (u8)e->arg;
++                sCinemaLevel = e->kind;
++                sCinemaV = v;
++                break;
+             case VEV_SHAKE:
+                 // a stronger shake takes over; an equal one runs for the longer time
+                 if (e->kind > sShakeLevel || sShakeT == 0)
+@@ -1885,6 +2029,29 @@ void Draw_Overlay(u16 *fb)
+     sHeadValid = FALSE;
+     DrawBackdrop(fb, t);
+     DrawField(fb, t);
++    if (sCinemaT)
++    {
++        // the stage goes dark around the one using it; a PA or GigaChip gets lines bursting out of it
++        s32 k = sCinemaLen - sCinemaT;
++        u8 dark = sCinemaLevel >= 2 ? (u8)(k < 4 ? k * 3 : 13) : (u8)(k < 3 ? k * 3 : 8);
++        Gfx_Darken(fb, 0, 0, CW, CH, dark);
++        if (sCinemaLevel >= 2)
++        {
++            s32 cx, cy, i, r;
++            u8 side = sCinemaV == 0 ? SIDE_PLAYER : SIDE_ENEMY;
++            const struct Fighter *f = sCinemaV == 0 ? &sB.f[SIDE_PLAYER] : Foe_Get(sCinemaV - 1);
++            (void)side;
++            Draw_FeetPos(f->x, f->y, &cx, &cy);
++            cy -= 24;
++            for (i = 0; i < 20; i++)
++            {
++                u8 ang = (u8)(i * 13 + (i * 7) % 5);   // Emerald's 256-step angles (trig.c)
++                s32 start = 26 + (s32)((k * 9 + i * 13) % 40);
++                for (r = start; r < start + 60; r += 2)
++                    Gfx_FillBlend(fb, cx + Cos(ang, r), cy + Sin(ang, r), 1, 1, COL_WHITE, (u8)(12 - (r - start) / 6));
++            }
++        }
++    }
+     Vfx_DrawLayer(fb, VFX_LAYER_GROUND);
+     // back row first so the front row overlaps it (BN draws objects by row)
+     {
+@@ -1906,6 +2073,12 @@ void Draw_Overlay(u16 *fb)
+     Vfx_DrawWeather(fb, t);
+     Vfx_DrawLayer(fb, VFX_LAYER_HUD);
+     Vfx_EndFrame(fb);
++    if (sCinemaT)
++    {
++        if (sCinemaLevel >= 2 && sCinemaT <= 4)
++            Gfx_FillBlend(fb, 0, 0, CW, CH, COL_WHITE, (u8)(sCinemaT * 3));   // the release
++        sCinemaT--;
++    }
+     DrawChipStack(fb);
+     ShakeFrame(fb);
+ 
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 539c52d..9039968 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -301,6 +301,21 @@ void Vis_Post(u8 ev, u8 side, u16 move, u8 kind, s8 arg, s8 x, s8 y)
+     e->y = y;
+ }
+ 
++// POC-17b: a big move's moment (our design, TUNE): MegaChips 12 frames, PAs and GigaChips 28. The fight waits for it
++// (like a hit-stop, but the pictures keep moving). PKBN_NO_CINEMA=1 turns it off.
++void Vis_Cinema(u8 side, u8 level)
++{
++    static s8 sOff = -1;
++    u8 frames = level >= 2 ? 28 : 12;
++    if (sOff < 0)
++        sOff = getenv("PKBN_NO_CINEMA") != NULL;
++    if (sOff || gPkbnGallery)
++        return;
++    if (frames > sB.cinemaT)
++        sB.cinemaT = frames;
++    Vis_Post(VEV_CINEMA, side, MOVE_NONE, level, (s8)frames, 0, 0);
++}
++
+ // Emerald's status and general animations, for their sounds (grid_draw plays them from move_sounds.c). POC-15e.
+ void Vis_StatusAnim(u8 side, u8 anim)
+ {
+@@ -2708,6 +2723,8 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+             if (me->lockout < a->timer + ChipLockout(me))
+                 me->lockout = a->timer + ChipLockout(me);
+             Vis_Post(VEV_USE, side, move, kind, (s8)a->timer, me->x, me->y);
++            if (Chip_Class(move) != CHIP_STANDARD)
++                Vis_Cinema(side, Chip_Class(move) == CHIP_GIGA ? 2 : 1);
+             return;
+         }
+     }
+@@ -2797,6 +2814,7 @@ void Moves_UsePA(u8 side, u8 paIndex, const struct BattlePokemon *user, const ch
+         if (me->lockout < a->timer + ChipLockout(me))
+             me->lockout = a->timer + ChipLockout(me);
+         Vis_Post(VEV_USE, side, a->move, a->kind, (s8)a->timer, me->x, me->y);
++        Vis_Cinema(side, 2);   // a Program Advance
+         return;
+     }
+     UpdateAttack(a);
+diff --git a/src/pokemon.c b/src/pokemon.c
+index 31adc84..b73c9c3 100644
+--- a/src/pokemon.c
++++ b/src/pokemon.c
+@@ -7176,3 +7176,11 @@ u8 *MonSpritesGfxManager_GetSpritePtr(u8 managerId, u8 spriteNum)
+         return gfx->spritePointers[spriteNum];
+     }
+ }
++
++#ifdef PORTABLE
++// POC-17b: the species' own front animation (the one Emerald plays when it appears in battle), for the grid
++u8 Pkbn_FrontAnimId(u16 species)
++{
++    return (species == SPECIES_NONE || species >= NUM_SPECIES) ? 0 : sMonFrontAnimIdsTable[species - 1];
++}
++#endif
+diff --git a/src/pokemon_animation.c b/src/pokemon_animation.c
+index 2511d71..236c3f0 100644
+--- a/src/pokemon_animation.c
++++ b/src/pokemon_animation.c
+@@ -5525,3 +5525,23 @@ static void WaitAnimEnd(struct Sprite *sprite)
+     if (sprite->animEnded)
+         sprite->callback = SpriteCallbackDummy;
+ }
++
++#ifdef PORTABLE
++// POC-17b: drive one of these animations on a sprite the grid owns (not in gSprites): what Task_HandleMonAnimation
++// does when it starts (state 0), then the caller runs sprite->callback once per frame.
++void Pkbn_MonAnimStart(struct Sprite *sprite, u8 animId)
++{
++    u32 i;
++    sprite->sDontFlip = TRUE;
++    sprite->data[0] = 0;
++    for (i = 2; i < ARRAY_COUNT(sprite->data); i++)
++        sprite->data[i] = 0;
++    sIsSummaryAnim = FALSE;
++    sprite->callback = sMonAnimFunctions[animId];
++}
++
++bool8 Pkbn_MonAnimDone(struct Sprite *sprite)
++{
++    return sprite->callback == SpriteCallbackDummy || sprite->callback == WaitAnimEnd;
++}
++#endif
+-- 
+2.43.0
+

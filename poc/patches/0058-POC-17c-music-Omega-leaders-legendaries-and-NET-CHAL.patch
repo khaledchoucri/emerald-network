@@ -1,0 +1,188 @@
+From 50a61adb894db6bbd36b6b3b6881aae671a7dc30 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 20:52:17 +0300
+Subject: [PATCH 58/59] POC-17c: music - Omega leaders, legendaries and NET
+ CHALLENGE themes; Emerald's low-HP alarm
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/challenge.h     |  1 +
+ include/pkbn/grid_internal.h |  1 +
+ src/battle_setup.c           |  3 ++-
+ src/pkbn/challenge.c         | 18 ++++++++++++++++
+ src/pkbn/grid_battle.c       | 41 ++++++++++++++++++++++++++++++++++++
+ 5 files changed, 63 insertions(+), 1 deletion(-)
+
+diff --git a/include/pkbn/challenge.h b/include/pkbn/challenge.h
+index 56722fa..e643538 100644
+--- a/include/pkbn/challenge.h
++++ b/include/pkbn/challenge.h
+@@ -43,6 +43,7 @@ struct PkbnChallenge
+ 
+ extern const struct PkbnChallenge gPkbnChallenges[PKBN_CHALLENGE_COUNT];
+ extern u8 gPkbnChallengeActive;   // 0: none; else the running challenge + 1
++u16 PkbnChallenge_BGM(u8 idx);   // POC-17c
+ 
+ u8 PkbnChallenge_Badges(void);                 // badges for unlocking, 9 once the game is cleared
+ bool8 PkbnChallenge_Unlocked(u8 i);
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 17bf9e1..e4ecd3f 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -231,6 +231,7 @@ struct GridBattle
+     bool8 fullSynchro;         // POC-14: BN6 Full Synchro after a counter hit (next chip x2)
+     u8 hitStop;                // POC-16a: frames the fight stays frozen after a big hit
+     u8 cinemaT;                // POC-17b: frames the fight waits for a big move's cut-in (the pictures keep moving)
++    bool8 lowHp;               // POC-17c: the low-HP alarm is on
+     bool8 omega;               // POC-16d: an Ω Leader rematch (tier-6 AI, levels +5)
+     bool8 noHeal;              // POC-16e: a challenge where nothing heals
+     bool8 fastPhases;          // POC-16e: boss phases at the fast rhythm from the start
+diff --git a/src/battle_setup.c b/src/battle_setup.c
+index ed16207..2dcba22 100644
+--- a/src/battle_setup.c
++++ b/src/battle_setup.c
+@@ -38,6 +38,7 @@
+ #include "field_screen_effect.h"
+ #include "data.h"
+ #include "pkbn/battle_stub.h"
++#include "pkbn/challenge.h"
+ #include "constants/battle_frontier.h"
+ #include "constants/battle_setup.h"
+ #include "constants/event_objects.h"
+@@ -518,7 +519,7 @@ void BattleSetup_StartPkbnChallenge(void)
+     LockPlayerFieldControls();
+     gMain.savedCallback = CB2_EndScriptedWildBattle;
+     gBattleTypeFlags = 0;
+-    CreateBattleStartTask(B_TRANSITION_GRID_SQUARES, MUS_VS_TRAINER);
++    CreateBattleStartTask(B_TRANSITION_GRID_SQUARES, PkbnChallenge_BGM(gPkbnChallengeActive - 1));   // POC-17c
+     IncrementGameStat(GAME_STAT_TOTAL_BATTLES);
+ }
+ 
+diff --git a/src/pkbn/challenge.c b/src/pkbn/challenge.c
+index 34dbaa4..07b92af 100644
+--- a/src/pkbn/challenge.c
++++ b/src/pkbn/challenge.c
+@@ -10,6 +10,7 @@
+ #include "constants/species.h"
+ #include "constants/moves.h"
+ #include "constants/flags.h"
++#include "constants/songs.h"
+ #include "pkbn/challenge.h"
+ #include "pkbn/chip_pack.h"
+ #include "pkbn/navicust.h"
+@@ -109,3 +110,20 @@ void PkbnChallenge_AfterWin(u8 i, u32 frames, char *line1, char *line2, u32 size
+ }
+ 
+ #endif // PORTABLE
++
++// POC-17c: each NET CHALLENGE plays one of Emerald's own battle themes (the picks Khaled approved; TUNE):
++// the legendaries their own, MASTER NET the Champion's, the ladders the Elite Four's, the rest the trainer theme.
++u16 PkbnChallenge_BGM(u8 idx)
++{
++    const struct PkbnChallenge *c;
++    if (idx >= PKBN_CHALLENGE_COUNT)
++        return MUS_VS_TRAINER;
++    c = &gPkbnChallenges[idx];
++    if (c->rules & CHR_BOSS)
++        return c->mons[0].species == SPECIES_RAYQUAZA ? MUS_VS_RAYQUAZA : MUS_VS_KYOGRE_GROUDON;
++    if (strcmp(c->name, "MASTER NET") == 0)
++        return MUS_VS_CHAMPION;
++    if (strstr(c->name, "LADDER") != NULL)
++        return MUS_VS_ELITE_FOUR;
++    return MUS_VS_TRAINER;
++}
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index b1dfa0c..e940982 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -43,6 +43,8 @@
+ #include "pkbn/challenge.h"
+ #include "pkbn/replay.h"
+ #include "constants/battle_ai.h"
++#include "battle_interface.h"
++#include "m4a.h"
+ 
+ #ifdef PORTABLE
+ 
+@@ -1103,6 +1105,8 @@ static void UpdateOmegaChoice(void)
+         {
+             ApplyOmega();
+             PlaySE(SE_M_DRAGON_RAGE);
++            PlayBGM(MUS_VS_FRONTIER_BRAIN);   // POC-17c: the Frontier Brains' theme
++
+         }
+         else
+             PlaySE(SE_SELECT);
+@@ -1121,10 +1125,14 @@ static void Finish(void)
+         sActive = FALSE;
+         FreeBattleResources();
+         PkbnReplay_End();
++        m4aSongNumStop(SE_LOW_HEALTH);
++        sB.lowHp = FALSE;
+         PkbnContract_Exit(B_OUTCOME_RAN);
+         return;
+     }
+     PkbnReplay_End();   // saves the recording of this battle
++    m4aSongNumStop(SE_LOW_HEALTH);   // BattleStopLowHpSound (battle_gfx_sfx_util.c:1120)
++    sB.lowHp = FALSE;
+ 
+     SyncActiveToParty();
+     // Write-back required by the contract (research/02 §4): HP, PP and status for every party member.
+@@ -1179,6 +1187,8 @@ static void EndBattle(u8 outcome, const char *text)
+     sB.state = ST_END;
+     sB.timer = 90;
+     Moves_Clear();
++    m4aSongNumStop(SE_LOW_HEALTH);   // POC-17c
++    sB.lowHp = FALSE;
+     if (outcome == B_OUTCOME_WON && sB.trainer)
+     {
+         // HandleEndTurn_BattleWon (battle_main.c:4960)
+@@ -2613,6 +2623,35 @@ static void UpdateFight(void)
+     CheckFaints();
+ }
+ 
++// ---- POC-17c low-HP alarm --------------------------------------------------------------------------------------------
++// Emerald's HandleLowHpMusicChange (battle_gfx_sfx_util.c:1090): the active Pokémon's HP bar is red -> SE_LOW_HEALTH,
++// otherwise m4aSongNumStop(SE_LOW_HEALTH). Emerald starts it once; here a move's sound can take its player
++// (MUSIC_PLAYER_SE3, sound/song_table.inc:99), so it starts again once that player is free (our rule).
++static bool8 LowHpWanted(void)
++{
++    const struct BattlePokemon *bm = &sB.f[SIDE_PLAYER].bm;
++    if (getenv("PKBN_NO_LOW_HP") != NULL || gPkbnGallery || sB.state == ST_END || bm->hp == 0 || bm->maxHP == 0)
++        return FALSE;
++    return GetHPBarLevel(bm->hp, bm->maxHP) == HP_BAR_RED;
++}
++
++static void LowHpFrame(void)
++{
++    const struct Song *song = &gSongTable[SE_LOW_HEALTH];
++    struct MusicPlayerInfo *mi = gMPlayTable[song->ms].info;
++    bool8 busy = (mi->status & MUSICPLAYER_STATUS_TRACK) && !(mi->status & MUSICPLAYER_STATUS_PAUSE);
++    if (!LowHpWanted())
++    {
++        if (sB.lowHp)
++            m4aSongNumStop(SE_LOW_HEALTH);
++        sB.lowHp = FALSE;
++        return;
++    }
++    if (!sB.lowHp || !busy)
++        PlaySE(SE_LOW_HEALTH);
++    sB.lowHp = TRUE;
++}
++
+ void CB2_PkbnGridBattle(void)
+ {
+     if (!sActive)
+@@ -2706,6 +2745,8 @@ void CB2_PkbnGridBattle(void)
+             Finish();
+         break;
+     }
++    if (sActive)
++        LowHpFrame();
+ }
+ 
+ // ---- Chip gallery (POC-15 visual review) ----------------------------------------------------------------------------
+-- 
+2.43.0
+

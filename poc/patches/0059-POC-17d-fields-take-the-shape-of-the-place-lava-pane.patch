@@ -1,0 +1,313 @@
+From fa0e5579e653894225cc0ec10d9feb1825133369 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 20:57:36 +0300
+Subject: [PATCH 59/59] POC-17d: fields take the shape of the place; lava
+ panel; panels react to fire, water and weather
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |   3 +
+ src/pkbn/grid_draw.c         |  43 +++++++++++++
+ src/pkbn/grid_field.c        | 115 ++++++++++++++++++++++++++++++++---
+ src/pkbn/grid_moves.c        |  23 +++++++
+ 4 files changed, 176 insertions(+), 8 deletions(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index e4ecd3f..8541be0 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -83,6 +83,9 @@ enum
+     PANEL_ROAD_DOWN,
+     PANEL_ROAD_LEFT,
+     PANEL_ROAD_RIGHT,
++    // POC-17d (our design, TUNE; BN6 has no lava panel): burns whoever isn't a Fire type standing on it; Fire types
++    // heal on it, as Grass types do on grass.
++    PANEL_LAVA,
+ };
+ 
+ struct Fighter
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 6684447..b131096 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -177,6 +177,7 @@ static void PanelColorsFor(s32 c, u8 type, struct PanelColors *pc)
+     case PANEL_GRASS:  pc->face = RGB(8, 21, 7);   pc->faceDark = RGB(4, 13, 4);  pc->faceLight = RGB(14, 27, 11); break;
+     case PANEL_ICE:    pc->face = RGB(20, 28, 31); pc->faceDark = RGB(13, 21, 28); pc->faceLight = RGB(29, 31, 31); break;
+     case PANEL_CRACKED: pc->face = RGB(18, 18, 21); pc->faceDark = RGB(12, 12, 15); break;
++    case PANEL_LAVA:   pc->face = RGB(10, 3, 2);   pc->faceDark = RGB(5, 1, 1);   pc->faceLight = RGB(15, 5, 2); break;   // POC-17d
+     case PANEL_ROAD_UP: case PANEL_ROAD_DOWN: case PANEL_ROAD_LEFT: case PANEL_ROAD_RIGHT:
+         pc->face = RGB(10, 18, 24); pc->faceDark = RGB(5, 11, 17); pc->faceLight = RGB(18, 26, 31); break;
+     }
+@@ -275,6 +276,48 @@ static void DrawPanel(u16 *fb, s32 c, s32 r, u32 t)
+         }
+         break;
+     }
++    case PANEL_LAVA:
++    {
++        // POC-17d: black crust split by molten veins that pulse, and a bubble now and then
++        u32 ph = (t / 3 + c * 5 + r * 3) % 16;
++        u16 vein = Gfx_Blend(RGB(31, 28, 10), RGB(28, 8, 1), (u8)(ph < 8 ? ph * 2 : (16 - ph) * 2));
++        {
++            // jagged cracks (two polylines, mirrored on every other panel), a dim glow under each
++            static const s8 sCrack[2][7][2] = {
++                { {4, 8}, {9, 10}, {13, 9}, {17, 13}, {22, 12}, {27, 15}, {35, 13} },
++                { {14, 4}, {16, 7}, {15, 10}, {17, 13}, {16, 17}, {19, 19}, {21, 21} },
++            };
++            s32 k, j, flip = (c + r) & 1;
++            for (k = 0; k < 2; k++)
++                for (j = 0; j < 6; j++)
++                {
++                    s32 x0 = sCrack[k][j][0], y0 = sCrack[k][j][1], x1 = sCrack[k][j + 1][0], y1 = sCrack[k][j + 1][1];
++                    s32 n = abs(x1 - x0) > abs(y1 - y0) ? abs(x1 - x0) : abs(y1 - y0), m;
++                    for (m = 0; m <= n; m++)
++                    {
++                        s32 px = x0 + (x1 - x0) * m / (n ? n : 1), py = y0 + (y1 - y0) * m / (n ? n : 1);
++                        if (flip)
++                            px = PANEL_W - 1 - px;
++                        if (px < 4 || px >= PANEL_W - 4 || py < 4 || py >= PANEL_H - 4)
++                            continue;
++                        Gfx_FillBlend(fb, x + px - 1, y + py - 1, 3, 3, RGB(28, 8, 1), 6);
++                        Pkbn_FillRect(fb, x + px, y + py, 1, 1, vein);
++                    }
++                }
++        }
++        Gfx_FillBlend(fb, x + 4, y + 4, PANEL_W - 8, PANEL_H - 8, RGB(31, 10, 2), (u8)(ph < 8 ? ph / 2 : (16 - ph) / 2));
++        {
++            u32 p = (t / 2 + c * 17 + r * 9) % 48;
++            if (p < 10)
++            {
++                s32 bx = x + 10 + (s32)((c * 7 + r * 11 + t / 96) % 22), by = y + 9;
++                Pkbn_FillRect(fb, bx, by + 2 - (s32)p / 4, 3, 3, RGB(31, 24, 6));
++                if (p > 6)
++                    Pkbn_FillRect(fb, bx + 1, by - 2, 1, 1, RGB(31, 28, 10));
++            }
++        }
++        break;
++    }
+     case PANEL_ICE:
+     {
+         // a glint sliding across
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index 053a7c5..7f7d676 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -19,6 +19,10 @@
+ #include "constants/battle_move_effects.h"
+ #include "constants/moves.h"
+ #include "constants/songs.h"
++#include "constants/map_groups.h"
++#include "constants/region_map_sections.h"
++#include "global.fieldmap.h"
++#include "fieldmap.h"
+ 
+ #ifdef PORTABLE
+ 
+@@ -48,6 +52,70 @@ void Field_Init(void)
+     sB.weatherTurns = 0;
+ }
+ 
++// Put `n` terrain panels of `type` on one side, never where the fighters start (no timer: terrain stays).
++static void ScatterSide(u8 side, u8 type, s32 n)
++{
++    s32 tries = 200;
++    while (n > 0 && tries-- > 0)
++    {
++        s8 x = (side == SIDE_PLAYER ? 0 : PLAYER_COLS) + Random() % PLAYER_COLS, y = Random() % GRID_ROWS;
++        if (sB.panel[y][x] != PANEL_NORMAL || (y == 1 && (x == 1 || x == 4)) || (side == SIDE_ENEMY && x == 5))
++            continue;   // not where the fighters start (the pack's back corners included)
++        sB.panel[y][x] = type;
++        n--;
++    }
++}
++
++static void Scatter(u8 type, s32 perSide)
++{
++    ScatterSide(SIDE_PLAYER, type, perSide);
++    ScatterSide(SIDE_ENEMY, type, perSide);
++}
++
++// POC-17d: the field takes the shape of where the battle is (the picks Khaled approved; panel counts are TUNE).
++// Gyms and the Elite Four by map (include/constants/map_groups.h), the rest by Emerald's map section
++// (gMapHeader.regionMapSectionId, include/constants/region_map_sections.h). TRUE if this place has its own field.
++static bool8 PlaceField(void)
++{
++    u16 map = gSaveBlock1Ptr->location.mapNum | (gSaveBlock1Ptr->location.mapGroup << 8);
++    u8 sec = gMapHeader.regionMapSectionId;
++    switch (map)
++    {
++    case MAP_RUSTBORO_CITY_GYM:            Scatter(PANEL_CRACKED, 2); break;                    // Roxanne, Rock
++    case MAP_LAVARIDGE_TOWN_GYM_1F:
++    case MAP_LAVARIDGE_TOWN_GYM_B1F:       Scatter(PANEL_LAVA, 2); break;                       // Flannery, Fire
++    case MAP_FORTREE_CITY_GYM:                                                                  // Winona, Flying: wind
++    case MAP_EVER_GRANDE_CITY_CHAMPIONS_ROOM: Field_ChallengeConditions(CH_WEATHER_NONE, CH_PANELS_CURRENT); break;  // Wallace
++    case MAP_MOSSDEEP_CITY_GYM:            Scatter(PANEL_HOLY, 1); break;                       // Tate & Liza, Psychic
++    case MAP_SOOTOPOLIS_CITY_GYM_1F:
++    case MAP_SOOTOPOLIS_CITY_GYM_B1F:      Scatter(PANEL_ICE, 2); Scatter(PANEL_CRACKED, 1); break;   // Juan: its ice floor
++    case MAP_EVER_GRANDE_CITY_SIDNEYS_ROOM: Scatter(PANEL_POISON, 2); break;                    // Sidney, Dark
++    case MAP_EVER_GRANDE_CITY_PHOEBES_ROOM: Scatter(PANEL_HOLY, 2); break;                      // Phoebe, Ghost
++    case MAP_EVER_GRANDE_CITY_GLACIAS_ROOM: Scatter(PANEL_ICE, 3); break;                       // Glacia, Ice
++    case MAP_EVER_GRANDE_CITY_DRAKES_ROOM:  Scatter(PANEL_CRACKED, 2); break;                   // Drake, Dragon
++    default:
++        switch (sec)
++        {
++        case MAPSEC_PETALBURG_WOODS: case MAPSEC_ROUTE_119: case MAPSEC_ROUTE_120: case MAPSEC_SAFARI_ZONE:
++            Scatter(PANEL_GRASS, 5); break;
++        case MAPSEC_METEOR_FALLS: case MAPSEC_METEOR_FALLS2: case MAPSEC_JAGGED_PASS: case MAPSEC_JAGGED_PASS2:
++        case MAPSEC_GRANITE_CAVE: case MAPSEC_DESERT_RUINS: case MAPSEC_SEAFLOOR_CAVERN:
++            Scatter(PANEL_CRACKED, 2); break;
++        case MAPSEC_SHOAL_CAVE:
++            Scatter(PANEL_ICE, 3); break;
++        case MAPSEC_MT_PYRE:
++            Scatter(PANEL_HOLY, 2); break;
++        case MAPSEC_FIERY_PATH: case MAPSEC_FIERY_PATH2: case MAPSEC_MT_CHIMNEY: case MAPSEC_MAGMA_HIDEOUT:
++        case MAPSEC_LAVARIDGE_TOWN:
++            Scatter(PANEL_LAVA, 2); break;
++        default:
++            return FALSE;
++        }
++    }
++    PKBN_LOG("place field: map %04x, section %u", map, sec);
++    return TRUE;
++}
++
+ // POC-13: the overworld follows you into battle.
+ //  - Weather: Emerald starts a battle with the map's weather (ABILITYEFFECT_SWITCH_IN_WEATHER, battle_util.c:2490-2530):
+ //    rain / thunderstorm / downpour -> permanent rain, sandstorm -> sandstorm, drought -> sun. Permanent = no turn
+@@ -82,6 +150,8 @@ void Field_StartConditions(void)
+         sB.panel[1][0] = PANEL_ROAD_LEFT;
+         sB.panel[1][GRID_COLS - 1] = PANEL_ROAD_RIGHT;
+     }
++    if (PlaceField())
++        return;
+     for (side = 0; side < 2; side++)
+     {
+         u8 type = PANEL_NORMAL;
+@@ -90,14 +160,7 @@ void Field_StartConditions(void)
+             type = PANEL_GRASS, n = 2;
+         else if (gBattleEnvironment == BATTLE_ENVIRONMENT_CAVE || gBattleEnvironment == BATTLE_ENVIRONMENT_MOUNTAIN)
+             type = PANEL_CRACKED, n = 1;
+-        while (n > 0)
+-        {
+-            s8 x = (side == SIDE_PLAYER ? 0 : PLAYER_COLS) + Random() % PLAYER_COLS, y = Random() % GRID_ROWS;
+-            if (sB.panel[y][x] != PANEL_NORMAL || (y == 1 && (x == 1 || x == 4)))
+-                continue;   // not where the fighters start
+-            sB.panel[y][x] = type;   // no timer: terrain stays
+-            n--;
+-        }
++        ScatterSide(side, type, n);
+     }
+ }
+ 
+@@ -296,6 +359,7 @@ void Field_SetPanel(s8 x, s8 y, u8 type)
+     case PANEL_HOLY:
+     case PANEL_GRASS:
+     case PANEL_ICE:
++    case PANEL_LAVA:
+     case PANEL_ROAD_UP: case PANEL_ROAD_DOWN: case PANEL_ROAD_LEFT: case PANEL_ROAD_RIGHT:
+         sB.panelTimer[y][x] = PANEL_EFFECT_FRAMES;
+         break;
+@@ -712,6 +776,10 @@ static void FighterFrame(u8 s)
+         {
+             sB.poisonTick[s] = 0;
+         }
++        // POC-17d lava (TUNE): standing on it burns (Field_TryStatus: Fire types and Water Veil are spared, Gen 3)
++        if (sB.panel[f->y][f->x] == PANEL_LAVA && !f->invuln && !Field_Floats(f) && f->bm.status1 == 0
++         && sB.state == ST_FIGHT)
++            Field_TryStatus(s, s, MOVE_NONE, STATUS1_BURN, FALSE);
+     }
+ }
+ 
+@@ -732,6 +800,33 @@ static void Heal(struct Fighter *f, s32 amount)
+ 
+ static void EndTurnFighter(u8 s);
+ 
++// POC-17d (our rules, TUNE): the weather works on the panels at the end of each turn - sun melts ice, rain cools
++// lava, hail now and then freezes a bare panel nobody stands on.
++static void WeatherPanels(void)
++{
++    s32 r, c;
++    for (r = 0; r < GRID_ROWS; r++)
++        for (c = 0; c < GRID_COLS; c++)
++        {
++            if (((sB.weather & B_WEATHER_SUN) && sB.panel[r][c] == PANEL_ICE)
++             || ((sB.weather & B_WEATHER_RAIN) && sB.panel[r][c] == PANEL_LAVA))
++            {
++                Field_SetPanel(c, r, PANEL_NORMAL);
++                sB.fx[r][c] = 10;
++            }
++        }
++    if ((sB.weather & B_WEATHER_HAIL) && Random() % 2 == 0)
++    {
++        s8 x = Random() % GRID_COLS, y = Random() % GRID_ROWS;
++        if (sB.panel[y][x] == PANEL_NORMAL && !(sB.f[SIDE_PLAYER].x == x && sB.f[SIDE_PLAYER].y == y)
++         && !(sB.f[SIDE_ENEMY].x == x && sB.f[SIDE_ENEMY].y == y))
++        {
++            Field_SetPanel(x, y, PANEL_ICE);
++            sB.fx[y][x] = 10;
++        }
++    }
++}
++
+ void Field_EndTurn(void)
+ {
+     s32 s;
+@@ -765,6 +860,7 @@ void Field_EndTurn(void)
+             Moves_DamageFighter(s > 0, Frac(f, 16), "IS PELTED BY HAIL!");
+     }
+ 
++    WeatherPanels();
+     EndTurnFighter(SIDE_PLAYER);
+     for (s = 0; s < sB.foeCount; s++)
+     {
+@@ -796,6 +892,9 @@ static void EndTurnFighter(u8 s)
+         // BN grass panel heals Wood-element objects; here Grass types (1/16 per turn, TUNE).
+         else if (sB.panel[f->y][f->x] == PANEL_GRASS && HasType(f, TYPE_GRASS))
+             Heal(f, Frac(f, 16));
++        // POC-17d: Fire types heal on lava, as Grass types on grass (1/16 per turn, TUNE)
++        else if (sB.panel[f->y][f->x] == PANEL_LAVA && HasType(f, TYPE_FIRE))
++            Heal(f, Frac(f, 16));
+         // Leech Seed: 1/8 to whoever is in on the other side.
+         if (f->seeded && o->bm.hp)
+         {
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 9039968..0f51690 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -1124,10 +1124,33 @@ static void ApplyHit(struct Attack *a, bool8 last)
+         Field_PushBack(defSide, 1);
+ }
+ 
++// POC-17d (our rules, TUNE): a Fire attack burns away grass and melts ice; a Water attack cools lava.
++static void PanelsReact(const struct Attack *a, const u8 cells[GRID_ROWS][GRID_COLS])
++{
++    s32 r, c;
++    u8 type = a->typeOverride ? a->typeOverride - 1 : gBattleMoves[a->move].type;
++    if (type != TYPE_FIRE && type != TYPE_WATER)
++        return;
++    for (r = 0; r < GRID_ROWS; r++)
++        for (c = 0; c < GRID_COLS; c++)
++        {
++            u8 p = sB.panel[r][c];
++            if (!cells[r][c])
++                continue;
++            if ((type == TYPE_FIRE && (p == PANEL_GRASS || p == PANEL_ICE)) || (type == TYPE_WATER && p == PANEL_LAVA))
++            {
++                Field_SetPanel(c, r, PANEL_NORMAL);
++                FlashPanel(c, r, 12);
++                PKBN_LOG("panel react: type %u turns panel %u at (%d,%d) normal", type, p, (int)c, (int)r);
++            }
++        }
++}
++
+ // Hit the opponent if it stands on one of `cells`.
+ static bool8 StrikeCells(struct Attack *a, const u8 cells[GRID_ROWS][GRID_COLS], bool8 last)
+ {
+     struct Fighter *opp = &sB.f[a->side ^ 1];
++    PanelsReact(a, cells);
+     if (a->side == SIDE_PLAYER && sB.foeCount > 1)
+     {
+         // a pack: everyone standing in the area is hit (BN WideSword through two viruses)
+-- 
+2.43.0
+
