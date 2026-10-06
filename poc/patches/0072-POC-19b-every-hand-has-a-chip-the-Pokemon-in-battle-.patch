@@ -1,0 +1,150 @@
+From dd6771708261183769c81a25450f149e7349bb04 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 7 Oct 2026 01:07:44 +0300
+Subject: [PATCH 72/72] POC-19b: every hand has a chip the Pokemon in battle
+ can use, when the pile has one; buster-only test bot and PKBN_TEST_SEED
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/bot.c         | 26 ++++++++++++++++++++++++++
+ src/pkbn/grid_battle.c | 34 ++++++++++++++++++++++++++++++++++
+ src/pkbn/selftest.c    | 14 ++++++++++++++
+ 3 files changed, 74 insertions(+)
+
+diff --git a/src/pkbn/bot.c b/src/pkbn/bot.c
+index 98c464a..a803823 100644
+--- a/src/pkbn/bot.c
++++ b/src/pkbn/bot.c
+@@ -207,4 +207,30 @@ void PkbnBot_Fight(u16 *held, u16 *pressed)
+         *held = B_BUTTON;
+ }
+ 
++
++// POC-19 (Khaled's note 5: "staying in the back row and firing the buster" trivialises early fights): a bot that only
++// does that - the back column, the foe's row, B held, no chips; it dodges threatened panels like the smart bot.
++void PkbnBot_BusterFight(u16 *held, u16 *pressed)
++{
++    const struct Fighter *p = &sB.f[SIDE_PLAYER];
++    const struct Fighter *t;
++    *held = *pressed = 0;
++    Foe_Select(Foe_PlayerTarget());
++    t = &sB.f[SIDE_ENEMY];
++    if (!Moves_PanelThreatened(SIDE_ENEMY, p->x, p->y))
++        sThreatSince = 0;
++    else if (sThreatSince == 0)
++        sThreatSince = sB.frame;
++    if (sThreatSince && sB.frame - sThreatSince >= ReactFrames())
++    {
++        if (Safe(p->x, p->y - 1)) { *held = DPAD_UP; return; }
++        if (Safe(p->x, p->y + 1)) { *held = DPAD_DOWN; return; }
++    }
++    if (p->x > 0 && Safe(p->x - 1, p->y))
++        *held = DPAD_LEFT;
++    else if (p->y != t->y && Safe(p->x, p->y + (t->y > p->y ? 1 : -1)))
++        *held = t->y > p->y ? DPAD_DOWN : DPAD_UP;
++    *held |= B_BUTTON;
++}
++
+ #endif // PORTABLE
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 37367cc..91491da 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -562,6 +562,39 @@ static bool8 ChipAlive(u8 idx)
+ }
+ 
+ // BN keeps unselected chips in the hand and tops it up from the folder.
++// POC-19 (Khaled: "guarantee at least 1 playable chip per hand if possible"; our rule - BN6 deals its hand blind):
++// if nothing in the hand works for whoever is in, the first chip in the pile that does swaps in for a random one
++// (which goes back into the pile where the other came from).
++static bool8 ChipPlayableNow(u8 idx)
++{
++    const struct FolderChip *c = &sB.folder.chips[idx];
++    if (idx == FOLDER_STRUGGLE || !ChipAlive(idx))
++        return FALSE;
++    if (c->owner != CHIP_SHARED)
++        return PartyAlive(c->owner);
++    return (c->slot & LEADER_CHIP) || Chip_CanUse(&sB.f[SIDE_PLAYER].bm, c->move);
++}
++
++static void GuaranteePlayable(void)
++{
++    s32 i, p;
++    if (sB.handCount == 0)
++        return;
++    SyncActiveToParty();
++    for (i = 0; i < sB.handCount; i++)
++        if (ChipPlayableNow(sB.hand[i]))
++            return;
++    for (p = sB.folder.pileCount - 1; p >= 0; p--)   // the top of the pile first (drawn from the end)
++        if (ChipPlayableNow(sB.folder.pile[p]))
++        {
++            u8 h = (u8)(Random() % sB.handCount), tmp = sB.hand[h];
++            sB.hand[h] = sB.folder.pile[p];
++            sB.folder.pile[p] = tmp;
++            PKBN_LOG("hand: no playable chip - swapped in %u from the pile", sB.hand[h]);
++            return;
++        }
++}
++
+ static void RefillHand(void)
+ {
+     u8 keep[HAND_MAX];
+@@ -618,6 +651,7 @@ static void RefillHand(void)
+         }
+         sB.hand[sB.handCount++] = idx;
+     }
++    GuaranteePlayable();   // POC-19
+     // POC-12: the folder is used up and nothing left in the hand works for whoever is in -> Struggle.
+     if (sB.folder.pileCount == 0 && !(sB.folder.discardCount && sB.folder.count < FOLDER_RESHUFFLE_BELOW)
+      && sB.handCount < HAND_MAX)
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index b0b099c..2d70cc7 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -19,6 +19,7 @@
+ #include "money.h"
+ #include "battle_setup.h"
+ #include "pkbn/grid_battle.h"
++#include "random.h"
+ #include "pkbn/tutorial.h"
+ #include "pkbn/challenge.h"
+ #include "pkbn/replay.h"
+@@ -125,6 +126,11 @@ static void Autopilot(void)
+     switch (d.state)
+     {
+     case PKBN_GRID_CUSTOM:
++        if (getenv("PKBN_BOT") != NULL && strcmp(getenv("PKBN_BOT"), "buster") == 0)
++        {
++            pressed = START_BUTTON;   // POC-19: the buster-only bot takes no chips
++            break;
++        }
+         // PKBN_TEST_THROW=N: throw a ball at the first N Customs (cursor to the item row, A).
+         if (sThrowsLeft > 0 && d.ballUsable)
+         {
+@@ -187,6 +193,12 @@ static void Autopilot(void)
+         pressed = A_BUTTON; // first option
+         break;
+     case PKBN_GRID_FIGHT:
++        if (getenv("PKBN_BOT") != NULL && strcmp(getenv("PKBN_BOT"), "buster") == 0)
++        {
++            extern void PkbnBot_BusterFight(u16 *held, u16 *pressed);
++            PkbnBot_BusterFight(&held, &pressed);
++            break;
++        }
+         {
+             // POC-18: a lesson's "do it" line - do it
+             u16 k = Tut_WantedFightKey();
+@@ -630,6 +642,8 @@ void Pkbn_SelfTestMaybeStart(void)
+     }
+     if (getenv("PKBN_TEST_THROW") != NULL)
+         sThrowsLeft = (u8)atoi(getenv("PKBN_TEST_THROW"));
++    if (getenv("PKBN_TEST_SEED") != NULL)
++        gRngValue = (u32)strtoul(getenv("PKBN_TEST_SEED"), NULL, 10);   // POC-19: repeat a test with other luck
+     gBattleTypeFlags = 0;
+     // PKBN_TEST_LEGENDARY=1: the wild Pokémon is fought as a scripted legendary (POC-14 boss battles)
+     if (getenv("PKBN_TEST_LEGENDARY") != NULL)
+-- 
+2.43.0
+

@@ -1,0 +1,115 @@
+From e68b4ac3e21e5c3c7323a78a8343e0321a231ca3 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 7 Oct 2026 01:05:55 +0300
+Subject: [PATCH 71/72] POC-19a: catches pay EXP; a Teleport in a pack only
+ removes that one; the cursor starts on SW when nothing in hand works; held
+ D-pad repeats in FOLDER, NAVICUST and NET CHALLENGE
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/challenge_ui.c |  3 ++-
+ src/pkbn/folder_ui.c    |  3 ++-
+ src/pkbn/grid_battle.c  | 29 +++++++++++++++++++++++++++++
+ src/pkbn/navicust_ui.c  |  3 ++-
+ 4 files changed, 35 insertions(+), 3 deletions(-)
+
+diff --git a/src/pkbn/challenge_ui.c b/src/pkbn/challenge_ui.c
+index 6f21cd1..510b18d 100644
+--- a/src/pkbn/challenge_ui.c
++++ b/src/pkbn/challenge_ui.c
+@@ -289,7 +289,8 @@ static void HandleInput(u16 keys)
+ 
+ static void CB2_ChallengeMenu(void)
+ {
+-    u16 keys = gMain.newKeys;
++    // POC-18 (Khaled): holding the D-pad keeps the cursor moving - Emerald's key repeat (src/main.c ReadKeys)
++    u16 keys = (gMain.newKeys & ~DPAD_ANY) | (gMain.newAndRepeatedKeys & DPAD_ANY);
+     sC.t++;
+     if (sKeys != NULL)
+     {
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index 9ba7dbc..ab42327 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -1214,7 +1214,8 @@ static u32 sKeyClock;
+ 
+ static void CB2_Folder(void)
+ {
+-    u16 keys = gMain.newKeys;
++    // POC-18 (Khaled): holding the D-pad keeps the cursor moving - Emerald's key repeat (src/main.c ReadKeys)
++    u16 keys = (gMain.newKeys & ~DPAD_ANY) | (gMain.newAndRepeatedKeys & DPAD_ANY);
+     sF.t++;
+     if (sF.noteTimer)
+         sF.noteTimer--;
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 6d67252..37367cc 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -648,6 +648,16 @@ static void RefillHand(void)
+         sB.picked[i] = FALSE;
+     sB.wildPicked = FALSE;
+     sB.cursor = 0;
++    {
++        // POC-19 (Khaled: a Pokémon that can use nothing got Struggle instead of SW): when no chip in hand works for
++        // whoever is in and SW can send someone else, the cursor starts on SW
++        bool8 any = FALSE;
++        for (i = 0; i < sB.handCount; i++)
++            if (sB.hand[i] != FOLDER_STRUGGLE && PkbnGrid_HandSelectable(i))
++                any = TRUE;
++        if (!any && PkbnGrid_HandSelectable(sB.handCount))
++            sB.cursor = sB.handCount;
++    }
+     if (sB.handSize != HAND_SIZE)
+         PKBN_LOG("custom hand: %u chips (NaviCust)", sB.handSize);
+ }
+@@ -1586,6 +1596,21 @@ static bool8 TryTeleportEscape(u8 side, u16 move)
+             return FALSE;
+         EndBattle(B_OUTCOME_PLAYER_TELEPORTED, "TELEPORTED AWAY!");
+     }
++    else if (sB.foeCount > 1 && Foe_LiveCount() > 1)
++    {
++        // POC-19 (Khaled): in a pack, only the one that used Teleport leaves - no EXP for it, and the rest fight on
++        char text[40];
++        s32 i;
++        snprintf(text, sizeof(text), "WILD %s FLED!", sB.f[SIDE_ENEMY].name);
++        sB.foeDown[sB.cur] = TRUE;   // (CheckPackFaints skips it: no EXP, no faint)
++        sB.f[SIDE_ENEMY].bm.hp = 0;
++        for (i = 0; i < MAX_ATTACKS; i++)
++            if (sB.attacks[i].active && sB.attacks[i].side == SIDE_ENEMY && sB.attacks[i].foe == sB.cur)
++                sB.attacks[i].active = FALSE;
++        SetMsg(text, 60);
++        PlaySE(SE_FLEE);
++        PKBN_LOG("pack: %s teleported away, %u left", sB.f[SIDE_ENEMY].name, Foe_LiveCount());
++    }
+     else
+     {
+         char text[40];
+@@ -2577,6 +2602,10 @@ static void UpdateThrow(void)
+         SetMonData(mon, MON_DATA_HP, &hp);
+         SetMonData(mon, MON_DATA_STATUS, &status);
+         sB.caught = TRUE;
++        // POC-19 (Khaled: "Catches should still award EXP"). Gen 3 gives none for a catch (Gen 6 started it); here a
++        // catch pays the same EXP as knocking it out
++        if (!sB.challenge)
++            AwardExpForFaintedEnemy();
+         snprintf(text, sizeof(text), "GOTCHA! %s WAS CAUGHT!", sB.f[SIDE_ENEMY].name); // sText_GotchaPkmnCaughtPlayer
+         EndBattle(B_OUTCOME_CAUGHT, text);
+         return;
+diff --git a/src/pkbn/navicust_ui.c b/src/pkbn/navicust_ui.c
+index 61e671f..213ae08 100644
+--- a/src/pkbn/navicust_ui.c
++++ b/src/pkbn/navicust_ui.c
+@@ -748,7 +748,8 @@ static u32 sKeyClock;
+ 
+ static void CB2_NaviCust(void)
+ {
+-    u16 keys = gMain.newKeys;
++    // POC-18 (Khaled): holding the D-pad keeps the cursor moving - Emerald's key repeat (src/main.c ReadKeys)
++    u16 keys = (gMain.newKeys & ~DPAD_ANY) | (gMain.newAndRepeatedKeys & DPAD_ANY);
+     sN.t++;
+     if (sN.noteTimer)
+         sN.noteTimer--;
+-- 
+2.43.0
+
