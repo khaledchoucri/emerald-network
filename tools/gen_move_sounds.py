@@ -10,6 +10,7 @@ in order, adding up its `delay`s, to get WHEN each sound starts and with which p
 length in the scripts (they wait for sprites); we count WAIT frames for them (TUNE).
 
 Usage: python3 tools/gen_move_sounds.py <pokeemerald dir>   -> writes src/pkbn/move_sounds.c
+Also writes Emerald's status and general animations' sounds (gPkbnStatusSounds, gPkbnGeneralSounds; POC-15e).
 """
 import re, sys, os
 ROOT = sys.argv[1] if len(sys.argv) > 1 else '.'
@@ -25,15 +26,18 @@ for i, l in enumerate(src):
     if m:
         cur = m.group(1)
         labels[cur] = i + 1
+def table(name):
+    out, i = [], labels[name]
+    while i < len(src):
+        m = re.match(r'\s*ptrvalue\s+(\w+)', src[i])
+        if not m:
+            break
+        out.append(m.group(1))
+        i += 1
+    return out
+
 # the move -> script table, in move order
-order = []
-i = labels['gBattleAnims_Moves']
-while i < len(src):
-    m = re.match(r'\s*ptrvalue\s+(\w+)', src[i])
-    if not m:
-        break
-    order.append(m.group(1))
-    i += 1
+order = table('gBattleAnims_Moves')
 
 def args(l, cmd):
     return [a.strip() for a in l.strip()[len(cmd):].split(',')]
@@ -124,5 +128,18 @@ for num, name in moves:
     items = ', '.join('{ %d, %s, %s }' % (t, 'PKBN_SOUND_CRY' if se == 'CRY' else se, pan) for t, se, pan in ev)
     out.append('    [%s] = { %s },' % (name, items))
 out.append('};')
+
+# the status-condition and general animations (B_ANIM_STATUS_*, B_ANIM_*): poison ticks, stat changes, weather...
+def extra(tname, cname, count):
+    rows = []
+    for idx, lab in enumerate(table(tname)[:count]):
+        ev = []
+        walk(lab, 0, ev)
+        ev = sorted([e for e in ev if e[0] <= MAX_T], key=lambda e: e[0])[:MAX_EVENTS]
+        items = ', '.join('{ %d, %s, %s }' % (t, 'PKBN_SOUND_CRY' if se == 'CRY' else se, pan) for t, se, pan in ev)
+        rows.append('    /* %2d %-26s */ { %s },' % (idx, lab, items or '{ 0 }'))
+    return ['', 'const struct PkbnMoveSound %s[%d][PKBN_MOVE_SOUNDS] =' % (cname, count), '{'] + rows + ['};']
+out += extra('gBattleAnims_StatusConditions', 'gPkbnStatusSounds', 9)
+out += extra('gBattleAnims_General', 'gPkbnGeneralSounds', 23)
 open(os.path.join(ROOT, 'src/pkbn/move_sounds.c'), 'w').write('\n'.join(out) + '\n')
 print('moves with sounds:', count, 'of', len(moves))

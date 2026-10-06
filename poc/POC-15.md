@@ -4,7 +4,9 @@
 
 - `poc/patches/0045-POC-15a-BN-paced-attacks-wind-ups-and-poses-from-BN6.patch`
 - `poc/patches/0046-POC-15b-NaviCust-restyled-glossy-joined-program-bloc.patch`
-- Applying 0001–0046 onto the pin was checked in a clean worktree.
+- `poc/patches/0047-POC-15c-…` (gallery captions), `0048-POC-15d-…` (move sounds), `0049-POC-15e-…` (status, stat and
+  turn sounds)
+- Applying 0001–0049 onto the pin was checked in a clean worktree.
 
 ![chips before / after 1](screens/POC-15-chips-1.png)
 ![chips before / after 2](screens/POC-15-chips-2.png)
@@ -102,6 +104,38 @@ Which animation is which was identified by rendering its frames.
   - Each program shows its own shape in its colour.
   - A gold bar and a pointer mark the current row.
 - **The rest:** a blue gradient title bar and bevelled cells in the preview.
+
+## 15d / 15e — sounds from Emerald's battle animations
+
+- **15d, moves:** `tools/gen_move_sounds.py` walks each move's script in `data/battle_anim_scripts.s` and writes
+  `src/pkbn/move_sounds.c` (when each sound starts, which SE, its pan). A move's sounds start when it's used; timelines
+  longer than 60 frames are squeezed into 60 (TUNE). Pans are mirrored when the foe attacks.
+- **15e, stat changes:** `SE_M_STAT_INCREASE` / `SE_M_STAT_DECREASE`, panned to the Pokémon, as `AnimTask_StatsChange`
+  plays them (`src/battle_anim_utility_funcs.c:562-564`). They replace our old `SE_EXP_MAX` / `SE_BOO`, and play after
+  the move's own sounds, as Emerald plays the stat animation after the move's. Speed Boost now shows its arrows too
+  (`BattleScript_SpeedBoostActivates` plays `B_ANIM_STATS_CHANGE`).
+- **15e, status and turn animations:** the generator also writes Emerald's status animations (`gBattleAnims_StatusConditions`)
+  and general animations (`gBattleAnims_General`), and the rules post a `VEV_ANIM` event where Emerald plays one:
+
+| when | animation | Emerald |
+|---|---|---|
+| a status is inflicted | its status animation (replaces `SE_BOO`) | `BattleScript_MoveEffectSleep/Poison/Burn/Freeze/Paralysis/Toxic`: `statusanimation BS_EFFECT_BATTLER` |
+| poison / burn damage each turn | PSN / BRN | `BattleScript_PoisonTurnDmg`, `BurnTurnDmg` → `DoStatusTurnDmg` |
+| nightmare / curse damage | NIGHTMARE / CURSED | `BattleScript_NightmareTurnDmg`, `CurseTurnDmg` |
+| asleep / frozen / fully paralyzed when acting | SLP / FRZ / PRZ | `BattleScript_MoveUsedIsAsleep/IsFrozen/IsParalyzed` |
+| hurt in confusion, immobilized by love | CONFUSION / INFATUATION | `battle_gfx_sfx_util.c:442-444` |
+| weather goes on at the end of a turn | RAIN/SUN/SANDSTORM/HAIL_CONTINUES | `battle_util.c:2501` |
+| Leech Seed drain | LEECH_SEED_DRAIN | `BattleScript_LeechSeedTurnDrain` |
+| a trap's turn damage | TURN_TRAP | `BattleScript_WrapTurnDmg` |
+| Ingrain, Leftovers (program), Wish | INGRAIN_HEAL, HELD_ITEM_EFFECT, WISH_HEAL | `BattleScript_IngrainTurnHeal`, `ItemHealHP_End2`, `WishComesTrue` |
+| Focus Band (program) holds on | FOCUS_BAND | |
+| Future Sight / Doom Desire lands | FUTURE_SIGHT_HIT / DOOM_DESIRE_HIT (replaces `SE_M_HYPER_BEAM`) | |
+
+- **How they play:** several posted together play one after another (Emerald plays its end-of-turn animations in
+  turn), 8 frames apart (TUNE). A new move doesn't cut them off. The same one on the same side plays at most once per 40
+  frames (TUNE), so pressing A while asleep doesn't stack them.
+- **Duplicates removed:** Rain Dance, Sandstorm and Hail also played a sound from the rules, on top of the move's own.
+- `PKBN_NO_MOVE_SOUNDS=1` turns all of these off; `PKBN_LOG_SOUNDS=1` prints each one.
 
 ## Verification
 

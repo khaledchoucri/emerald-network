@@ -1,0 +1,493 @@
+From c1d3d6aa8d64ff50ccc7a439cdd3e2720abe4a9d Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 15:05:12 +0300
+Subject: [PATCH] POC-15e: stat change, status and end-of-turn sounds from
+ Emerald's animations
+
+- Stat changes play SE_M_STAT_INCREASE / SE_M_STAT_DECREASE panned to the Pokemon
+  (AnimTask_StatsChange, src/battle_anim_utility_funcs.c:562-564), after the move's sounds.
+- New VEV_ANIM event: the rules post Emerald's status animations (inflicted, turn damage,
+  asleep/frozen/paralyzed/confused/infatuated) and general ones (weather continues, Leech Seed,
+  trap, Ingrain, Leftovers, Wish, Focus Band, Future Sight / Doom Desire hit); grid_draw plays
+  their sounds from gPkbnStatusSounds / gPkbnGeneralSounds, one after another.
+- Speed Boost posts its stat arrows (BattleScript_SpeedBoostActivates).
+- Removed SE_BOO on status, SE_M_HYPER_BEAM on delayed hits and duplicate weather-move sounds.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |  7 ++-
+ include/pkbn/move_sounds.h   |  5 +++
+ src/pkbn/grid_battle.c       |  2 +
+ src/pkbn/grid_draw.c         | 86 +++++++++++++++++++++++++++++++++++-
+ src/pkbn/grid_field.c        | 37 ++++++++++++++--
+ src/pkbn/grid_moves.c        | 36 ++++++++++++---
+ src/pkbn/move_sounds.c       | 40 +++++++++++++++++
+ 7 files changed, 201 insertions(+), 12 deletions(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index ca6c9a2..137d03e 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -196,7 +196,7 @@ struct Attack
+ };
+ 
+ // Visual events (POC-15): the rules post what happened, the drawing code plays it. Visual only.
+-enum { VEV_USE, VEV_LAUNCH, VEV_PUSH, VEV_STAT };
++enum { VEV_USE, VEV_LAUNCH, VEV_PUSH, VEV_STAT, VEV_ANIM };
+ struct VisEvent
+ {
+     u32 serial;
+@@ -205,7 +205,8 @@ struct VisEvent
+     u8 foe;          // enemy side: which foe (sB.cur)
+     u8 kind;         // VEV_USE: GK_* ; VEV_LAUNCH: attack slot
+     u16 move;
+-    s8 arg;          // VEV_USE: wind-up frames; VEV_PUSH: panels moved (signed); VEV_STAT: stages (+/-)
++    s8 arg;          // VEV_USE: wind-up frames; VEV_PUSH: panels moved (signed); VEV_STAT: stages (+/-); VEV_ANIM: index
++                     // VEV_ANIM: kind 0 = B_ANIM_STATUS_*, 1 = B_ANIM_* ; x = 1 when it plays on side itself only
+     s8 x, y;         // VEV_PUSH: where it was before
+ };
+ #define MAX_VIS_EVENTS 16
+@@ -352,6 +353,8 @@ u8 Foe_PlayerTarget(void);                // the foe the player's next move aims
+ // grid_moves.c
+ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, const char *userName, u8 userSlot);
+ void Vis_Post(u8 ev, u8 side, u16 move, u8 kind, s8 arg, s8 x, s8 y);   // POC-15 visual events
++void Vis_StatusAnim(u8 side, u8 anim);                  // POC-15e: B_ANIM_STATUS_* on that side (its sounds)
++void Vis_GeneralAnim(u8 side, u8 anim, bool8 self);     // POC-15e: B_ANIM_* from that side (self: on itself)
+ u8 Moves_Windup(u8 side, u8 kind, bool8 fast);
+ extern bool8 gPkbnNoWindup;                           // POC-15: BN wind-up frames before an attack
+ void Moves_Update(void);
+diff --git a/include/pkbn/move_sounds.h b/include/pkbn/move_sounds.h
+index 0d1c56d..278b2eb 100644
+--- a/include/pkbn/move_sounds.h
++++ b/include/pkbn/move_sounds.h
+@@ -13,5 +13,10 @@ struct PkbnMoveSound
+ };
+ 
+ extern const struct PkbnMoveSound gPkbnMoveSounds[MOVES_COUNT][PKBN_MOVE_SOUNDS];
++// Emerald's status animations (B_ANIM_STATUS_*) and general animations (B_ANIM_*), same indices (POC-15e)
++#define PKBN_STATUS_ANIMS  9
++#define PKBN_GENERAL_ANIMS 23
++extern const struct PkbnMoveSound gPkbnStatusSounds[PKBN_STATUS_ANIMS][PKBN_MOVE_SOUNDS];
++extern const struct PkbnMoveSound gPkbnGeneralSounds[PKBN_GENERAL_ANIMS][PKBN_MOVE_SOUNDS];
+ 
+ #endif // GUARD_PKBN_MOVE_SOUNDS_H
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index de36927..346cb32 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -12,6 +12,7 @@
+ // PC (PORTABLE) builds only: drawing goes through gPkbnFrameOverlay (src/platform/sdl2.c).
+ 
+ #include "pkbn/grid_internal.h"
++#include "constants/battle_anim.h"
+ #include "pkbn/playlog.h"
+ #include "battle_main.h"
+ #include "battle_setup.h"
+@@ -665,6 +666,7 @@ static void OpenCustom(void)
+             {
+                 f->bm.hp = (f->bm.hp + sB.wishHeal[i] > f->bm.maxHP) ? f->bm.maxHP : f->bm.hp + sB.wishHeal[i];
+                 f->statusFlash = 20;
++                Vis_GeneralAnim(i, B_ANIM_WISH_HEAL, TRUE);   // BattleScript_WishComesTrue
+                 SetMsg("THE WISH CAME TRUE!", 60);
+                 PKBN_LOG("wish healed %s by %u", f->name, sB.wishHeal[i]);
+             }
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 6c5925d..291465b 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -14,6 +14,8 @@
+ #include "data.h"
+ #include "item.h"
+ #include "constants/moves.h"
++#include "constants/battle_anim.h"
++#include "constants/songs.h"
+ #include "pkbn/render.h"
+ #include "pkbn/grid_vfx.h"
+ 
+@@ -352,8 +354,11 @@ static u8 sDashT[NVIS];      // POC-15: a DASH - the user charges down the row a
+ static u8 sDashPanels[NVIS];
+ #define DASH_FRAMES 18
+ #define SOUND_SPAN 60
+-#define MAX_PENDING_SOUNDS 24
++#define MAX_PENDING_SOUNDS 48
+ static struct { u32 due; u16 se; s8 pan; u16 species; u8 side; } sPendingSound[MAX_PENDING_SOUNDS];
++#define ANIM_SOUND_SIDE 2   // sPendingSound[].side for these: a new move doesn't cancel them
++static u32 sAnimSoundFree;  // when the last one queued is done
++static u32 sAnimSoundLast[2][2][PKBN_GENERAL_ANIMS];   // [side][table][anim]: when it last played
+ static u16 sLastSoundMove[NVIS];
+ static u32 sLastSoundT[NVIS];
+ 
+@@ -376,6 +381,8 @@ static void ResetVisuals(void)
+     memset(sPushT, 0, sizeof(sPushT));
+     memset(sDashT, 0, sizeof(sDashT));
+     memset(sPendingSound, 0, sizeof(sPendingSound));
++    memset(sAnimSoundLast, 0, sizeof(sAnimSoundLast));
++    sAnimSoundFree = 0;
+     memset(sLastSoundMove, 0, sizeof(sLastSoundMove));
+     sLastVis = sB.visSerial;
+     memset(sAppearT, 0, sizeof(sAppearT));
+@@ -432,6 +439,79 @@ static void ScheduleMoveSounds(u16 move, u8 side, u8 v)
+             }
+ }
+ 
++// POC-15e: Emerald's status and general animations' sounds (status inflicted and its turn damage, weather going on,
++// Leech Seed, Ingrain, Leftovers, Wish...) and the stat change sound. These don't replace a move's sounds; ones posted
++// together play one after another, as Emerald plays its end-of-turn animations in turn.
++
++// Emerald plays these after the move's animation: start them once the sounds already queued (within SOUND_SPAN) are out
++static u32 AfterQueuedSounds(void)
++{
++    s32 k;
++    u32 due = sTick > sAnimSoundFree ? sTick : sAnimSoundFree;
++    for (k = 0; k < MAX_PENDING_SOUNDS; k++)
++        if (sPendingSound[k].se && sPendingSound[k].due + 6 > due && sPendingSound[k].due <= sTick + SOUND_SPAN)
++            due = sPendingSound[k].due + 6;
++    return due;
++}
++
++static void ScheduleTableSounds(const struct PkbnMoveSound *list, u8 side, bool8 self)
++{
++    s32 i, k, last = 0;
++    u32 base = AfterQueuedSounds();
++    s8 sidePan = side == SIDE_PLAYER ? SOUND_PAN_ATTACKER * 3 / 4 : SOUND_PAN_TARGET * 3 / 4;   // TUNE
++    for (i = 0; i < PKBN_MOVE_SOUNDS && list[i].se; i++)
++        if (list[i].frame > last)
++            last = list[i].frame;
++    for (i = 0; i < PKBN_MOVE_SOUNDS && list[i].se; i++)
++        for (k = 0; k < MAX_PENDING_SOUNDS; k++)
++            if (sPendingSound[k].se == 0)
++            {
++                sPendingSound[k].due = base + (last > SOUND_SPAN ? list[i].frame * SOUND_SPAN / last : list[i].frame);
++                sPendingSound[k].se = list[i].se;
++                sPendingSound[k].pan = self ? (list[i].pan ? sidePan : 0)
++                                     : side == SIDE_PLAYER ? list[i].pan : (s8)-list[i].pan;
++                sPendingSound[k].species = sB.f[side].bm.species;
++                sPendingSound[k].side = ANIM_SOUND_SIDE;
++                break;
++            }
++    sAnimSoundFree = base + (last > SOUND_SPAN ? SOUND_SPAN : last) + 8;   // TUNE: a short gap between them
++}
++
++static void OnAnimEvent(const struct VisEvent *e)
++{
++    u8 table = e->kind ? 1 : 0, anim = (u8)e->arg;
++    if (getenv("PKBN_NO_MOVE_SOUNDS") != NULL)
++        return;
++    if (anim >= (table ? PKBN_GENERAL_ANIMS : PKBN_STATUS_ANIMS))
++        return;
++    // pressing A while asleep or frozen asks every time: one animation per 40 frames (TUNE)
++    if (sAnimSoundLast[e->side][table][anim] && sTick - sAnimSoundLast[e->side][table][anim] < 40)
++        return;
++    sAnimSoundLast[e->side][table][anim] = sTick;
++    ScheduleTableSounds(table ? gPkbnGeneralSounds[anim] : gPkbnStatusSounds[anim], e->side, e->x != 0);
++}
++
++// Emerald's stat change animation plays SE_M_STAT_INCREASE / SE_M_STAT_DECREASE panned to the Pokemon
++// (AnimTask_StatsChange, src/battle_anim_utility_funcs.c:562-564). It plays after the move's animation there, so here
++// after the sounds already queued.
++static void OnStatSound(const struct VisEvent *e)
++{
++    s32 k;
++    u32 due;
++    if (getenv("PKBN_NO_MOVE_SOUNDS") != NULL)
++        return;
++    due = AfterQueuedSounds();
++    for (k = 0; k < MAX_PENDING_SOUNDS; k++)
++        if (sPendingSound[k].se == 0)
++        {
++            sPendingSound[k].due = due;
++            sPendingSound[k].se = e->arg > 0 ? SE_M_STAT_INCREASE : SE_M_STAT_DECREASE;
++            sPendingSound[k].pan = e->side == SIDE_PLAYER ? SOUND_PAN_ATTACKER * 3 / 4 : SOUND_PAN_TARGET * 3 / 4;
++            sPendingSound[k].side = ANIM_SOUND_SIDE;
++            break;
++        }
++}
++
+ static void PlayDueSounds(void)
+ {
+     s32 k;
+@@ -1553,6 +1633,10 @@ void Draw_Overlay(u16 *fb)
+                 break;
+             case VEV_STAT:
+                 Vfx_OnStat(e);
++                OnStatSound(e);
++                break;
++            case VEV_ANIM:
++                OnAnimEvent(e);
+                 break;
+             }
+         }
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index 4da9177..ff2ebd4 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -7,6 +7,7 @@
+ //    sandstorm / hail 1/16, Ingrain 1/16 (battle_util.c DoBattlerEndTurnEffects / DoFieldEndTurnEffects).
+ //  - Sleep 2-5 turns, confusion 2-5 turns, freeze thaws 20% (Gen 3). Review rule: sleep breaks when hit.
+ #include "pkbn/grid_internal.h"
++#include "constants/battle_anim.h"
+ #include "pkbn/challenge.h"
+ #include "field_weather.h"
+ #include "random.h"
+@@ -465,7 +466,11 @@ bool8 Field_TryStatus(u8 targetSide, u8 fromSide, u16 move, u32 status, bool8 vi
+         snprintf(line, sizeof(line), "%s %s", t->name, text);
+         SetMsg(line, 60);
+         t->statusFlash = 20;
+-        PlaySE(SE_BOO);
++        // Emerald plays the status animation on it (BattleScript_MoveEffectSleep... statusanimation BS_EFFECT_BATTLER)
++        Vis_StatusAnim(targetSide, t->bm.status1 & STATUS1_SLEEP ? B_ANIM_STATUS_SLP
++                     : t->bm.status1 & (STATUS1_POISON | STATUS1_TOXIC_POISON) ? B_ANIM_STATUS_PSN
++                     : t->bm.status1 & STATUS1_BURN ? B_ANIM_STATUS_BRN
++                     : t->bm.status1 & STATUS1_FREEZE ? B_ANIM_STATUS_FRZ : B_ANIM_STATUS_PRZ);
+         PKBN_LOG("%s status1=0x%x (move %u)", t->name, (unsigned)t->bm.status1, move);
+     }
+     return TRUE;
+@@ -539,7 +544,7 @@ u8 Field_ApplyStatStage(u8 side, u8 stat, s8 delta, bool8 fromFoe)
+     snprintf(text, sizeof(text), "%s %s!", sStatNames[stat],
+              delta > 1 ? "ROSE SHARPLY" : delta > 0 ? "ROSE" : delta < -1 ? "HARSHLY FELL" : "FELL");
+     SetMsg(text, 60);
+-    PlaySE(delta > 0 ? SE_EXP_MAX : SE_BOO);
++    // (its sound, SE_M_STAT_INCREASE / SE_M_STAT_DECREASE, plays with the arrows: grid_draw.c, POC-15e)
+     PKBN_LOG("%s stat %u %+d -> stage %d", f->name, stat, delta, (int)stage);
+     return TRUE;
+ }
+@@ -745,6 +750,11 @@ void Field_EndTurn(void)
+         f = &sB.f[s > 0 ? SIDE_ENEMY : SIDE_PLAYER];
+         if (f->bm.hp == 0 || f->invuln)
+             continue;
++        if (s == 0 && (sB.weather & (B_WEATHER_RAIN | B_WEATHER_SUN | B_WEATHER_SANDSTORM | B_WEATHER_HAIL)))
++            // "RAIN CONTINUES TO FALL." with its animation (battle_util.c:2501, B_ANIM_RAIN_CONTINUES and the rest)
++            Vis_GeneralAnim(SIDE_PLAYER, sB.weather & B_WEATHER_RAIN ? B_ANIM_RAIN_CONTINUES
++                          : sB.weather & B_WEATHER_SUN ? B_ANIM_SUN_CONTINUES
++                          : sB.weather & B_WEATHER_SANDSTORM ? B_ANIM_SANDSTORM_CONTINUES : B_ANIM_HAIL_CONTINUES, TRUE);
+         if ((sB.weather & B_WEATHER_SANDSTORM) && !HasType(f, TYPE_ROCK) && !HasType(f, TYPE_GROUND) && !HasType(f, TYPE_STEEL))
+             Moves_DamageFighter(s > 0, Frac(f, 16), "IS BUFFETED BY THE SANDSTORM!");
+         if ((sB.weather & B_WEATHER_HAIL) && !HasType(f, TYPE_ICE))
+@@ -768,11 +778,17 @@ static void EndTurnFighter(u8 s)
+         if (f->bm.hp == 0)
+             return;
+         // Leftovrs program (Gen 3 Leftovers: 1/16 each turn)
+-        if (f->navi.leftovers)
++        if (f->navi.leftovers && f->bm.hp < f->bm.maxHP)
++        {
+             Heal(f, Frac(f, f->navi.leftovers));
++            Vis_GeneralAnim(s, B_ANIM_HELD_ITEM_EFFECT, TRUE);   // BattleScript_ItemHealHP_End2
++        }
+         // Ingrain (Gen 3: 1/16) - only while rooted on its grass.
+         if (f->rooted && sB.panel[f->y][f->x] == PANEL_GRASS)
++        {
+             Heal(f, Frac(f, 16));
++            Vis_GeneralAnim(s, B_ANIM_INGRAIN_HEAL, TRUE);   // BattleScript_IngrainTurnHeal
++        }
+         // BN grass panel heals Wood-element objects; here Grass types (1/16 per turn, TUNE).
+         else if (sB.panel[f->y][f->x] == PANEL_GRASS && HasType(f, TYPE_GRASS))
+             Heal(f, Frac(f, 16));
+@@ -781,9 +797,13 @@ static void EndTurnFighter(u8 s)
+         {
+             s32 d = Frac(f, 8);
+             if (d > f->bm.hp) d = f->bm.hp;
++            Vis_GeneralAnim(s, B_ANIM_LEECH_SEED_DRAIN, FALSE);   // BattleScript_LeechSeedTurnDrain: from it to the seeder
+             Moves_DamageFighter(s, d, "IS SAPPED BY LEECH SEED!");
+             Heal(o, d);
+         }
++        // BattleScript_PoisonTurnDmg / BurnTurnDmg -> BattleScript_DoStatusTurnDmg: statusanimation BS_ATTACKER
++        if (f->bm.status1 & (STATUS1_POISON | STATUS1_TOXIC_POISON))
++            Vis_StatusAnim(s, B_ANIM_STATUS_PSN);
+         if (f->bm.status1 & STATUS1_POISON)
+             Moves_DamageFighter(s, Frac(f, 8), "IS HURT BY POISON!");
+         if (f->bm.status1 & STATUS1_TOXIC_POISON)
+@@ -795,14 +815,24 @@ static void EndTurnFighter(u8 s)
+             Moves_DamageFighter(s, d, "IS HURT BY POISON!");
+         }
+         if (f->bm.status1 & STATUS1_BURN)
++        {
++            Vis_StatusAnim(s, B_ANIM_STATUS_BRN);
+             Moves_DamageFighter(s, Frac(f, 8), "IS HURT BY ITS BURN!");
++        }
+         if (f->nightmare && (f->bm.status1 & STATUS1_SLEEP))
++        {
++            Vis_StatusAnim(s, B_ANIM_STATUS_NIGHTMARE);   // BattleScript_NightmareTurnDmg: status2animation
+             Moves_DamageFighter(s, Frac(f, 4), "IS LOCKED IN A NIGHTMARE!");
++        }
+         if (f->cursed)
++        {
++            Vis_StatusAnim(s, B_ANIM_STATUS_CURSED);      // BattleScript_CurseTurnDmg
+             Moves_DamageFighter(s, Frac(f, 4), "IS AFFLICTED BY THE CURSE!");
++        }
+         if (f->trapTurns)
+         {
+             f->trapTurns--;
++            Vis_GeneralAnim(s, B_ANIM_TURN_TRAP, TRUE);    // BattleScript_WrapTurnDmg
+             Moves_DamageFighter(s, Frac(f, 16), "IS HURT BY THE TRAP!");
+         }
+         if (f->bm.hp == 0)
+@@ -860,6 +890,7 @@ static void EndTurnFighter(u8 s)
+             if (f->bm.statStages[STAT_SPEED] < MAX_STAT_STAGE)
+             {
+                 f->bm.statStages[STAT_SPEED]++;
++                Vis_Post(VEV_STAT, s, MOVE_NONE, STAT_SPEED, 1, f->x, f->y);   // BattleScript_SpeedBoostActivates
+                 SayAbility(f, "RAISED ITS SPEED!");
+             }
+             break;
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index dceed48..1d30f10 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -14,6 +14,7 @@
+ //    projectile speed, so Sand Attack makes the foe's attacks easier to dodge.
+ // Kinds' timings are TUNE values unless a comment names the BN6 source.
+ #include "pkbn/grid_internal.h"
++#include "constants/battle_anim.h"
+ #include "data.h"
+ #include "pkbn/render.h"
+ #include "pokedex.h"
+@@ -297,6 +298,17 @@ void Vis_Post(u8 ev, u8 side, u16 move, u8 kind, s8 arg, s8 x, s8 y)
+     e->y = y;
+ }
+ 
++// Emerald's status and general animations, for their sounds (grid_draw plays them from move_sounds.c). POC-15e.
++void Vis_StatusAnim(u8 side, u8 anim)
++{
++    Vis_Post(VEV_ANIM, side, MOVE_NONE, 0, (s8)anim, 1, 0);
++}
++
++void Vis_GeneralAnim(u8 side, u8 anim, bool8 self)
++{
++    Vis_Post(VEV_ANIM, side, MOVE_NONE, 1, (s8)anim, self ? 1 : 0, 0);
++}
++
+ // The user's wind-up before an attack leaves, as BN6 paces it. BN6's attack routines start one of MegaMan's battle
+ // animations and act on a frame counter (frame delays read from data/sprites/battleSpriteMegaMan.spr; which animation
+ // is which was identified by rendering their frames):
+@@ -948,6 +960,7 @@ static void ApplyHit(struct Attack *a, bool8 last)
+         {
+             dmg = def->bm.hp - 1;
+             SayFighter(def, "HUNG ON USING ITS FOCUS BAND!", 50);
++            Vis_GeneralAnim(defSide, B_ANIM_FOCUS_BAND, TRUE);
+         }
+     }
+ 
+@@ -1664,7 +1677,7 @@ static void UpdateAttack(struct Attack *a)
+                 return;
+             // Future Sight / Doom Desire: the shot comes down the row the user stood in
+             StartProjectile(a, DELAYED_STEP);
+-            PlaySE(SE_M_HYPER_BEAM);
++            Vis_GeneralAnim(a->side, a->move == MOVE_DOOM_DESIRE ? B_ANIM_DOOM_DESIRE_HIT : B_ANIM_FUTURE_SIGHT_HIT, FALSE);
+             return;
+         }
+         if (a->timer && --a->timer)
+@@ -2192,10 +2205,10 @@ static void UseWeatherMove(u16 move)
+ {
+     switch (move)
+     {
+-    case MOVE_RAIN_DANCE: sB.weather = B_WEATHER_RAIN_TEMPORARY; SetMsg("IT STARTED TO RAIN!", 60); PlaySE(SE_M_RAIN_DANCE); break;
++    case MOVE_RAIN_DANCE: sB.weather = B_WEATHER_RAIN_TEMPORARY; SetMsg("IT STARTED TO RAIN!", 60); break;
+     case MOVE_SUNNY_DAY:  sB.weather = B_WEATHER_SUN_TEMPORARY; SetMsg("THE SUNLIGHT GOT BRIGHT!", 60); break;
+-    case MOVE_SANDSTORM:  sB.weather = B_WEATHER_SANDSTORM_TEMPORARY; SetMsg("A SANDSTORM BREWED!", 60); PlaySE(SE_M_SAND_ATTACK); break;
+-    case MOVE_HAIL:       sB.weather = B_WEATHER_HAIL_TEMPORARY; SetMsg("IT STARTED TO HAIL!", 60); PlaySE(SE_M_HAIL); break;
++    case MOVE_SANDSTORM:  sB.weather = B_WEATHER_SANDSTORM_TEMPORARY; SetMsg("A SANDSTORM BREWED!", 60); break;
++    case MOVE_HAIL:       sB.weather = B_WEATHER_HAIL_TEMPORARY; SetMsg("IT STARTED TO HAIL!", 60); break;   // (the moves' own sounds play)
+     }
+     sB.weatherTurns = 5; // Gen 3: 5 turns
+     PKBN_LOG("weather 0x%x for 5 turns", sB.weather);
+@@ -2320,7 +2333,11 @@ bool8 Field_CanAct(u8 side, bool8 announce)
+         return FALSE;
+     if (f->bm.status1 & STATUS1_SLEEP)
+     {
+-        if (announce) SayFighter(f, "IS FAST ASLEEP.", 40);
++        if (announce)
++        {
++            SayFighter(f, "IS FAST ASLEEP.", 40);
++            Vis_StatusAnim(side, f->nightmare ? B_ANIM_STATUS_NIGHTMARE : B_ANIM_STATUS_SLP);
++        }
+         return FALSE;
+     }
+     if (f->truantLoaf)
+@@ -2330,7 +2347,11 @@ bool8 Field_CanAct(u8 side, bool8 announce)
+     }
+     if (f->bm.status1 & STATUS1_FREEZE)
+     {
+-        if (announce) SayFighter(f, "IS FROZEN SOLID!", 40);
++        if (announce)
++        {
++            SayFighter(f, "IS FROZEN SOLID!", 40);
++            Vis_StatusAnim(side, B_ANIM_STATUS_FRZ);   // BattleScript_MoveUsedIsFrozen
++        }
+         return FALSE;
+     }
+     if (!announce)
+@@ -2345,6 +2366,7 @@ bool8 Field_CanAct(u8 side, bool8 announce)
+         gCurrentMove = MOVE_POUND;
+         gCritMultiplier = 1;
+         d = CalculateBaseDamage(&me, &me, MOVE_POUND, 0, 40, 0, side, side);
++        Vis_StatusAnim(side, B_ANIM_STATUS_CONFUSION);   // battle_gfx_sfx_util.c:444
+         Moves_DamageFighter(side, d, "HURT ITSELF IN CONFUSION!");
+         f->stun = 20;
+         return FALSE;
+@@ -2352,12 +2374,14 @@ bool8 Field_CanAct(u8 side, bool8 announce)
+     if ((f->bm.status1 & STATUS1_PARALYSIS) && Random() % 4 == 0)
+     {
+         SayFighter(f, "IS PARALYZED! IT CAN'T MOVE!", 50); // Gen 3: 25% full paralysis
++        Vis_StatusAnim(side, B_ANIM_STATUS_PRZ);            // BattleScript_MoveUsedIsParalyzed
+         f->stun = 30;
+         return FALSE;
+     }
+     if (f->infatuated && (Random() & 1))
+     {
+         SayFighter(f, "IS IMMOBILIZED BY LOVE!", 50); // Gen 3: 50%
++        Vis_StatusAnim(side, B_ANIM_STATUS_INFATUATION);
+         f->stun = 20;
+         return FALSE;
+     }
+diff --git a/src/pkbn/move_sounds.c b/src/pkbn/move_sounds.c
+index 9429ca8..bdc9348 100644
+--- a/src/pkbn/move_sounds.c
++++ b/src/pkbn/move_sounds.c
+@@ -358,3 +358,43 @@ const struct PkbnMoveSound gPkbnMoveSounds[MOVES_COUNT][PKBN_MOVE_SOUNDS] =
+     [MOVE_DOOM_DESIRE] = { { 9, SE_M_PSYBEAM, SOUND_PAN_ATTACKER } },
+     [MOVE_PSYCHO_BOOST] = { { 16, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 30, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 44, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 58, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 72, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 86, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 100, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 114, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 126, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 128, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 133, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 134, SE_M_LEER, SOUND_PAN_TARGET }, { 140, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 142, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER } },
+ };
++
++const struct PkbnMoveSound gPkbnStatusSounds[9][PKBN_MOVE_SOUNDS] =
++{
++    /*  0 Status_Poison              */ { { 0, SE_M_TOXIC, SOUND_PAN_TARGET }, { 13, SE_M_TOXIC, SOUND_PAN_TARGET }, { 26, SE_M_TOXIC, SOUND_PAN_TARGET }, { 39, SE_M_TOXIC, SOUND_PAN_TARGET }, { 52, SE_M_TOXIC, SOUND_PAN_TARGET }, { 65, SE_M_TOXIC, SOUND_PAN_TARGET } },
++    /*  1 Status_Confusion           */ { { 0, SE_M_DIZZY_PUNCH, SOUND_PAN_TARGET }, { 13, SE_M_DIZZY_PUNCH, SOUND_PAN_TARGET }, { 26, SE_M_DIZZY_PUNCH, SOUND_PAN_TARGET }, { 39, SE_M_DIZZY_PUNCH, SOUND_PAN_TARGET }, { 52, SE_M_DIZZY_PUNCH, SOUND_PAN_TARGET }, { 65, SE_M_DIZZY_PUNCH, SOUND_PAN_TARGET } },
++    /*  2 Status_Burn                */ { { 0, SE_M_FLAME_WHEEL, SOUND_PAN_TARGET } },
++    /*  3 Status_Infatuation         */ { { 0, SE_M_CHARM, SOUND_PAN_ATTACKER }, { 15, SE_M_CHARM, SOUND_PAN_ATTACKER }, { 30, SE_M_CHARM, SOUND_PAN_ATTACKER } },
++    /*  4 Status_Sleep               */ { { 0, SE_M_SNORE, SOUND_PAN_ATTACKER } },
++    /*  5 Status_Paralysis           */ { { 0, SE_M_THUNDERBOLT2, SOUND_PAN_TARGET } },
++    /*  6 Status_Freeze              */ { { 0, SE_M_ICY_WIND, 0 }, { 17, SE_M_HAIL, SOUND_PAN_TARGET } },
++    /*  7 Status_Curse               */ { { 0, SE_M_NIGHTMARE, SOUND_PAN_TARGET } },
++    /*  8 Status_Nightmare           */ { { 0, SE_M_NIGHTMARE, SOUND_PAN_TARGET } },
++};
++
++const struct PkbnMoveSound gPkbnGeneralSounds[23][PKBN_MOVE_SOUNDS] =
++{
++    /*  0 General_CastformChange     */ { { 0, SE_M_TELEPORT, SOUND_PAN_ATTACKER }, { 48, SE_M_MINIMIZE, SOUND_PAN_ATTACKER } },
++    /*  1 General_StatsChange        */ { { 0 } },
++    /*  2 General_SubstituteFade     */ { { 0 } },
++    /*  3 General_SubstituteAppear   */ { { 0 } },
++    /*  4 General_PokeblockThrow     */ { { 22, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 50, SE_M_TAIL_WHIP, SOUND_PAN_TARGET }, { 69, SE_M_TAIL_WHIP, SOUND_PAN_TARGET } },
++    /*  5 General_ItemKnockoff       */ { { 0 } },
++    /*  6 General_TurnTrap           */ { { 0, SE_M_SCRATCH, SOUND_PAN_TARGET }, { 6, SE_M_SCRATCH, SOUND_PAN_TARGET }, { 30, SE_M_BIND, SOUND_PAN_TARGET } },
++    /*  7 General_HeldItemEffect     */ { { 0, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER }, { 8, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER }, { 16, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER }, { 24, SE_M_MORNING_SUN, SOUND_PAN_ATTACKER }, { 48, SE_SHINY, SOUND_PAN_ATTACKER } },
++    /*  8 General_SmokeballEscape    */ { { 0, SE_BALL_OPEN, SOUND_PAN_TARGET }, { 4, SE_BALL_OPEN, SOUND_PAN_TARGET }, { 16, SE_BALL_OPEN, SOUND_PAN_TARGET }, { 28, SE_BALL_OPEN, SOUND_PAN_TARGET }, { 32, SE_BALL_OPEN, SOUND_PAN_TARGET }, { 46, SE_BALL_OPEN, SOUND_PAN_TARGET } },
++    /*  9 General_FocusBand          */ { { 0, SE_M_DRAGON_RAGE, SOUND_PAN_ATTACKER } },
++    /* 10 General_Rain               */ { { 0, SE_M_RAIN_DANCE, SOUND_PAN_ATTACKER } },
++    /* 11 General_Sun                */ { { 8, SE_M_PETAL_DANCE, SOUND_PAN_ATTACKER } },
++    /* 12 General_Sandstorm          */ { { 0, SE_M_SANDSTORM, 0 } },
++    /* 13 General_Hail               */ { { 8, SE_M_HAIL, 0 }, { 16, SE_M_HAIL, 0 }, { 24, SE_M_HAIL, 0 }, { 32, SE_M_HAIL, 0 }, { 40, SE_M_HAIL, 0 }, { 48, SE_M_HAIL, 0 }, { 56, SE_M_HAIL, 0 }, { 64, SE_M_HAIL, 0 }, { 72, SE_M_HAIL, 0 }, { 80, SE_M_HAIL, 0 } },
++    /* 14 General_LeechSeedDrain     */ { { 8, SE_M_ABSORB, SOUND_PAN_TARGET }, { 21, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 25, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 29, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 33, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 37, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 41, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 45, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 49, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 76, SE_M_ABSORB_2, SOUND_PAN_ATTACKER } },
++    /* 15 General_MonHit             */ { { 0, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET } },
++    /* 16 General_ItemSteal          */ { { 0 } },
++    /* 17 General_SnatchMove         */ { { 17, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER } },
++    /* 18 General_FutureSightHit     */ { { 0, SE_M_PSYBEAM, SOUND_PAN_ATTACKER }, { 0, SE_M_SUPERSONIC, SOUND_PAN_TARGET }, { 8, SE_M_SUPERSONIC, SOUND_PAN_TARGET } },
++    /* 19 General_DoomDesireHit      */ { { 27, SE_M_CONFUSE_RAY, SOUND_PAN_ATTACKER }, { 36, SE_M_CONFUSE_RAY, 0 }, { 45, SE_M_CONFUSE_RAY, SOUND_PAN_TARGET }, { 70, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET }, { 76, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET }, { 82, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET }, { 88, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET }, { 94, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET } },
++    /* 20 General_FocusPunchSetUp    */ { { 0, SE_M_DRAGON_RAGE, SOUND_PAN_ATTACKER } },
++    /* 21 General_IngrainHeal        */ { { 11, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 15, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 19, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 23, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 27, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 31, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 35, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 39, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 66, SE_M_ABSORB_2, SOUND_PAN_ATTACKER } },
++    /* 22 General_WishHeal           */ { { 8, SE_M_MEGA_KICK, SOUND_PAN_ATTACKER }, { 32, SE_M_ABSORB_2, SOUND_PAN_ATTACKER } },
++};
+-- 
+2.43.0
+
