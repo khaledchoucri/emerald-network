@@ -1,0 +1,676 @@
+From e9af37dc9bed2c80d5c976841ab950efb8b0d2f4 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 14:42:30 +0300
+Subject: [PATCH] POC-15d: moves play their Emerald battle-animation sounds
+ (timeline from data/battle_anim_scripts.s); recordings capture the game's
+ audio
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/move_sounds.h |  17 ++
+ src/pkbn/grid_draw.c       |  66 +++++++
+ src/pkbn/grid_moves.c      |  14 +-
+ src/pkbn/move_sounds.c     | 360 +++++++++++++++++++++++++++++++++++++
+ src/pkbn/selftest.c        |   4 +
+ src/platform/sdl2.c        |  23 +++
+ 6 files changed, 477 insertions(+), 7 deletions(-)
+ create mode 100644 include/pkbn/move_sounds.h
+ create mode 100644 src/pkbn/move_sounds.c
+
+diff --git a/include/pkbn/move_sounds.h b/include/pkbn/move_sounds.h
+new file mode 100644
+index 0000000..0d1c56d
+--- /dev/null
++++ b/include/pkbn/move_sounds.h
+@@ -0,0 +1,17 @@
++#ifndef GUARD_PKBN_MOVE_SOUNDS_H
++#define GUARD_PKBN_MOVE_SOUNDS_H
++
++// POC-15: each move's sound effects, from Emerald's battle animation scripts (tools/gen_move_sounds.py).
++#define PKBN_MOVE_SOUNDS 14
++#define PKBN_SOUND_CRY   0xFFFF   // the user's cry (Growl, Roar, Hyper Voice...)
++
++struct PkbnMoveSound
++{
++    u8 frame;     // frames after the move starts (0 = end of list when se is 0)
++    u16 se;       // SE_* or PKBN_SOUND_CRY
++    s8 pan;       // SOUND_PAN_ATTACKER (-64) .. SOUND_PAN_TARGET (63), from the attacker's side
++};
++
++extern const struct PkbnMoveSound gPkbnMoveSounds[MOVES_COUNT][PKBN_MOVE_SOUNDS];
++
++#endif // GUARD_PKBN_MOVE_SOUNDS_H
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 5c94fe1..6c5925d 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -7,6 +7,9 @@
+ // Panels, HUD frames and the backdrop are our own pixel art in the BN style (TUNE).
+ #include "pkbn/grid_internal.h"
+ #include "pkbn/replay.h"
++#include "pkbn/move_sounds.h"
++#include "sound.h"
++#include "m4a.h"
+ #include "pkbn/leader.h"
+ #include "data.h"
+ #include "item.h"
+@@ -348,6 +351,12 @@ static u32 sLastVis;         // newest visual event played
+ static u8 sDashT[NVIS];      // POC-15: a DASH - the user charges down the row and comes back
+ static u8 sDashPanels[NVIS];
+ #define DASH_FRAMES 18
++#define SOUND_SPAN 60
++#define MAX_PENDING_SOUNDS 24
++static struct { u32 due; u16 se; s8 pan; u16 species; u8 side; } sPendingSound[MAX_PENDING_SOUNDS];
++static u16 sLastSoundMove[NVIS];
++static u32 sLastSoundT[NVIS];
++
+ static u8 sAppearT[NVIS];    // frames left of the send-out grow (Emerald's Poké Ball release)
+ 
+ static u8 VS(u8 side)
+@@ -366,6 +375,8 @@ static void ResetVisuals(void)
+     memset(sHurtT, 0, sizeof(sHurtT));
+     memset(sPushT, 0, sizeof(sPushT));
+     memset(sDashT, 0, sizeof(sDashT));
++    memset(sPendingSound, 0, sizeof(sPendingSound));
++    memset(sLastSoundMove, 0, sizeof(sLastSoundMove));
+     sLastVis = sB.visSerial;
+     memset(sAppearT, 0, sizeof(sAppearT));
+     sMaxSerial = sB.attackSerial;
+@@ -387,6 +398,56 @@ static void ResetVisuals(void)
+ 
+ // How long the strike pose holds after the attack leaves (the rest of MegaMan's BN6 animation after its action frame,
+ // battleSpriteMegaMan.spr: cannon 29 - 14, sword 22 - 12, throw 22 - 9 (anim 6), cast 16 - 6). POC-15.
++// ---- POC-15: each move's sounds, as Emerald's battle animation plays them (src/pkbn/move_sounds.c) ------------------
++// They start when the move is used. Emerald's animations run 1-3 seconds; ours are shorter, so a timeline longer than
++// SOUND_SPAN frames is squeezed into it (TUNE). Pans are from the attacker's side: mirrored when the foe attacks.
++
++static void ScheduleMoveSounds(u16 move, u8 side, u8 v)
++{
++    const struct PkbnMoveSound *list = gPkbnMoveSounds[move];
++    s32 i, k, last = 0;
++    if (getenv("PKBN_NO_MOVE_SOUNDS") != NULL)
++        return;
++    // a new move's sounds replace what is left of this side's last move (an Emerald animation ends before the next)
++    for (k = 0; k < MAX_PENDING_SOUNDS; k++)
++        if (sPendingSound[k].se && sPendingSound[k].side == side)
++            sPendingSound[k].se = 0;
++    m4aMPlayStop(&gMPlayInfo_SE1);   // a long sound still playing (Hyper Beam's) would block the new one
++    m4aMPlayStop(&gMPlayInfo_SE2);
++    sLastSoundMove[v] = move;
++    sLastSoundT[v] = sTick;
++    for (i = 0; i < PKBN_MOVE_SOUNDS && list[i].se; i++)
++        if (list[i].frame > last)
++            last = list[i].frame;
++    for (i = 0; i < PKBN_MOVE_SOUNDS && list[i].se; i++)
++        for (k = 0; k < MAX_PENDING_SOUNDS; k++)
++            if (sPendingSound[k].se == 0)
++            {
++                sPendingSound[k].due = sTick + (last > SOUND_SPAN ? list[i].frame * SOUND_SPAN / last : list[i].frame);
++                sPendingSound[k].se = list[i].se;
++                sPendingSound[k].pan = side == SIDE_PLAYER ? list[i].pan : (s8)-list[i].pan;
++                sPendingSound[k].species = sB.f[side].bm.species;
++                sPendingSound[k].side = side;
++                break;
++            }
++}
++
++static void PlayDueSounds(void)
++{
++    s32 k;
++    for (k = 0; k < MAX_PENDING_SOUNDS; k++)
++        if (sPendingSound[k].se && sPendingSound[k].due <= sTick)
++        {
++            if (getenv("PKBN_LOG_SOUNDS") != NULL)
++                printf("[pkbn-sound] tick %u se %u pan %d\n", (unsigned)sTick, sPendingSound[k].se, sPendingSound[k].pan);
++            if (sPendingSound[k].se == PKBN_SOUND_CRY)
++                PlayCry_Normal(sPendingSound[k].species, sPendingSound[k].pan);
++            else
++                PlaySE12WithPanning(sPendingSound[k].se, sPendingSound[k].pan);
++            sPendingSound[k].se = 0;
++        }
++}
++
+ static u8 PoseHold(u8 kind)
+ {
+     switch (kind)
+@@ -1447,11 +1508,15 @@ void Draw_Overlay(u16 *fb)
+             switch (e->ev)
+             {
+             case VEV_USE:
++                ScheduleMoveSounds(e->move, e->side, v);
+                 sWindT[v] = (u8)e->arg;
+                 sPoseLen[v] = sPoseT[v] = PoseHold(e->kind);
+                 Vfx_OnUse(e);
+                 break;
+             case VEV_LAUNCH:
++                if (sB.attacks[e->kind].move && !sB.attacks[e->kind].pa
++                 && (sLastSoundMove[v] != sB.attacks[e->kind].move || sTick - sLastSoundT[v] > 120))
++                    ScheduleMoveSounds(sB.attacks[e->kind].move, e->side, v);   // charge moves, enemy telegraphs
+                 if (sB.attacks[e->kind].side == SIDE_ENEMY && sB.attacks[e->kind].kind <= GK_TORNADO
+                  && sB.attacks[e->kind].phase == PH_WAIT && sB.attacks[e->kind].timer)
+                 {
+@@ -1493,6 +1558,7 @@ void Draw_Overlay(u16 *fb)
+         }
+         (void)s;
+         (void)i;
++        PlayDueSounds();
+         ForEachVis(VisTrack);
+         Vfx_ScanImpacts();
+     }
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index d4d9686..dceed48 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -1543,7 +1543,7 @@ static void Impact(struct Attack *a)
+         {
+             if (LiveUser(a))
+                 Moves_DamageFighter(a->side, me->bm.hp, "FAINTED FROM THE BLAST!"); // Gen 3: the user faints
+-            PlaySE(SE_M_EXPLOSION);
++            // (POC-15: the move's own sound comes from its Emerald animation)
+         }
+         break;
+     case GK_METEORS:
+@@ -1966,7 +1966,7 @@ static void ApplyStatusEffect(u8 side, u16 move, u8 target)
+     case EFFECT_ROAR:
+         // BN GoingRd "Push an enemy to the back"
+         Field_PushBack(target, 2);
+-        PlaySE(SE_M_GUST);
++        // (POC-15: the move's own sound comes from its Emerald animation)
+         break;
+     case EFFECT_MEAN_LOOK:
+         t->hold = 180; // TUNE
+@@ -2037,7 +2037,7 @@ static void HealHalf(struct Fighter *f)
+     }
+     Heal(f, h ? h : 1);
+     SayFighter(f, "REGAINED HEALTH!", 50);
+-    PlaySE(SE_M_MORNING_SUN);
++    // (POC-15: the move's own sound comes from its Emerald animation)
+ }
+ 
+ static void UseSelfMove(u8 side, u16 move)
+@@ -2061,7 +2061,7 @@ static void UseSelfMove(u8 side, u16 move)
+         s32 h = sB.weather == 0 ? me->bm.maxHP / 2 : (sB.weather & B_WEATHER_SUN) ? 20 * me->bm.maxHP / 30 : me->bm.maxHP / 4;
+         Heal(me, h ? h : 1);
+         SayFighter(me, "REGAINED HEALTH!", 50);
+-        PlaySE(SE_M_MORNING_SUN);
++        // (POC-15: the move's own sound comes from its Emerald animation)
+         break;
+     }
+     case EFFECT_REST:
+@@ -2147,7 +2147,7 @@ static void UseSelfMove(u8 side, u16 move)
+             for (i = 0; i < sB.partyCount; i++)
+                 sB.party[i].bm.status1 = 0;
+         SetMsg("A BELL CHIMED!", 50);
+-        PlaySE(SE_M_HEAL_BELL);
++        // (POC-15: the move's own sound comes from its Emerald animation)
+         break;
+     case EFFECT_REFRESH:
+         if (me->bm.status1 & (STATUS1_POISON | STATUS1_TOXIC_POISON | STATUS1_BURN | STATUS1_PARALYSIS))
+@@ -2287,7 +2287,7 @@ static void UsePanelMove(u8 side, u16 move, const struct BattlePokemon *user, co
+         }
+         a->duration = a->timer;
+         a->phase = PH_WAIT;
+-        PlaySE(SE_M_POISON_POWDER);
++        // (POC-15: the move's own sound comes from its Emerald animation)
+         return;
+     }
+     }
+@@ -2304,7 +2304,7 @@ static void ResolvePanelAttack(struct Attack *a)
+             if (a->cells[r][c] && (a->side == SIDE_PLAYER ? c >= PLAYER_COLS : c < PLAYER_COLS) && sB.panel[r][c] != PANEL_BROKEN)
+                 Field_SetPanel(c, r, PANEL_POISON);
+     FlashCells(a->cells, 10);
+-    PlaySE(SE_M_TOXIC);
++    // (POC-15: the move's own sound comes from its Emerald animation)
+     if (a->move == MOVE_TOXIC && a->cells[opp->y][opp->x])
+         ApplyStatusEffect(a->side, MOVE_TOXIC, a->side ^ 1); // badly poisoned if the seed lands on it
+     PKBN_LOG("%s's move %u made poison panels around (%d,%d)", a->userName, a->move, a->tx, a->ty);
+diff --git a/src/pkbn/move_sounds.c b/src/pkbn/move_sounds.c
+new file mode 100644
+index 0000000..9429ca8
+--- /dev/null
++++ b/src/pkbn/move_sounds.c
+@@ -0,0 +1,360 @@
++// GENERATED by tools/gen_move_sounds.py from data/battle_anim_scripts.s (gBattleAnims_Moves). POC-15.
++// Each move's sound effects as Emerald's battle animation plays them: frame after the move starts, sound, pan.
++#include "global.h"
++#include "constants/songs.h"
++#include "constants/battle_anim.h"
++#include "constants/moves.h"
++#include "pkbn/move_sounds.h"
++
++const struct PkbnMoveSound gPkbnMoveSounds[MOVES_COUNT][PKBN_MOVE_SOUNDS] =
++{
++    [MOVE_POUND] = { { 0, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET } },
++    [MOVE_KARATE_CHOP] = { { 0, SE_M_DOUBLE_TEAM, SOUND_PAN_TARGET }, { 8, SE_M_COMET_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_DOUBLE_SLAP] = { { 0, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET } },
++    [MOVE_COMET_PUNCH] = { { 0, SE_M_COMET_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_MEGA_PUNCH] = { { 2, SE_M_MEGA_KICK, SOUND_PAN_TARGET }, { 54, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_PAY_DAY] = { { 0, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 8, SE_M_PAY_DAY, SOUND_PAN_TARGET } },
++    [MOVE_FIRE_PUNCH] = { { 0, SE_M_FLAME_WHEEL, SOUND_PAN_TARGET }, { 12, SE_M_FIRE_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_ICE_PUNCH] = { { 20, SE_M_STRING_SHOT, SOUND_PAN_TARGET }, { 42, SE_M_COMET_PUNCH, SOUND_PAN_TARGET }, { 67, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 71, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 75, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 79, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 83, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 87, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 91, SE_M_ICY_WIND, SOUND_PAN_TARGET } },
++    [MOVE_THUNDER_PUNCH] = { { 8, SE_M_COMET_PUNCH, SOUND_PAN_TARGET }, { 13, SE_M_TRI_ATTACK2, SOUND_PAN_TARGET } },
++    [MOVE_SCRATCH] = { { 0, SE_M_SCRATCH, SOUND_PAN_TARGET } },
++    [MOVE_VICE_GRIP] = { { 0, SE_M_VICEGRIP, SOUND_PAN_TARGET } },
++    [MOVE_GUILLOTINE] = { { 0, SE_M_VICEGRIP, SOUND_PAN_TARGET }, { 55, SE_M_RAZOR_WIND, SOUND_PAN_TARGET } },
++    [MOVE_RAZOR_WIND] = { { 0, SE_M_GUST, SOUND_PAN_ATTACKER }, { 8, SE_M_GUST2, SOUND_PAN_ATTACKER } },
++    [MOVE_SWORDS_DANCE] = { { 0, SE_M_SWORDS_DANCE, SOUND_PAN_ATTACKER } },
++    [MOVE_CUT] = { { 0, SE_M_CUT, SOUND_PAN_TARGET } },
++    [MOVE_GUST] = { { 0, SE_M_GUST, SOUND_PAN_TARGET }, { 8, SE_M_GUST2, SOUND_PAN_TARGET } },
++    [MOVE_WING_ATTACK] = { { 0, SE_M_WING_ATTACK, SOUND_PAN_ATTACKER }, { 20, SE_M_WING_ATTACK, SOUND_PAN_ATTACKER }, { 41, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET }, { 46, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET } },
++    [MOVE_WHIRLWIND] = { { 5, SE_M_DOUBLE_TEAM, SOUND_PAN_TARGET }, { 15, SE_M_DOUBLE_TEAM, SOUND_PAN_TARGET }, { 25, SE_M_DOUBLE_TEAM, SOUND_PAN_TARGET }, { 35, SE_M_DOUBLE_TEAM, SOUND_PAN_TARGET }, { 41, SE_M_STRING_SHOT, SOUND_PAN_TARGET } },
++    [MOVE_FLY] = { { 0, SE_M_FLY, SOUND_PAN_ATTACKER } },
++    [MOVE_BIND] = { { 0, SE_M_BIND, SOUND_PAN_TARGET } },
++    [MOVE_SLAM] = { { 0, SE_M_COMET_PUNCH, SOUND_PAN_ATTACKER }, { 4, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_VINE_WHIP] = { { 0, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 6, SE_M_SCRATCH, SOUND_PAN_TARGET } },
++    [MOVE_STOMP] = { { 0, SE_M_DOUBLE_TEAM, SOUND_PAN_TARGET }, { 19, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_DOUBLE_KICK] = { { 0, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_MEGA_KICK] = { { 2, SE_M_MEGA_KICK, SOUND_PAN_TARGET }, { 52, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_JUMP_KICK] = { { 3, SE_M_JUMP_KICK, SOUND_PAN_TARGET }, { 11, SE_M_COMET_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_ROLLING_KICK] = { { 0, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 6, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 19, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_SAND_ATTACK] = { { 0, SE_M_SAND_ATTACK, SOUND_PAN_ATTACKER } },
++    [MOVE_HEADBUTT] = { { 0, SE_M_HEADBUTT, SOUND_PAN_ATTACKER }, { 18, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_HORN_ATTACK] = { { 0, SE_M_HEADBUTT, SOUND_PAN_ATTACKER }, { 18, SE_M_HORN_ATTACK, SOUND_PAN_TARGET } },
++    [MOVE_FURY_ATTACK] = { { 8, SE_M_HORN_ATTACK, SOUND_PAN_TARGET } },
++    [MOVE_HORN_DRILL] = { { 0, SE_M_HEADBUTT, SOUND_PAN_ATTACKER }, { 18, SE_BANG, 0 }, { 18, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 22, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 26, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 30, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 34, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 38, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 42, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 46, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 50, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 54, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 58, SE_M_HORN_ATTACK, SOUND_PAN_TARGET } },
++    [MOVE_TACKLE] = { { 6, SE_M_COMET_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_BODY_SLAM] = { { 0, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER }, { 25, SE_M_MEGA_KICK2, SOUND_PAN_TARGET }, { 35, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_WRAP] = { { 0, SE_M_BIND, SOUND_PAN_TARGET } },
++    [MOVE_TAKE_DOWN] = { { 35, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_THRASH] = { { 0, SE_M_COMET_PUNCH, SOUND_PAN_TARGET }, { 28, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 56, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_DOUBLE_EDGE] = { { 0, SE_M_SWIFT, SOUND_PAN_ATTACKER }, { 18, SE_M_SWAGGER, SOUND_PAN_ATTACKER }, { 26, SE_M_SWAGGER, SOUND_PAN_ATTACKER }, { 37, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_TAIL_WHIP] = { { 0, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 24, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 48, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER } },
++    [MOVE_POISON_STING] = { { 0, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 8, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 16, SE_M_TOXIC, SOUND_PAN_TARGET }, { 22, SE_M_TOXIC, SOUND_PAN_TARGET }, { 28, SE_M_TOXIC, SOUND_PAN_TARGET }, { 34, SE_M_TOXIC, SOUND_PAN_TARGET }, { 40, SE_M_TOXIC, SOUND_PAN_TARGET }, { 46, SE_M_TOXIC, SOUND_PAN_TARGET } },
++    [MOVE_TWINEEDLE] = { { 0, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 6, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 20, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 25, SE_M_HORN_ATTACK, SOUND_PAN_TARGET } },
++    [MOVE_PIN_MISSILE] = { { 0, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 19, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 32, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 46, SE_M_HORN_ATTACK, SOUND_PAN_TARGET } },
++    [MOVE_LEER] = { { 0, SE_M_LEER, SOUND_PAN_ATTACKER } },
++    [MOVE_BITE] = { { 0, SE_M_BITE, SOUND_PAN_TARGET } },
++    [MOVE_GROWL] = { { 0, PKBN_SOUND_CRY, 0 } },
++    [MOVE_ROAR] = { { 0, PKBN_SOUND_CRY, 0 } },
++    [MOVE_SING] = { { 8, SE_M_SING, SOUND_PAN_ATTACKER } },
++    [MOVE_SUPERSONIC] = { { 0, SE_M_SUPERSONIC, SOUND_PAN_ATTACKER }, { 2, SE_M_SUPERSONIC, SOUND_PAN_ATTACKER }, { 4, SE_M_SUPERSONIC, SOUND_PAN_ATTACKER }, { 6, SE_M_SUPERSONIC, SOUND_PAN_ATTACKER }, { 8, SE_M_SUPERSONIC, SOUND_PAN_ATTACKER }, { 10, SE_M_SUPERSONIC, SOUND_PAN_ATTACKER } },
++    [MOVE_SONIC_BOOM] = { { 0, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 4, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 8, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER } },
++    [MOVE_DISABLE] = { { 0, SE_M_DETECT, SOUND_PAN_ATTACKER }, { 8, SE_M_BIND, SOUND_PAN_TARGET }, { 23, SE_M_BIND, SOUND_PAN_TARGET }, { 38, SE_M_BIND, SOUND_PAN_TARGET }, { 53, SE_M_BIND, SOUND_PAN_TARGET } },
++    [MOVE_ACID] = { { 0, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 5, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 10, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 25, SE_M_BUBBLE, SOUND_PAN_TARGET }, { 35, SE_M_BUBBLE, SOUND_PAN_TARGET }, { 45, SE_M_BUBBLE, SOUND_PAN_TARGET }, { 55, SE_M_BUBBLE, SOUND_PAN_TARGET }, { 65, SE_M_BUBBLE, SOUND_PAN_TARGET } },
++    [MOVE_EMBER] = { { 0, SE_M_EMBER, SOUND_PAN_ATTACKER }, { 5, SE_M_EMBER, SOUND_PAN_ATTACKER }, { 24, SE_M_FLAME_WHEEL, SOUND_PAN_TARGET } },
++    [MOVE_FLAMETHROWER] = { { 6, SE_M_FLAMETHROWER, SOUND_PAN_ATTACKER } },
++    [MOVE_MIST] = { { 0, SE_M_MIST, SOUND_PAN_ATTACKER }, { 20, SE_M_MIST, SOUND_PAN_ATTACKER }, { 40, SE_M_MIST, SOUND_PAN_ATTACKER }, { 60, SE_M_MIST, SOUND_PAN_ATTACKER }, { 80, SE_M_MIST, SOUND_PAN_ATTACKER }, { 100, SE_M_MIST, SOUND_PAN_ATTACKER }, { 120, SE_M_MIST, SOUND_PAN_ATTACKER }, { 140, SE_M_MIST, SOUND_PAN_ATTACKER }, { 160, SE_M_MIST, SOUND_PAN_ATTACKER }, { 180, SE_M_MIST, SOUND_PAN_ATTACKER }, { 200, SE_M_MIST, SOUND_PAN_ATTACKER }, { 220, SE_M_MIST, SOUND_PAN_ATTACKER }, { 240, SE_M_MIST, SOUND_PAN_ATTACKER } },
++    [MOVE_WATER_GUN] = { { 0, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 8, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 18, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 28, SE_M_CRABHAMMER, SOUND_PAN_TARGET } },
++    [MOVE_HYDRO_PUMP] = { { 6, SE_M_HYDRO_PUMP, SOUND_PAN_ATTACKER } },
++    [MOVE_SURF] = { { 24, SE_M_SURF, SOUND_PAN_ATTACKER } },
++    [MOVE_ICE_BEAM] = { { 8, SE_M_BUBBLE_BEAM2, SOUND_PAN_ATTACKER }, { 19, SE_M_BUBBLE_BEAM2, SOUND_PAN_ATTACKER }, { 30, SE_M_BUBBLE_BEAM2, SOUND_PAN_ATTACKER }, { 41, SE_M_BUBBLE_BEAM2, SOUND_PAN_ATTACKER }, { 49, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 53, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 57, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 61, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 65, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 69, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 73, SE_M_ICY_WIND, SOUND_PAN_TARGET } },
++    [MOVE_BLIZZARD] = { { 8, SE_M_BLIZZARD, SOUND_PAN_ATTACKER }, { 50, SE_M_BLIZZARD2, SOUND_PAN_TARGET }, { 58, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 62, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 66, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 70, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 74, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 78, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 82, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 86, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 90, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 94, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 98, SE_M_ICY_WIND, SOUND_PAN_TARGET } },
++    [MOVE_PSYBEAM] = { { 0, SE_M_PSYBEAM, SOUND_PAN_ATTACKER }, { 0, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 16, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 32, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 48, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER } },
++    [MOVE_BUBBLE_BEAM] = { { 1, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 4, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 7, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 10, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 13, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 16, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 19, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 22, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 25, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 28, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 31, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 34, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 37, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 40, SE_M_BUBBLE, SOUND_PAN_ATTACKER } },
++    [MOVE_AURORA_BEAM] = { { 0, SE_M_BUBBLE_BEAM, SOUND_PAN_ATTACKER }, { 16, SE_M_BUBBLE_BEAM2, SOUND_PAN_ATTACKER }, { 27, SE_M_BUBBLE_BEAM2, SOUND_PAN_ATTACKER }, { 38, SE_M_BUBBLE_BEAM2, SOUND_PAN_ATTACKER }, { 49, SE_M_BUBBLE_BEAM2, SOUND_PAN_ATTACKER }, { 60, SE_M_BUBBLE_BEAM2, SOUND_PAN_ATTACKER }, { 71, SE_M_BUBBLE_BEAM2, SOUND_PAN_ATTACKER } },
++    [MOVE_HYPER_BEAM] = { { 18, SE_M_HYPER_BEAM, SOUND_PAN_ATTACKER }, { 56, SE_M_HYPER_BEAM2, SOUND_PAN_ATTACKER }, { 62, SE_M_HYPER_BEAM2, SOUND_PAN_ATTACKER }, { 68, SE_M_HYPER_BEAM2, SOUND_PAN_ATTACKER }, { 74, SE_M_HYPER_BEAM2, SOUND_PAN_ATTACKER }, { 80, SE_M_HYPER_BEAM2, SOUND_PAN_ATTACKER }, { 86, SE_M_HYPER_BEAM2, SOUND_PAN_ATTACKER }, { 92, SE_M_HYPER_BEAM2, SOUND_PAN_ATTACKER }, { 98, SE_M_HYPER_BEAM2, SOUND_PAN_ATTACKER }, { 104, SE_M_HYPER_BEAM2, SOUND_PAN_ATTACKER }, { 110, SE_M_HYPER_BEAM2, SOUND_PAN_ATTACKER }, { 116, SE_M_HYPER_BEAM2, SOUND_PAN_ATTACKER }, { 122, SE_M_HYPER_BEAM2, SOUND_PAN_ATTACKER }, { 128, SE_M_HYPER_BEAM2, SOUND_PAN_ATTACKER } },
++    [MOVE_PECK] = { { 0, SE_M_HORN_ATTACK, SOUND_PAN_TARGET } },
++    [MOVE_DRILL_PECK] = { { 0, SE_M_HEADBUTT, SOUND_PAN_ATTACKER }, { 12, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 16, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 20, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 24, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 28, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 32, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 36, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 40, SE_M_HORN_ATTACK, SOUND_PAN_TARGET } },
++    [MOVE_SUBMISSION] = { { 0, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 10, SE_M_COMET_PUNCH, SOUND_PAN_TARGET }, { 20, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 30, SE_M_COMET_PUNCH, SOUND_PAN_TARGET }, { 40, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 50, SE_M_COMET_PUNCH, SOUND_PAN_TARGET }, { 60, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 70, SE_M_COMET_PUNCH, SOUND_PAN_TARGET }, { 80, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 90, SE_M_COMET_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_LOW_KICK] = { { 4, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_COUNTER] = { { 0, SE_M_VITAL_THROW, SOUND_PAN_ATTACKER }, { 12, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 16, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 20, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_SEISMIC_TOSS] = { { 9, SE_M_SKY_UPPERCUT, 0 } },
++    [MOVE_STRENGTH] = { { 0, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER }, { 22, SE_M_MEGA_KICK2, SOUND_PAN_TARGET }, { 26, SE_M_MEGA_KICK2, SOUND_PAN_TARGET }, { 30, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_ABSORB] = { { 8, SE_M_ABSORB, SOUND_PAN_TARGET }, { 21, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 25, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 29, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 33, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 37, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 41, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 45, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 49, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 76, SE_M_ABSORB_2, SOUND_PAN_ATTACKER } },
++    [MOVE_MEGA_DRAIN] = { { 8, SE_M_ABSORB, SOUND_PAN_TARGET }, { 21, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 25, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 29, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 33, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 37, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 41, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 45, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 49, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 76, SE_M_ABSORB_2, SOUND_PAN_ATTACKER } },
++    [MOVE_LEECH_SEED] = { { 0, SE_M_POISON_POWDER, SOUND_PAN_ATTACKER }, { 8, SE_M_POISON_POWDER, SOUND_PAN_ATTACKER }, { 16, SE_M_POISON_POWDER, SOUND_PAN_ATTACKER }, { 28, SE_M_TAIL_WHIP, SOUND_PAN_TARGET }, { 38, SE_M_TAIL_WHIP, SOUND_PAN_TARGET }, { 48, SE_M_TAIL_WHIP, SOUND_PAN_TARGET }, { 58, SE_M_TAIL_WHIP, SOUND_PAN_TARGET }, { 68, SE_M_TAIL_WHIP, SOUND_PAN_TARGET }, { 78, SE_M_TAIL_WHIP, SOUND_PAN_TARGET }, { 88, SE_M_TAIL_WHIP, SOUND_PAN_TARGET }, { 98, SE_M_TAIL_WHIP, SOUND_PAN_TARGET } },
++    [MOVE_GROWTH] = { { 0, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER }, { 8, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER } },
++    [MOVE_RAZOR_LEAF] = { { 1, SE_M_POISON_POWDER, SOUND_PAN_ATTACKER }, { 11, SE_M_POISON_POWDER, SOUND_PAN_ATTACKER }, { 21, SE_M_POISON_POWDER, SOUND_PAN_ATTACKER }, { 31, SE_M_POISON_POWDER, SOUND_PAN_ATTACKER }, { 41, SE_M_POISON_POWDER, SOUND_PAN_ATTACKER }, { 79, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 99, SE_M_RAZOR_WIND, SOUND_PAN_TARGET } },
++    [MOVE_SOLAR_BEAM] = { { 0, SE_M_MEGA_KICK, SOUND_PAN_ATTACKER } },
++    [MOVE_POISON_POWDER] = { { 0, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 10, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 20, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 30, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 40, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 50, SE_M_POISON_POWDER, SOUND_PAN_TARGET } },
++    [MOVE_STUN_SPORE] = { { 0, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 10, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 20, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 30, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 40, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 50, SE_M_POISON_POWDER, SOUND_PAN_TARGET } },
++    [MOVE_SLEEP_POWDER] = { { 0, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 10, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 20, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 30, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 40, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 50, SE_M_POISON_POWDER, SOUND_PAN_TARGET } },
++    [MOVE_PETAL_DANCE] = { { 0, SE_M_PETAL_DANCE, SOUND_PAN_ATTACKER }, { 101, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_STRING_SHOT] = { { 8, SE_M_STRING_SHOT, SOUND_PAN_ATTACKER }, { 17, SE_M_STRING_SHOT, SOUND_PAN_ATTACKER }, { 26, SE_M_STRING_SHOT, SOUND_PAN_ATTACKER }, { 34, SE_M_STRING_SHOT2, SOUND_PAN_TARGET }, { 35, SE_M_STRING_SHOT, SOUND_PAN_ATTACKER }, { 44, SE_M_STRING_SHOT, SOUND_PAN_ATTACKER }, { 53, SE_M_STRING_SHOT, SOUND_PAN_ATTACKER } },
++    [MOVE_DRAGON_RAGE] = { { 0, SE_M_DRAGON_RAGE, SOUND_PAN_ATTACKER }, { 24, SE_M_FLAME_WHEEL2, SOUND_PAN_TARGET }, { 35, SE_M_FLAME_WHEEL2, SOUND_PAN_TARGET }, { 46, SE_M_FLAME_WHEEL2, SOUND_PAN_TARGET } },
++    [MOVE_FIRE_SPIN] = { { 0, SE_M_SACRED_FIRE2, SOUND_PAN_TARGET } },
++    [MOVE_THUNDER_SHOCK] = { { 18, SE_M_THUNDERBOLT, SOUND_PAN_TARGET }, { 63, SE_M_THUNDERBOLT2, SOUND_PAN_TARGET } },
++    [MOVE_THUNDERBOLT] = { { 18, SE_M_THUNDERBOLT, SOUND_PAN_TARGET }, { 25, SE_M_THUNDERBOLT, SOUND_PAN_TARGET }, { 32, SE_M_THUNDERBOLT, SOUND_PAN_TARGET }, { 77, SE_M_HYPER_BEAM, SOUND_PAN_TARGET }, { 123, SE_M_THUNDERBOLT2, SOUND_PAN_TARGET }, { 142, SE_M_THUNDERBOLT2, SOUND_PAN_TARGET } },
++    [MOVE_THUNDER_WAVE] = { { 18, SE_M_THUNDER_WAVE, SOUND_PAN_TARGET }, { 38, SE_M_THUNDERBOLT2, SOUND_PAN_TARGET }, { 48, SE_M_THUNDERBOLT2, SOUND_PAN_TARGET }, { 58, SE_M_THUNDERBOLT2, SOUND_PAN_TARGET }, { 68, SE_M_THUNDERBOLT2, SOUND_PAN_TARGET } },
++    [MOVE_THUNDER] = { { 16, SE_M_THUNDER_WAVE, SOUND_PAN_TARGET }, { 39, SE_M_THUNDER_WAVE, SOUND_PAN_TARGET }, { 41, SE_M_THUNDER_WAVE, SOUND_PAN_TARGET }, { 85, SE_M_TRI_ATTACK2, SOUND_PAN_TARGET } },
++    [MOVE_ROCK_THROW] = { { 0, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 6, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 12, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 18, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 24, SE_M_ROCK_THROW, SOUND_PAN_TARGET } },
++    [MOVE_EARTHQUAKE] = { { 0, SE_M_EARTHQUAKE, 0 } },
++    [MOVE_FISSURE] = { { 0, SE_M_EARTHQUAKE, SOUND_PAN_TARGET }, { 8, SE_M_DIG, SOUND_PAN_TARGET }, { 38, SE_M_DIG, SOUND_PAN_TARGET }, { 68, SE_M_DIG, SOUND_PAN_TARGET } },
++    [MOVE_DIG] = { { 7, SE_M_DIG, SOUND_PAN_ATTACKER }, { 39, SE_M_DIG, SOUND_PAN_ATTACKER }, { 71, SE_M_DIG, SOUND_PAN_ATTACKER }, { 103, SE_M_DIG, SOUND_PAN_ATTACKER }, { 135, SE_M_DIG, SOUND_PAN_ATTACKER } },
++    [MOVE_TOXIC] = { { 0, SE_M_TOXIC, SOUND_PAN_TARGET }, { 15, SE_M_TOXIC, SOUND_PAN_TARGET }, { 30, SE_M_TOXIC, SOUND_PAN_TARGET }, { 45, SE_M_TOXIC, SOUND_PAN_TARGET }, { 60, SE_M_TOXIC, SOUND_PAN_TARGET }, { 75, SE_M_TOXIC, SOUND_PAN_TARGET }, { 90, SE_M_TOXIC, SOUND_PAN_TARGET }, { 105, SE_M_TOXIC, SOUND_PAN_TARGET }, { 143, SE_M_TOXIC, SOUND_PAN_TARGET }, { 149, SE_M_TOXIC, SOUND_PAN_TARGET }, { 155, SE_M_TOXIC, SOUND_PAN_TARGET }, { 161, SE_M_TOXIC, SOUND_PAN_TARGET }, { 167, SE_M_TOXIC, SOUND_PAN_TARGET }, { 173, SE_M_TOXIC, SOUND_PAN_TARGET } },
++    [MOVE_CONFUSION] = { { 8, SE_M_SUPERSONIC, SOUND_PAN_TARGET } },
++    [MOVE_PSYCHIC] = { { 8, SE_M_SUPERSONIC, SOUND_PAN_TARGET }, { 18, SE_M_SUPERSONIC, SOUND_PAN_TARGET }, { 28, SE_M_SUPERSONIC, SOUND_PAN_TARGET } },
++    [MOVE_HYPNOSIS] = { { 0, SE_M_SUPERSONIC, SOUND_PAN_ATTACKER }, { 6, SE_M_SUPERSONIC, SOUND_PAN_ATTACKER }, { 12, SE_M_SUPERSONIC, SOUND_PAN_ATTACKER } },
++    [MOVE_MEDITATE] = { { 0, SE_M_HEADBUTT, SOUND_PAN_ATTACKER }, { 16, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER } },
++    [MOVE_AGILITY] = { { 0, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 12, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 24, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 36, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 48, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER } },
++    [MOVE_QUICK_ATTACK] = { { 0, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 4, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_RAGE] = { { 0, SE_M_SWAGGER2, SOUND_PAN_ATTACKER }, { 20, SE_M_SWAGGER2, SOUND_PAN_ATTACKER }, { 32, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_TELEPORT] = { { 0, SE_M_TELEPORT, SOUND_PAN_ATTACKER } },
++    [MOVE_NIGHT_SHADE] = { { 0, SE_M_PSYBEAM, SOUND_PAN_ATTACKER }, { 10, SE_M_LEER, SOUND_PAN_ATTACKER } },
++    [MOVE_MIMIC] = { { 0, SE_M_MINIMIZE, SOUND_PAN_TARGET }, { 33, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER } },
++    [MOVE_SCREECH] = { { 0, SE_M_SCREECH, SOUND_PAN_ATTACKER }, { 2, SE_M_SCREECH, SOUND_PAN_ATTACKER } },
++    [MOVE_DOUBLE_TEAM] = { { 0, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 32, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 56, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 72, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 80, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 88, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 96, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 104, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 112, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER } },
++    [MOVE_RECOVER] = { { 0, SE_M_MEGA_KICK, SOUND_PAN_ATTACKER }, { 13, SE_M_MEGA_KICK, SOUND_PAN_ATTACKER }, { 26, SE_M_MEGA_KICK, SOUND_PAN_ATTACKER }, { 72, SE_M_ABSORB_2, SOUND_PAN_ATTACKER } },
++    [MOVE_HARDEN] = { { 0, SE_M_HARDEN, SOUND_PAN_ATTACKER }, { 28, SE_M_HARDEN, SOUND_PAN_ATTACKER } },
++    [MOVE_MINIMIZE] = { { 0, SE_M_MINIMIZE, SOUND_PAN_ATTACKER }, { 34, SE_M_MINIMIZE, SOUND_PAN_ATTACKER }, { 68, SE_M_MINIMIZE, SOUND_PAN_ATTACKER } },
++    [MOVE_SMOKESCREEN] = { { 0, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 10, SE_M_SAND_ATTACK, SOUND_PAN_TARGET } },
++    [MOVE_CONFUSE_RAY] = { { 8, SE_M_STRING_SHOT2, SOUND_PAN_TARGET } },
++    [MOVE_WITHDRAW] = { { 0, SE_M_HEADBUTT, SOUND_PAN_ATTACKER } },
++    [MOVE_DEFENSE_CURL] = { { 0, SE_M_TRI_ATTACK, SOUND_PAN_ATTACKER }, { 18, SE_M_TRI_ATTACK, SOUND_PAN_ATTACKER }, { 36, SE_M_TRI_ATTACK, SOUND_PAN_ATTACKER } },
++    [MOVE_BARRIER] = { { 15, SE_M_BARRIER, SOUND_PAN_ATTACKER } },
++    [MOVE_LIGHT_SCREEN] = { { 15, SE_M_REFLECT, SOUND_PAN_ATTACKER } },
++    [MOVE_HAZE] = { { 8, SE_M_HAZE, 0 } },
++    [MOVE_REFLECT] = { { 15, SE_M_REFLECT, SOUND_PAN_ATTACKER } },
++    [MOVE_FOCUS_ENERGY] = { { 0, SE_M_DRAGON_RAGE, SOUND_PAN_ATTACKER } },
++    [MOVE_BIDE] = { { 0, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER }, { 9, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER } },
++    [MOVE_METRONOME] = { { 0, SE_M_METRONOME, SOUND_PAN_ATTACKER }, { 30, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 52, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 74, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER } },
++    [MOVE_MIRROR_MOVE] = { { 0, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET } },
++    [MOVE_SELF_DESTRUCT] = { { 0, SE_M_SELF_DESTRUCT, SOUND_PAN_ATTACKER }, { 6, SE_M_SELF_DESTRUCT, SOUND_PAN_ATTACKER }, { 12, SE_M_SELF_DESTRUCT, SOUND_PAN_ATTACKER }, { 18, SE_M_SELF_DESTRUCT, SOUND_PAN_ATTACKER }, { 24, SE_M_SELF_DESTRUCT, SOUND_PAN_ATTACKER }, { 30, SE_M_SELF_DESTRUCT, SOUND_PAN_ATTACKER }, { 36, SE_M_SELF_DESTRUCT, SOUND_PAN_ATTACKER }, { 42, SE_M_SELF_DESTRUCT, SOUND_PAN_ATTACKER }, { 48, SE_M_SELF_DESTRUCT, SOUND_PAN_ATTACKER }, { 54, SE_M_SELF_DESTRUCT, SOUND_PAN_ATTACKER } },
++    [MOVE_EGG_BOMB] = { { 0, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 8, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET }, { 11, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET }, { 14, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET }, { 17, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET }, { 20, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET } },
++    [MOVE_LICK] = { { 15, SE_M_LICK, SOUND_PAN_TARGET } },
++    [MOVE_SMOG] = { { 0, SE_M_MIST, SOUND_PAN_TARGET }, { 17, SE_M_MIST, SOUND_PAN_TARGET }, { 34, SE_M_MIST, SOUND_PAN_TARGET }, { 51, SE_M_MIST, SOUND_PAN_TARGET }, { 68, SE_M_MIST, SOUND_PAN_TARGET }, { 85, SE_M_MIST, SOUND_PAN_TARGET }, { 102, SE_M_MIST, SOUND_PAN_TARGET }, { 119, SE_M_MIST, SOUND_PAN_TARGET }, { 136, SE_M_MIST, SOUND_PAN_TARGET }, { 153, SE_M_MIST, SOUND_PAN_TARGET }, { 169, SE_M_TOXIC, SOUND_PAN_TARGET }, { 187, SE_M_TOXIC, SOUND_PAN_TARGET } },
++    [MOVE_SLUDGE] = { { 0, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 8, SE_M_TOXIC, SOUND_PAN_TARGET }, { 14, SE_M_TOXIC, SOUND_PAN_TARGET }, { 20, SE_M_TOXIC, SOUND_PAN_TARGET }, { 26, SE_M_TOXIC, SOUND_PAN_TARGET }, { 32, SE_M_TOXIC, SOUND_PAN_TARGET }, { 38, SE_M_TOXIC, SOUND_PAN_TARGET } },
++    [MOVE_BONE_CLUB] = { { 0, SE_M_BONEMERANG, SOUND_PAN_TARGET }, { 12, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_FIRE_BLAST] = { { 1, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 12, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 23, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 34, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 45, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 56, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 67, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 78, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 89, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 100, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 111, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 117, SE_M_FLAME_WHEEL2, SOUND_PAN_TARGET }, { 123, SE_M_FLAME_WHEEL2, SOUND_PAN_TARGET } },
++    [MOVE_WATERFALL] = { { 5, SE_M_CRABHAMMER, SOUND_PAN_ATTACKER }, { 9, SE_M_CRABHAMMER, SOUND_PAN_ATTACKER }, { 13, SE_M_CRABHAMMER, SOUND_PAN_ATTACKER }, { 17, SE_M_CRABHAMMER, SOUND_PAN_ATTACKER }, { 21, SE_M_CRABHAMMER, SOUND_PAN_ATTACKER }, { 25, SE_M_CRABHAMMER, SOUND_PAN_ATTACKER }, { 29, SE_M_CRABHAMMER, SOUND_PAN_ATTACKER }, { 33, SE_M_CRABHAMMER, SOUND_PAN_ATTACKER }, { 57, SE_M_WATERFALL, SOUND_PAN_TARGET } },
++    [MOVE_CLAMP] = { { 0, SE_M_VICEGRIP, SOUND_PAN_TARGET } },
++    [MOVE_SWIFT] = { { 0, SE_M_SWIFT, SOUND_PAN_ATTACKER }, { 5, SE_M_SWIFT, SOUND_PAN_ATTACKER }, { 10, SE_M_SWIFT, SOUND_PAN_ATTACKER }, { 15, SE_M_SWIFT, SOUND_PAN_ATTACKER }, { 20, SE_M_SWIFT, SOUND_PAN_ATTACKER } },
++    [MOVE_SKULL_BASH] = { { 0, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER }, { 24, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER } },
++    [MOVE_SPIKE_CANNON] = { { 8, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 13, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 16, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 18, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 21, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 26, SE_M_HORN_ATTACK, SOUND_PAN_TARGET } },
++    [MOVE_CONSTRICT] = { { 0, SE_M_SCRATCH, SOUND_PAN_TARGET }, { 6, SE_M_SCRATCH, SOUND_PAN_TARGET }, { 12, SE_M_SCRATCH, SOUND_PAN_TARGET }, { 18, SE_M_SCRATCH, SOUND_PAN_TARGET }, { 42, SE_M_BIND, SOUND_PAN_TARGET } },
++    [MOVE_AMNESIA] = { { 8, SE_M_METRONOME, SOUND_PAN_ATTACKER }, { 62, SE_M_METRONOME, SOUND_PAN_ATTACKER }, { 78, SE_M_METRONOME, SOUND_PAN_ATTACKER }, { 94, SE_M_METRONOME, SOUND_PAN_ATTACKER } },
++    [MOVE_KINESIS] = { { 0, SE_M_PSYBEAM, SOUND_PAN_ATTACKER }, { 0, SE_M_CONFUSE_RAY, SOUND_PAN_ATTACKER }, { 21, SE_M_CONFUSE_RAY, SOUND_PAN_ATTACKER }, { 60, SE_M_DIZZY_PUNCH, SOUND_PAN_ATTACKER }, { 90, SE_M_DIZZY_PUNCH, SOUND_PAN_ATTACKER }, { 110, SE_M_DIZZY_PUNCH, SOUND_PAN_ATTACKER }, { 160, SE_M_SWAGGER2, SOUND_PAN_ATTACKER } },
++    [MOVE_SOFT_BOILED] = { { 0, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 127, SE_M_HORN_ATTACK, SOUND_PAN_ATTACKER }, { 203, SE_M_ABSORB_2, SOUND_PAN_TARGET } },
++    [MOVE_HI_JUMP_KICK] = { { 20, SE_M_JUMP_KICK, SOUND_PAN_TARGET }, { 28, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_GLARE] = { { 0, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 16, SE_M_LEER, SOUND_PAN_ATTACKER } },
++    [MOVE_DREAM_EATER] = { { 0, SE_M_PSYBEAM, SOUND_PAN_ATTACKER }, { 0, SE_M_MINIMIZE, SOUND_PAN_TARGET }, { 8, SE_M_SWAGGER, SOUND_PAN_TARGET }, { 12, SE_M_SWAGGER, SOUND_PAN_TARGET }, { 16, SE_M_SWAGGER, SOUND_PAN_TARGET }, { 20, SE_M_SWAGGER, SOUND_PAN_TARGET }, { 24, SE_M_SWAGGER, SOUND_PAN_TARGET }, { 28, SE_M_SWAGGER, SOUND_PAN_TARGET }, { 32, SE_M_SWAGGER, SOUND_PAN_TARGET }, { 36, SE_M_SWAGGER, SOUND_PAN_TARGET }, { 63, SE_M_ABSORB_2, SOUND_PAN_ATTACKER } },
++    [MOVE_POISON_GAS] = { { 0, SE_M_MIST, SOUND_PAN_ATTACKER }, { 4, SE_M_MIST, SOUND_PAN_ATTACKER }, { 8, SE_M_MIST, SOUND_PAN_ATTACKER }, { 12, SE_M_MIST, SOUND_PAN_ATTACKER }, { 16, SE_M_MIST, SOUND_PAN_ATTACKER }, { 20, SE_M_MIST, SOUND_PAN_ATTACKER }, { 60, SE_M_MIST, SOUND_PAN_TARGET }, { 88, SE_M_MIST, SOUND_PAN_TARGET }, { 116, SE_M_MIST, SOUND_PAN_TARGET }, { 144, SE_M_MIST, SOUND_PAN_TARGET }, { 172, SE_M_MIST, SOUND_PAN_TARGET }, { 200, SE_M_MIST, SOUND_PAN_TARGET } },
++    [MOVE_BARRAGE] = { { 0, SE_M_SWAGGER, SOUND_PAN_ATTACKER }, { 24, SE_M_STRENGTH, SOUND_PAN_TARGET }, { 32, SE_M_STRENGTH, SOUND_PAN_TARGET } },
++    [MOVE_LEECH_LIFE] = { { 10, SE_M_ABSORB, SOUND_PAN_TARGET }, { 28, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 32, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 36, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 40, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 44, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 48, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 52, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 56, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 83, SE_M_ABSORB_2, SOUND_PAN_ATTACKER } },
++    [MOVE_LOVELY_KISS] = { { 0, SE_M_PSYBEAM2, SOUND_PAN_TARGET }, { 8, SE_M_ATTRACT, SOUND_PAN_TARGET } },
++    [MOVE_SKY_ATTACK] = { { 20, SE_M_STAT_INCREASE, SOUND_PAN_ATTACKER } },
++    [MOVE_TRANSFORM] = { { 0, SE_M_TELEPORT, SOUND_PAN_ATTACKER }, { 48, SE_M_MINIMIZE, SOUND_PAN_ATTACKER } },
++    [MOVE_BUBBLE] = { { 1, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 7, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 13, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 19, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 25, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 31, SE_M_BUBBLE, SOUND_PAN_ATTACKER }, { 39, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 45, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 51, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 57, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 63, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 69, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 75, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 81, SE_M_BUBBLE3, SOUND_PAN_TARGET } },
++    [MOVE_DIZZY_PUNCH] = { { 6, SE_M_COMET_PUNCH, SOUND_PAN_TARGET }, { 22, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_SPORE] = { { 0, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 16, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 32, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 48, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 64, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 80, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 96, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 112, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 128, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 144, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 160, SE_M_POISON_POWDER, SOUND_PAN_TARGET } },
++    [MOVE_FLASH] = { { 0, SE_M_LEER, SOUND_PAN_ATTACKER } },
++    [MOVE_PSYWAVE] = { { 0, SE_M_PSYBEAM, SOUND_PAN_ATTACKER }, { 0, SE_M_TELEPORT, SOUND_PAN_ATTACKER }, { 11, SE_M_TELEPORT, SOUND_PAN_ATTACKER }, { 22, SE_M_TELEPORT, SOUND_PAN_ATTACKER }, { 33, SE_M_TELEPORT, SOUND_PAN_ATTACKER }, { 44, SE_M_TELEPORT, SOUND_PAN_ATTACKER }, { 55, SE_M_TELEPORT, SOUND_PAN_ATTACKER }, { 66, SE_M_TELEPORT, SOUND_PAN_ATTACKER }, { 77, SE_M_TELEPORT, SOUND_PAN_ATTACKER }, { 88, SE_M_TELEPORT, SOUND_PAN_ATTACKER } },
++    [MOVE_SPLASH] = { { 8, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 46, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 84, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER } },
++    [MOVE_ACID_ARMOR] = { { 0, SE_M_ACID_ARMOR, SOUND_PAN_ATTACKER } },
++    [MOVE_CRABHAMMER] = { { 0, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 33, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 53, SE_M_CRABHAMMER, SOUND_PAN_TARGET }, { 73, SE_M_CRABHAMMER, SOUND_PAN_TARGET } },
++    [MOVE_EXPLOSION] = { { 0, SE_M_EXPLOSION, SOUND_PAN_ATTACKER }, { 6, SE_M_EXPLOSION, SOUND_PAN_ATTACKER }, { 12, SE_M_EXPLOSION, SOUND_PAN_ATTACKER }, { 18, SE_M_EXPLOSION, SOUND_PAN_ATTACKER }, { 24, SE_M_EXPLOSION, SOUND_PAN_ATTACKER }, { 30, SE_M_EXPLOSION, SOUND_PAN_ATTACKER }, { 36, SE_M_EXPLOSION, SOUND_PAN_ATTACKER }, { 42, SE_M_EXPLOSION, SOUND_PAN_ATTACKER }, { 48, SE_M_EXPLOSION, SOUND_PAN_ATTACKER }, { 54, SE_M_EXPLOSION, SOUND_PAN_ATTACKER } },
++    [MOVE_FURY_SWIPES] = { { 4, SE_M_SCRATCH, SOUND_PAN_TARGET }, { 18, SE_M_SCRATCH, SOUND_PAN_TARGET } },
++    [MOVE_BONEMERANG] = { { 0, SE_M_BONEMERANG, SOUND_PAN_ATTACKER }, { 20, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 37, SE_M_VITAL_THROW, SOUND_PAN_ATTACKER } },
++    [MOVE_REST] = { { 0, SE_M_SNORE, SOUND_PAN_ATTACKER } },
++    [MOVE_ROCK_SLIDE] = { { 0, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 2, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 4, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 6, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 8, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 10, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 12, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 14, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 16, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 18, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 20, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 22, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 24, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 26, SE_M_ROCK_THROW, SOUND_PAN_TARGET } },
++    [MOVE_HYPER_FANG] = { { 0, SE_M_BITE, SOUND_PAN_TARGET }, { 3, SE_M_LEER, SOUND_PAN_TARGET } },
++    [MOVE_CONVERSION] = { { 0, SE_M_SWIFT, SOUND_PAN_ATTACKER }, { 12, SE_M_SWIFT, SOUND_PAN_ATTACKER }, { 24, SE_M_SWIFT, SOUND_PAN_ATTACKER }, { 36, SE_M_SWIFT, SOUND_PAN_ATTACKER }, { 65, SE_M_BARRIER, SOUND_PAN_ATTACKER } },
++    [MOVE_TRI_ATTACK] = { { 0, SE_M_TRI_ATTACK, SOUND_PAN_ATTACKER }, { 20, SE_M_TRI_ATTACK, SOUND_PAN_ATTACKER }, { 40, SE_M_TRI_ATTACK, SOUND_PAN_ATTACKER }, { 48, SE_M_TRI_ATTACK, SOUND_PAN_ATTACKER }, { 56, SE_M_TRI_ATTACK, SOUND_PAN_ATTACKER }, { 64, SE_M_TRI_ATTACK, SOUND_PAN_ATTACKER }, { 64, SE_M_FLAME_WHEEL2, SOUND_PAN_TARGET }, { 72, SE_M_TRI_ATTACK, SOUND_PAN_ATTACKER }, { 80, SE_M_TRI_ATTACK, SOUND_PAN_ATTACKER }, { 80, SE_M_TRI_ATTACK2, SOUND_PAN_TARGET }, { 112, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 116, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 120, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 124, SE_M_ICY_WIND, SOUND_PAN_TARGET } },
++    [MOVE_SUPER_FANG] = { { 0, SE_M_DRAGON_RAGE, SOUND_PAN_ATTACKER }, { 40, SE_M_BITE, SOUND_PAN_TARGET } },
++    [MOVE_SLASH] = { { 0, SE_M_RAZOR_WIND, SOUND_PAN_TARGET }, { 4, SE_M_RAZOR_WIND, SOUND_PAN_TARGET } },
++    [MOVE_SUBSTITUTE] = { { 0, SE_M_ATTRACT, SOUND_PAN_ATTACKER } },
++    [MOVE_STRUGGLE] = { { 0, SE_M_HEADBUTT, SOUND_PAN_ATTACKER }, { 8, SE_M_MEGA_KICK2, SOUND_PAN_TARGET }, { 12, SE_M_HEADBUTT, SOUND_PAN_ATTACKER }, { 24, SE_M_HEADBUTT, SOUND_PAN_ATTACKER }, { 36, SE_M_HEADBUTT, SOUND_PAN_ATTACKER } },
++    [MOVE_SKETCH] = { { 8, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 46, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER } },
++    [MOVE_TRIPLE_KICK] = { { 0, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_THIEF] = { { 7, SE_M_VITAL_THROW, SOUND_PAN_TARGET } },
++    [MOVE_SPIDER_WEB] = { { 8, SE_M_STRING_SHOT, SOUND_PAN_ATTACKER }, { 17, SE_M_STRING_SHOT, SOUND_PAN_ATTACKER }, { 26, SE_M_STRING_SHOT, SOUND_PAN_ATTACKER }, { 30, SE_M_STRING_SHOT2, SOUND_PAN_TARGET }, { 35, SE_M_STRING_SHOT, SOUND_PAN_ATTACKER }, { 44, SE_M_STRING_SHOT, SOUND_PAN_ATTACKER }, { 53, SE_M_STRING_SHOT, SOUND_PAN_ATTACKER } },
++    [MOVE_MIND_READER] = { { 0, SE_M_CONFUSE_RAY, SOUND_PAN_TARGET }, { 40, SE_M_LEER, SOUND_PAN_TARGET } },
++    [MOVE_NIGHTMARE] = { { 0, SE_M_NIGHTMARE, SOUND_PAN_TARGET } },
++    [MOVE_FLAME_WHEEL] = { { 0, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 2, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 4, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 6, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 8, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 10, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 12, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 24, SE_M_FLAME_WHEEL2, SOUND_PAN_TARGET } },
++    [MOVE_SNORE] = { { 0, SE_M_SNORE, SOUND_PAN_ATTACKER }, { 30, SE_M_SNORE, SOUND_PAN_ATTACKER } },
++    [MOVE_CURSE] = { { 88, SE_M_BIND, SOUND_PAN_ATTACKER }, { 129, SE_M_BIND, SOUND_PAN_ATTACKER }, { 170, SE_M_BIND, SOUND_PAN_ATTACKER }, { 179, SE_M_NIGHTMARE, SOUND_PAN_TARGET } },
++    [MOVE_FLAIL] = { { 0, SE_M_HEADBUTT, SOUND_PAN_ATTACKER }, { 8, SE_M_HEADBUTT, SOUND_PAN_ATTACKER }, { 8, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_CONVERSION_2] = { { 0, SE_M_BARRIER, SOUND_PAN_TARGET }, { 60, SE_M_SWIFT, SOUND_PAN_TARGET }, { 70, SE_M_SWIFT, SOUND_PAN_TARGET }, { 80, SE_M_SWIFT, SOUND_PAN_TARGET }, { 90, SE_M_SWIFT, SOUND_PAN_TARGET }, { 100, SE_M_SWIFT, SOUND_PAN_TARGET }, { 110, SE_M_SWIFT, SOUND_PAN_TARGET }, { 120, SE_M_SWIFT, SOUND_PAN_TARGET }, { 130, SE_M_SWIFT, SOUND_PAN_TARGET } },
++    [MOVE_AEROBLAST] = { { 0, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 3, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 6, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 9, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 12, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 15, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 18, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 21, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 24, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 27, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 30, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 33, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 36, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 39, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER } },
++    [MOVE_COTTON_SPORE] = { { 0, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 18, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 36, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 54, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 72, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 90, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 108, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 126, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 144, SE_M_POISON_POWDER, SOUND_PAN_TARGET }, { 162, SE_M_POISON_POWDER, SOUND_PAN_TARGET } },
++    [MOVE_REVERSAL] = { { 0, SE_M_DETECT, SOUND_PAN_ATTACKER }, { 48, SE_M_REVERSAL, SOUND_PAN_ATTACKER }, { 84, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_SPITE] = { { 0, SE_M_PSYBEAM, SOUND_PAN_ATTACKER }, { 0, SE_M_PSYBEAM, SOUND_PAN_TARGET }, { 20, SE_M_PSYBEAM, SOUND_PAN_TARGET }, { 40, SE_M_PSYBEAM, SOUND_PAN_TARGET } },
++    [MOVE_POWDER_SNOW] = { { 8, SE_M_GUST, SOUND_PAN_ATTACKER }, { 50, SE_M_GUST2, SOUND_PAN_TARGET }, { 66, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 70, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 74, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 78, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 82, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 86, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 90, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 94, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 98, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 102, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 106, SE_M_ICY_WIND, SOUND_PAN_TARGET } },
++    [MOVE_PROTECT] = { { 16, SE_M_REFLECT, SOUND_PAN_ATTACKER } },
++    [MOVE_MACH_PUNCH] = { { 0, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 6, SE_M_COMET_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_SCARY_FACE] = { { 0, SE_M_PSYBEAM, SOUND_PAN_ATTACKER }, { 18, SE_M_LEER, SOUND_PAN_ATTACKER }, { 39, SE_M_STRING_SHOT2, SOUND_PAN_TARGET } },
++    [MOVE_FAINT_ATTACK] = { { 0, SE_M_FAINT_ATTACK, SOUND_PAN_ATTACKER }, { 10, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_SWEET_KISS] = { { 0, SE_M_HEAL_BELL, SOUND_PAN_TARGET }, { 23, SE_M_HEAL_BELL, SOUND_PAN_TARGET }, { 46, SE_M_HEAL_BELL, SOUND_PAN_TARGET }, { 54, SE_M_ATTRACT, SOUND_PAN_TARGET } },
++    [MOVE_BELLY_DRUM] = { { 8, SE_M_BELLY_DRUM, SOUND_PAN_ATTACKER }, { 23, SE_M_BELLY_DRUM, SOUND_PAN_ATTACKER }, { 38, SE_M_BELLY_DRUM, SOUND_PAN_ATTACKER }, { 45, SE_M_BELLY_DRUM, SOUND_PAN_ATTACKER }, { 52, SE_M_BELLY_DRUM, SOUND_PAN_ATTACKER }, { 59, SE_M_BELLY_DRUM, SOUND_PAN_ATTACKER } },
++    [MOVE_SLUDGE_BOMB] = { { 0, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 3, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 6, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 9, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 12, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 15, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 18, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 21, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 24, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 27, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 30, SE_M_DIG, SOUND_PAN_TARGET }, { 35, SE_M_DIG, SOUND_PAN_TARGET }, { 40, SE_M_DIG, SOUND_PAN_TARGET }, { 56, SE_M_TOXIC, SOUND_PAN_TARGET } },
++    [MOVE_MUD_SLAP] = { { 0, SE_M_SAND_ATTACK, SOUND_PAN_ATTACKER } },
++    [MOVE_OCTAZOOKA] = { { 0, SE_M_MEGA_KICK2, SOUND_PAN_ATTACKER }, { 8, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET } },
++    [MOVE_SPIKES] = { { 0, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 10, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 28, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 38, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 48, SE_M_HORN_ATTACK, SOUND_PAN_TARGET } },
++    [MOVE_ZAP_CANNON] = { { 0, SE_M_THUNDER_WAVE, SOUND_PAN_ATTACKER }, { 23, SE_M_THUNDERBOLT2, SOUND_PAN_TARGET }, { 42, SE_M_THUNDERBOLT2, SOUND_PAN_TARGET } },
++    [MOVE_FORESIGHT] = { { 17, SE_M_SKETCH, SOUND_PAN_TARGET }, { 33, SE_M_SKETCH, SOUND_PAN_TARGET }, { 49, SE_M_SKETCH, SOUND_PAN_TARGET }, { 65, SE_M_SKETCH, SOUND_PAN_TARGET }, { 89, SE_M_SKETCH, SOUND_PAN_TARGET }, { 99, SE_M_DETECT, SOUND_PAN_TARGET } },
++    [MOVE_DESTINY_BOND] = { { 0, SE_M_PSYBEAM, SOUND_PAN_ATTACKER }, { 0, SE_M_CONFUSE_RAY, SOUND_PAN_ATTACKER }, { 72, SE_M_NIGHTMARE, SOUND_PAN_TARGET } },
++    [MOVE_PERISH_SONG] = { { 20, SE_M_PERISH_SONG, SOUND_PAN_ATTACKER } },
++    [MOVE_ICY_WIND] = { { 0, SE_M_ICY_WIND, 0 }, { 8, SE_M_GUST, SOUND_PAN_ATTACKER }, { 53, SE_M_GUST2, SOUND_PAN_TARGET }, { 108, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 114, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 120, SE_M_ICY_WIND, SOUND_PAN_TARGET }, { 126, SE_M_ICY_WIND, SOUND_PAN_TARGET } },
++    [MOVE_DETECT] = { { 26, SE_M_DETECT, SOUND_PAN_ATTACKER } },
++    [MOVE_BONE_RUSH] = { { 0, SE_M_BONEMERANG, SOUND_PAN_TARGET }, { 12, SE_M_HORN_ATTACK, SOUND_PAN_TARGET } },
++    [MOVE_OUTRAGE] = { { 0, SE_M_DRAGON_RAGE, SOUND_PAN_ATTACKER }, { 8, SE_M_DRAGON_RAGE, SOUND_PAN_ATTACKER }, { 16, SE_M_DRAGON_RAGE, SOUND_PAN_ATTACKER } },
++    [MOVE_SANDSTORM] = { { 0, SE_M_SANDSTORM, 0 } },
++    [MOVE_GIGA_DRAIN] = { { 8, SE_M_ABSORB, SOUND_PAN_TARGET }, { 21, SE_M_GIGA_DRAIN, SOUND_PAN_TARGET }, { 25, SE_M_GIGA_DRAIN, SOUND_PAN_TARGET }, { 29, SE_M_GIGA_DRAIN, SOUND_PAN_TARGET }, { 33, SE_M_GIGA_DRAIN, SOUND_PAN_TARGET }, { 37, SE_M_GIGA_DRAIN, SOUND_PAN_TARGET }, { 41, SE_M_GIGA_DRAIN, SOUND_PAN_TARGET }, { 45, SE_M_GIGA_DRAIN, SOUND_PAN_TARGET }, { 49, SE_M_GIGA_DRAIN, SOUND_PAN_TARGET }, { 76, SE_M_ABSORB_2, SOUND_PAN_ATTACKER } },
++    [MOVE_ENDURE] = { { 0, SE_M_DRAGON_RAGE, SOUND_PAN_ATTACKER } },
++    [MOVE_CHARM] = { { 0, SE_M_CHARM, SOUND_PAN_ATTACKER }, { 15, SE_M_CHARM, SOUND_PAN_ATTACKER }, { 30, SE_M_CHARM, SOUND_PAN_ATTACKER } },
++    [MOVE_ROLLOUT] = { { 8, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_FALSE_SWIPE] = { { 0, SE_M_VITAL_THROW, SOUND_PAN_TARGET }, { 16, SE_M_DOUBLE_TEAM, SOUND_PAN_TARGET }, { 20, SE_M_DOUBLE_TEAM, SOUND_PAN_TARGET }, { 24, SE_M_DOUBLE_TEAM, SOUND_PAN_TARGET }, { 36, SE_M_COMET_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_SWAGGER] = { { 0, SE_M_SWAGGER, SOUND_PAN_ATTACKER }, { 8, SE_M_SWAGGER, SOUND_PAN_ATTACKER }, { 12, SE_M_SWAGGER, SOUND_PAN_ATTACKER }, { 40, SE_M_SWAGGER2, SOUND_PAN_TARGET }, { 52, SE_M_SWAGGER2, SOUND_PAN_TARGET } },
++    [MOVE_MILK_DRINK] = { { 40, SE_M_CRABHAMMER, SOUND_PAN_ATTACKER }, { 52, SE_M_CRABHAMMER, SOUND_PAN_ATTACKER }, { 72, SE_M_CRABHAMMER, SOUND_PAN_ATTACKER }, { 80, SE_M_MILK_DRINK, SOUND_PAN_ATTACKER }, { 88, SE_M_ABSORB_2, SOUND_PAN_TARGET } },
++    [MOVE_SPARK] = { { 0, SE_M_THUNDERBOLT2, SOUND_PAN_ATTACKER }, { 10, SE_M_THUNDERBOLT2, SOUND_PAN_ATTACKER }, { 30, SE_M_THUNDERBOLT2, SOUND_PAN_ATTACKER }, { 46, SE_M_HYPER_BEAM, SOUND_PAN_TARGET }, { 54, SE_M_THUNDERBOLT2, SOUND_PAN_TARGET } },
++    [MOVE_FURY_CUTTER] = { { 0, SE_M_RAZOR_WIND, SOUND_PAN_TARGET } },
++    [MOVE_STEEL_WING] = { { 0, SE_M_HARDEN, SOUND_PAN_ATTACKER }, { 8, SE_M_WING_ATTACK, SOUND_PAN_ATTACKER }, { 28, SE_M_HARDEN, SOUND_PAN_ATTACKER }, { 28, SE_M_WING_ATTACK, SOUND_PAN_ATTACKER }, { 49, SE_M_RAZOR_WIND, SOUND_PAN_TARGET } },
++    [MOVE_MEAN_LOOK] = { { 0, SE_M_PSYBEAM, SOUND_PAN_ATTACKER }, { 0, SE_M_CONFUSE_RAY, SOUND_PAN_TARGET }, { 15, SE_M_CONFUSE_RAY, SOUND_PAN_TARGET }, { 30, SE_M_CONFUSE_RAY, SOUND_PAN_TARGET }, { 45, SE_M_CONFUSE_RAY, SOUND_PAN_TARGET }, { 85, SE_M_LEER, SOUND_PAN_TARGET } },
++    [MOVE_ATTRACT] = { { 0, SE_M_CHARM, SOUND_PAN_ATTACKER }, { 12, SE_M_CHARM, SOUND_PAN_ATTACKER }, { 23, SE_M_ATTRACT, SOUND_PAN_TARGET }, { 24, SE_M_CHARM, SOUND_PAN_ATTACKER }, { 46, SE_M_ATTRACT2, 0 } },
++    [MOVE_SLEEP_TALK] = { { 20, SE_M_SNORE, SOUND_PAN_ATTACKER }, { 52, SE_M_SNORE, SOUND_PAN_ATTACKER }, { 84, SE_M_SNORE, SOUND_PAN_ATTACKER } },
++    [MOVE_HEAL_BELL] = { { 20, SE_M_HEAL_BELL, SOUND_PAN_ATTACKER }, { 53, SE_M_HEAL_BELL, SOUND_PAN_ATTACKER }, { 86, SE_M_HEAL_BELL, SOUND_PAN_ATTACKER }, { 102, SE_M_MORNING_SUN, SOUND_PAN_ATTACKER }, { 118, SE_SHINY, SOUND_PAN_ATTACKER } },
++    [MOVE_PRESENT] = { { 0, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 14, SE_M_BUBBLE2, SOUND_PAN_ATTACKER }, { 28, SE_M_BUBBLE2, 0 }, { 48, SE_M_BUBBLE2, SOUND_PAN_TARGET } },
++    [MOVE_FRUSTRATION] = { { 30, SE_M_COMET_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_SAFEGUARD] = { { 0, SE_M_MILK_DRINK, SOUND_PAN_ATTACKER }, { 16, SE_SHINY, SOUND_PAN_ATTACKER } },
++    [MOVE_PAIN_SPLIT] = { { 10, SE_M_SWAGGER2, 0 }, { 28, SE_M_SWAGGER2, 0 }, { 46, SE_M_SWAGGER2, 0 } },
++    [MOVE_SACRED_FIRE] = { { 0, SE_M_SACRED_FIRE, SOUND_PAN_ATTACKER }, { 7, SE_M_SACRED_FIRE, SOUND_PAN_ATTACKER }, { 14, SE_M_SACRED_FIRE, SOUND_PAN_ATTACKER }, { 17, SE_M_SACRED_FIRE2, SOUND_PAN_TARGET }, { 21, SE_M_SACRED_FIRE, SOUND_PAN_ATTACKER }, { 27, SE_M_SACRED_FIRE2, SOUND_PAN_TARGET }, { 28, SE_M_SACRED_FIRE, SOUND_PAN_ATTACKER }, { 37, SE_M_SACRED_FIRE2, SOUND_PAN_TARGET }, { 48, SE_M_FLAME_WHEEL2, SOUND_PAN_TARGET } },
++    [MOVE_DYNAMIC_PUNCH] = { { 1, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 10, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET }, { 16, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET }, { 22, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET }, { 28, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET }, { 34, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET } },
++    [MOVE_MEGAHORN] = { { 0, SE_M_DRAGON_RAGE, SOUND_PAN_ATTACKER }, { 25, SE_M_VICEGRIP, SOUND_PAN_TARGET } },
++    [MOVE_DRAGON_BREATH] = { { 0, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 7, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 14, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 21, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 28, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 35, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER }, { 42, SE_M_FLAME_WHEEL, SOUND_PAN_ATTACKER } },
++    [MOVE_BATON_PASS] = { { 0, SE_M_BATON_PASS, SOUND_PAN_ATTACKER } },
++    [MOVE_ENCORE] = { { 24, SE_M_ENCORE2, SOUND_PAN_TARGET } },
++    [MOVE_PURSUIT] = { { 0, SE_M_COMET_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_RAPID_SPIN] = { { 0, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 8, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 8, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET }, { 16, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 24, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 24, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 32, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 40, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 48, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER } },
++    [MOVE_SWEET_SCENT] = { { 0, SE_M_SWEET_SCENT, SOUND_PAN_ATTACKER } },
++    [MOVE_IRON_TAIL] = { { 0, SE_M_HARDEN, SOUND_PAN_ATTACKER }, { 14, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 28, SE_M_HARDEN, SOUND_PAN_ATTACKER } },
++    [MOVE_METAL_CLAW] = { { 0, SE_M_HARDEN, SOUND_PAN_ATTACKER }, { 10, SE_M_RAZOR_WIND, SOUND_PAN_TARGET }, { 20, SE_M_RAZOR_WIND, SOUND_PAN_TARGET }, { 28, SE_M_HARDEN, SOUND_PAN_ATTACKER } },
++    [MOVE_VITAL_THROW] = { { 0, SE_M_VITAL_THROW, SOUND_PAN_ATTACKER }, { 10, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_MORNING_SUN] = { { 113, SE_M_ABSORB_2, SOUND_PAN_ATTACKER } },
++    [MOVE_SYNTHESIS] = { { 0, SE_M_MEGA_KICK, SOUND_PAN_ATTACKER }, { 25, SE_M_ABSORB_2, SOUND_PAN_ATTACKER } },
++    [MOVE_MOONLIGHT] = { { 8, SE_M_MOONLIGHT, 0 }, { 186, SE_M_ABSORB_2, SOUND_PAN_ATTACKER } },
++    [MOVE_HIDDEN_POWER] = { { 0, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER }, { 42, SE_M_REVERSAL, SOUND_PAN_ATTACKER }, { 94, SE_M_REFLECT, SOUND_PAN_ATTACKER } },
++    [MOVE_CROSS_CHOP] = { { 0, SE_M_MEGA_KICK, SOUND_PAN_TARGET }, { 40, SE_M_RAZOR_WIND, SOUND_PAN_TARGET } },
++    [MOVE_TWISTER] = { { 0, SE_M_TWISTER, SOUND_PAN_TARGET }, { 24, SE_M_COMET_PUNCH, SOUND_PAN_TARGET }, { 28, SE_M_COMET_PUNCH, SOUND_PAN_TARGET }, { 32, SE_M_COMET_PUNCH, SOUND_PAN_TARGET }, { 36, SE_M_COMET_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_RAIN_DANCE] = { { 0, SE_M_RAIN_DANCE, SOUND_PAN_ATTACKER } },
++    [MOVE_SUNNY_DAY] = { { 8, SE_M_PETAL_DANCE, SOUND_PAN_ATTACKER } },
++    [MOVE_CRUNCH] = { { 0, SE_M_BITE, SOUND_PAN_TARGET }, { 18, SE_M_BITE, SOUND_PAN_TARGET } },
++    [MOVE_MIRROR_COAT] = { { 10, SE_M_REFLECT, SOUND_PAN_ATTACKER } },
++    [MOVE_PSYCH_UP] = { { 0, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 5, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 10, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 15, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 20, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 25, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 30, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 35, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 40, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 45, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 131, SE_M_PSYBEAM, SOUND_PAN_ATTACKER } },
++    [MOVE_EXTREME_SPEED] = { { 0, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 8, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 16, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 29, SE_M_COMET_PUNCH, SOUND_PAN_TARGET }, { 39, SE_M_COMET_PUNCH, SOUND_PAN_TARGET }, { 49, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 67, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 75, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 83, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER }, { 91, SE_M_DOUBLE_TEAM, SOUND_PAN_ATTACKER } },
++    [MOVE_ANCIENT_POWER] = { { 0, SE_M_DRAGON_RAGE, SOUND_PAN_ATTACKER }, { 31, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET } },
++    [MOVE_SHADOW_BALL] = { { 15, SE_M_MIST, SOUND_PAN_ATTACKER }, { 21, SE_M_MIST, SOUND_PAN_ATTACKER }, { 23, SE_M_SAND_ATTACK, SOUND_PAN_TARGET }, { 27, SE_M_MIST, SOUND_PAN_ATTACKER }, { 33, SE_M_MIST, SOUND_PAN_ATTACKER }, { 39, SE_M_MIST, SOUND_PAN_ATTACKER } },
++    [MOVE_FUTURE_SIGHT] = { { 0, SE_M_PSYBEAM, SOUND_PAN_ATTACKER }, { 0, SE_M_SUPERSONIC, SOUND_PAN_ATTACKER } },
++    [MOVE_ROCK_SMASH] = { { 1, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 9, SE_M_ROCK_THROW, SOUND_PAN_TARGET } },
++    [MOVE_WHIRLPOOL] = { { 0, SE_M_WHIRLPOOL, SOUND_PAN_TARGET } },
++    [MOVE_BEAT_UP] = { { 0, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 8, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_FAKE_OUT] = { { 0, SE_M_FLATTER, 0 }, { 8, SE_M_SKETCH, SOUND_PAN_TARGET } },
++    [MOVE_UPROAR] = { { 0, SE_M_UPROAR, SOUND_PAN_ATTACKER }, { 16, SE_M_UPROAR, SOUND_PAN_ATTACKER }, { 32, SE_M_UPROAR, SOUND_PAN_ATTACKER } },
++    [MOVE_STOCKPILE] = { { 0, SE_M_MEGA_KICK, SOUND_PAN_ATTACKER } },
++    [MOVE_SPIT_UP] = { { 0, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER }, { 45, SE_M_SPIT_UP, SOUND_PAN_ATTACKER }, { 58, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET }, { 63, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET } },
++    [MOVE_SWALLOW] = { { 0, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER }, { 38, SE_M_SPIT_UP, SOUND_PAN_ATTACKER }, { 51, SE_M_ABSORB_2, SOUND_PAN_ATTACKER } },
++    [MOVE_HEAT_WAVE] = { { 0, SE_M_HEAT_WAVE, SOUND_PAN_ATTACKER } },
++    [MOVE_HAIL] = { { 8, SE_M_HAIL, 0 }, { 16, SE_M_HAIL, 0 }, { 24, SE_M_HAIL, 0 }, { 32, SE_M_HAIL, 0 }, { 40, SE_M_HAIL, 0 }, { 48, SE_M_HAIL, 0 }, { 56, SE_M_HAIL, 0 }, { 64, SE_M_HAIL, 0 }, { 72, SE_M_HAIL, 0 }, { 80, SE_M_HAIL, 0 } },
++    [MOVE_TORMENT] = { { 8, SE_M_SWAGGER2, SOUND_PAN_TARGET }, { 28, SE_M_SWAGGER2, SOUND_PAN_TARGET } },
++    [MOVE_FLATTER] = { { 0, SE_M_ENCORE2, SOUND_PAN_TARGET }, { 18, SE_M_FLATTER, SOUND_PAN_ATTACKER }, { 23, SE_M_FLATTER, SOUND_PAN_TARGET } },
++    [MOVE_WILL_O_WISP] = { { 0, SE_M_EMBER, SOUND_PAN_ATTACKER }, { 10, SE_M_EMBER, SOUND_PAN_ATTACKER }, { 57, SE_M_FLAME_WHEEL2, SOUND_PAN_TARGET } },
++    [MOVE_MEMENTO] = { { 2, SE_M_PSYBEAM, SOUND_PAN_ATTACKER }, { 50, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 71, SE_M_PSYBEAM, SOUND_PAN_TARGET } },
++    [MOVE_FACADE] = { { 0, SE_M_SWAGGER, SOUND_PAN_ATTACKER }, { 24, SE_M_SWAGGER, SOUND_PAN_ATTACKER }, { 48, SE_M_SWAGGER, SOUND_PAN_ATTACKER } },
++    [MOVE_FOCUS_PUNCH] = { { 1, SE_M_SWAGGER, SOUND_PAN_TARGET }, { 19, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 27, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 35, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_SMELLING_SALT] = { { 32, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET }, { 44, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET }, { 44, SE_M_SWAGGER2, SOUND_PAN_TARGET }, { 60, SE_M_SWAGGER2, SOUND_PAN_TARGET }, { 76, SE_M_SWAGGER2, SOUND_PAN_TARGET } },
++    [MOVE_FOLLOW_ME] = { { 0, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 18, SE_M_ATTRACT, SOUND_PAN_ATTACKER }, { 89, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 111, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 133, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER } },
++    [MOVE_NATURE_POWER] = { { 0, SE_M_DRAGON_RAGE, SOUND_PAN_ATTACKER }, { 31, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET } },
++    [MOVE_CHARGE] = { { 8, SE_M_CHARGE, SOUND_PAN_ATTACKER }, { 38, SE_M_CHARGE, SOUND_PAN_ATTACKER }, { 68, SE_M_CHARGE, SOUND_PAN_ATTACKER }, { 93, SE_M_CHARGE, SOUND_PAN_ATTACKER }, { 113, SE_M_CHARGE, SOUND_PAN_ATTACKER }, { 128, SE_M_CHARGE, SOUND_PAN_ATTACKER }, { 144, SE_M_CHARGE, SOUND_PAN_ATTACKER }, { 150, SE_M_CHARGE, SOUND_PAN_ATTACKER }, { 154, SE_M_THUNDERBOLT2, SOUND_PAN_ATTACKER }, { 156, SE_M_CHARGE, SOUND_PAN_ATTACKER }, { 162, SE_M_CHARGE, SOUND_PAN_ATTACKER }, { 168, SE_M_CHARGE, SOUND_PAN_ATTACKER } },
++    [MOVE_TAUNT] = { { 0, SE_M_METRONOME, SOUND_PAN_ATTACKER }, { 10, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 26, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 26, SE_M_SWAGGER2, SOUND_PAN_TARGET }, { 46, SE_M_SWAGGER2, SOUND_PAN_TARGET } },
++    [MOVE_HELPING_HAND] = { { 19, SE_M_ENCORE, 0 }, { 33, SE_M_ENCORE, 0 }, { 53, SE_M_ENCORE, 0 } },
++    [MOVE_TRICK] = { { 16, SE_M_SKETCH, 0 }, { 46, SE_M_DOUBLE_TEAM, 0 }, { 70, SE_M_DOUBLE_TEAM, 0 }, { 86, SE_M_DOUBLE_TEAM, 0 }, { 102, SE_M_DOUBLE_TEAM, 0 }, { 118, SE_M_DOUBLE_TEAM, 0 }, { 134, SE_M_DOUBLE_TEAM, 0 }, { 150, SE_M_ATTRACT, 0 } },
++    [MOVE_ROLE_PLAY] = { { 8, SE_M_TRI_ATTACK, SOUND_PAN_ATTACKER }, { 38, SE_M_DETECT, SOUND_PAN_ATTACKER } },
++    [MOVE_WISH] = { { 8, SE_M_REFLECT, SOUND_PAN_TARGET }, { 76, SE_M_HEAL_BELL, SOUND_PAN_ATTACKER }, { 92, SE_M_HEAL_BELL, SOUND_PAN_ATTACKER }, { 108, SE_M_HEAL_BELL, SOUND_PAN_ATTACKER } },
++    [MOVE_ASSIST] = { { 2, SE_M_SCRATCH, 0 }, { 4, SE_M_SCRATCH, 0 }, { 6, SE_M_SCRATCH, 0 }, { 8, SE_M_SCRATCH, 0 } },
++    [MOVE_INGRAIN] = { { 0, SE_M_SCRATCH, SOUND_PAN_ATTACKER }, { 10, SE_M_SCRATCH, SOUND_PAN_ATTACKER }, { 20, SE_M_SCRATCH, SOUND_PAN_ATTACKER }, { 30, SE_M_SCRATCH, SOUND_PAN_ATTACKER }, { 75, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 80, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 85, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 90, SE_M_BUBBLE3, SOUND_PAN_ATTACKER } },
++    [MOVE_SUPERPOWER] = { { 0, SE_M_MEGA_KICK, SOUND_PAN_ATTACKER }, { 20, SE_M_EARTHQUAKE, 0 }, { 166, SE_M_SWAGGER, SOUND_PAN_ATTACKER }, { 182, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_MAGIC_COAT] = { { 15, SE_M_BARRIER, SOUND_PAN_ATTACKER } },
++    [MOVE_RECYCLE] = { { 1, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER }, { 9, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER }, { 25, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER }, { 49, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER } },
++    [MOVE_REVENGE] = { { 0, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER }, { 20, SE_M_SWAGGER, SOUND_PAN_TARGET }, { 28, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 36, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_BRICK_BREAK] = { { 5, SE_M_VITAL_THROW, SOUND_PAN_TARGET }, { 30, SE_M_VITAL_THROW, SOUND_PAN_TARGET }, { 87, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_YAWN] = { { 0, SE_M_YAWN, SOUND_PAN_ATTACKER }, { 8, SE_M_SPIT_UP, SOUND_PAN_ATTACKER }, { 24, SE_M_YAWN, SOUND_PAN_TARGET } },
++    [MOVE_KNOCK_OFF] = { { 4, SE_M_VITAL_THROW, SOUND_PAN_TARGET }, { 12, SE_M_COMET_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_ENDEAVOR] = { { 0, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 6, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET }, { 24, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 30, SE_M_COMET_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_ERUPTION] = { { 68, SE_M_EXPLOSION, SOUND_PAN_ATTACKER }, { 76, SE_M_EXPLOSION, SOUND_PAN_ATTACKER }, { 76, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 92, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 108, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 124, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 140, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 156, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 172, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 188, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 204, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 220, SE_M_ROCK_THROW, SOUND_PAN_TARGET }, { 236, SE_M_ROCK_THROW, SOUND_PAN_TARGET } },
++    [MOVE_SKILL_SWAP] = { { 0, SE_M_REVERSAL, SOUND_PAN_ATTACKER }, { 24, SE_M_REVERSAL, SOUND_PAN_ATTACKER }, { 48, SE_M_REVERSAL, SOUND_PAN_ATTACKER } },
++    [MOVE_IMPRISON] = { { 8, SE_M_HORN_ATTACK, SOUND_PAN_ATTACKER }, { 16, SE_M_HORN_ATTACK, SOUND_PAN_ATTACKER }, { 20, SE_M_HYPER_BEAM, SOUND_PAN_ATTACKER }, { 24, SE_M_HORN_ATTACK, SOUND_PAN_ATTACKER }, { 32, SE_M_HORN_ATTACK, SOUND_PAN_ATTACKER }, { 40, SE_M_HORN_ATTACK, SOUND_PAN_ATTACKER } },
++    [MOVE_REFRESH] = { { 0, SE_M_STAT_INCREASE, SOUND_PAN_ATTACKER }, { 8, SE_M_MORNING_SUN, SOUND_PAN_ATTACKER }, { 32, SE_SHINY, SOUND_PAN_ATTACKER } },
++    [MOVE_GRUDGE] = { { 0, SE_M_PSYBEAM, SOUND_PAN_ATTACKER }, { 0, SE_M_EMBER, SOUND_PAN_ATTACKER }, { 16, SE_M_EMBER, SOUND_PAN_ATTACKER }, { 32, SE_M_EMBER, SOUND_PAN_ATTACKER }, { 48, SE_M_EMBER, SOUND_PAN_ATTACKER }, { 90, SE_M_NIGHTMARE, SOUND_PAN_TARGET } },
++    [MOVE_SNATCH] = { { 0, SE_M_TAKE_DOWN, SOUND_PAN_ATTACKER } },
++    [MOVE_SECRET_POWER] = { { 0, SE_M_COMET_PUNCH, SOUND_PAN_ATTACKER }, { 4, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_DIVE] = { { 0, SE_M_HEADBUTT, SOUND_PAN_ATTACKER }, { 8, SE_M_DIVE, SOUND_PAN_ATTACKER } },
++    [MOVE_ARM_THRUST] = { { 10, SE_M_SWAGGER, SOUND_PAN_TARGET }, { 18, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET } },
++    [MOVE_CAMOUFLAGE] = { { 16, SE_M_FAINT_ATTACK, SOUND_PAN_ATTACKER } },
++    [MOVE_TAIL_GLOW] = { { 26, SE_M_MORNING_SUN, SOUND_PAN_ATTACKER }, { 42, SE_M_MORNING_SUN, SOUND_PAN_ATTACKER }, { 58, SE_M_MORNING_SUN, SOUND_PAN_ATTACKER }, { 74, SE_M_MORNING_SUN, SOUND_PAN_ATTACKER }, { 90, SE_M_MORNING_SUN, SOUND_PAN_ATTACKER }, { 106, SE_M_MORNING_SUN, SOUND_PAN_ATTACKER } },
++    [MOVE_LUSTER_PURGE] = { { 0, SE_M_SOLAR_BEAM, SOUND_PAN_ATTACKER }, { 36, SE_M_HYPER_BEAM, SOUND_PAN_TARGET }, { 39, SE_M_HYPER_BEAM, SOUND_PAN_TARGET }, { 42, SE_M_HYPER_BEAM, SOUND_PAN_TARGET }, { 45, SE_M_HYPER_BEAM, SOUND_PAN_TARGET }, { 48, SE_M_HYPER_BEAM, SOUND_PAN_TARGET }, { 51, SE_M_HYPER_BEAM, SOUND_PAN_TARGET } },
++    [MOVE_MIST_BALL] = { { 0, SE_M_STRING_SHOT, SOUND_PAN_ATTACKER }, { 8, SE_M_SAND_ATTACK, SOUND_PAN_TARGET }, { 8, SE_M_HAZE, 0 } },
++    [MOVE_FEATHER_DANCE] = { { 0, SE_M_PETAL_DANCE, SOUND_PAN_TARGET } },
++    [MOVE_TEETER_DANCE] = { { 0, SE_M_TEETER_DANCE, SOUND_PAN_ATTACKER }, { 24, SE_M_TEETER_DANCE, SOUND_PAN_ATTACKER }, { 48, SE_M_TEETER_DANCE, SOUND_PAN_ATTACKER }, { 72, SE_M_TEETER_DANCE, SOUND_PAN_ATTACKER }, { 96, SE_M_TEETER_DANCE, SOUND_PAN_ATTACKER } },
++    [MOVE_BLAZE_KICK] = { { 0, SE_M_FLAME_WHEEL, SOUND_PAN_TARGET }, { 30, SE_M_FIRE_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_MUD_SPORT] = { { 24, SE_M_DIG, SOUND_PAN_ATTACKER }, { 56, SE_M_DIG, SOUND_PAN_ATTACKER }, { 88, SE_M_DIG, SOUND_PAN_ATTACKER }, { 119, SE_M_BUBBLE2, 0 }, { 120, SE_M_BUBBLE2, 0 }, { 122, SE_M_BUBBLE2, 0 }, { 131, SE_M_BUBBLE2, 0 }, { 131, SE_M_BUBBLE2, 0 }, { 132, SE_M_BUBBLE2, 0 }, { 134, SE_M_BUBBLE2, 0 }, { 135, SE_M_BUBBLE2, 0 }, { 136, SE_M_BUBBLE2, 0 }, { 140, SE_M_BUBBLE2, 0 } },
++    [MOVE_ICE_BALL] = { { 0, SE_M_ICY_WIND, SOUND_PAN_ATTACKER }, { 28, SE_M_BRICK_BREAK, SOUND_PAN_TARGET } },
++    [MOVE_NEEDLE_ARM] = { { 0, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 2, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 4, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 6, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 8, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 10, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 12, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 14, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 16, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 18, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 20, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 22, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 24, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 26, SE_M_HORN_ATTACK, SOUND_PAN_TARGET } },
++    [MOVE_SLACK_OFF] = { { 0, SE_M_YAWN, SOUND_PAN_ATTACKER }, { 8, SE_M_ABSORB_2, SOUND_PAN_ATTACKER } },
++    [MOVE_HYPER_VOICE] = { { 0, PKBN_SOUND_CRY, 0 }, { 16, PKBN_SOUND_CRY, 0 } },
++    [MOVE_POISON_FANG] = { { 0, SE_M_BITE, SOUND_PAN_TARGET }, { 18, SE_M_TOXIC, SOUND_PAN_TARGET }, { 24, SE_M_TOXIC, SOUND_PAN_TARGET }, { 30, SE_M_TOXIC, SOUND_PAN_TARGET }, { 36, SE_M_TOXIC, SOUND_PAN_TARGET }, { 42, SE_M_TOXIC, SOUND_PAN_TARGET }, { 48, SE_M_TOXIC, SOUND_PAN_TARGET } },
++    [MOVE_CRUSH_CLAW] = { { 4, SE_M_RAZOR_WIND, SOUND_PAN_TARGET }, { 16, SE_M_RAZOR_WIND, SOUND_PAN_TARGET } },
++    [MOVE_BLAST_BURN] = { { 0, SE_M_SACRED_FIRE, SOUND_PAN_ATTACKER }, { 25, SE_M_FLAME_WHEEL2, SOUND_PAN_ATTACKER }, { 50, SE_M_FLAME_WHEEL2, SOUND_PAN_ATTACKER } },
++    [MOVE_HYDRO_CANNON] = { { 0, SE_M_SURF, SOUND_PAN_ATTACKER }, { 40, SE_M_HYDRO_PUMP, SOUND_PAN_ATTACKER } },
++    [MOVE_METEOR_MASH] = { { 0, SE_M_BARRIER, SOUND_PAN_ATTACKER }, { 78, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_ASTONISH] = { { 0, SE_M_ENCORE, SOUND_PAN_ATTACKER }, { 25, SE_M_SKETCH, SOUND_PAN_TARGET } },
++    [MOVE_WEATHER_BALL] = { { 8, SE_M_SWAGGER, SOUND_PAN_ATTACKER }, { 31, SE_M_DETECT, 0 }, { 48, SE_M_MEGA_KICK2, SOUND_PAN_TARGET } },
++    [MOVE_AROMATHERAPY] = { { 0, SE_M_PETAL_DANCE, 0 }, { 42, SE_M_STAT_INCREASE, SOUND_PAN_ATTACKER }, { 50, SE_M_MORNING_SUN, SOUND_PAN_ATTACKER }, { 66, SE_SHINY, SOUND_PAN_ATTACKER } },
++    [MOVE_FAKE_TEARS] = { { 8, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 20, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 32, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER }, { 44, SE_M_TAIL_WHIP, SOUND_PAN_ATTACKER } },
++    [MOVE_AIR_CUTTER] = { { 8, SE_M_CUT, SOUND_PAN_TARGET } },
++    [MOVE_OVERHEAT] = { { 18, SE_M_DRAGON_RAGE, SOUND_PAN_ATTACKER }, { 27, SE_M_FLAME_WHEEL2, SOUND_PAN_ATTACKER }, { 50, SE_M_FIRE_PUNCH, SOUND_PAN_TARGET }, { 56, SE_M_FIRE_PUNCH, SOUND_PAN_TARGET }, { 64, SE_M_FIRE_PUNCH, SOUND_PAN_TARGET }, { 72, SE_M_FIRE_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_ODOR_SLEUTH] = { { 24, SE_M_SWAGGER, SOUND_PAN_ATTACKER }, { 30, SE_M_SWAGGER, SOUND_PAN_ATTACKER }, { 39, SE_M_LEER, SOUND_PAN_ATTACKER } },
++    [MOVE_ROCK_TOMB] = { { 16, SE_M_STRENGTH, SOUND_PAN_TARGET }, { 32, SE_M_STRENGTH, SOUND_PAN_TARGET }, { 48, SE_M_STRENGTH, SOUND_PAN_TARGET }, { 64, SE_M_STRENGTH, SOUND_PAN_TARGET }, { 88, SE_M_HYPER_BEAM, SOUND_PAN_TARGET } },
++    [MOVE_SILVER_WIND] = { { 0, SE_M_GUST, SOUND_PAN_ATTACKER }, { 0, SE_M_MORNING_SUN, 0 }, { 14, SE_M_GUST2, SOUND_PAN_TARGET } },
++    [MOVE_METAL_SOUND] = { { 0, SE_M_SCREECH, SOUND_PAN_ATTACKER }, { 2, SE_M_SCREECH, SOUND_PAN_ATTACKER }, { 4, SE_M_SCREECH, SOUND_PAN_ATTACKER }, { 6, SE_M_SCREECH, SOUND_PAN_ATTACKER } },
++    [MOVE_GRASS_WHISTLE] = { { 16, SE_M_GRASSWHISTLE, SOUND_PAN_ATTACKER } },
++    [MOVE_TICKLE] = { { 8, SE_M_DETECT, SOUND_PAN_ATTACKER }, { 56, SE_M_TAIL_WHIP, SOUND_PAN_TARGET }, { 64, SE_M_TAIL_WHIP, SOUND_PAN_TARGET }, { 72, SE_M_TAIL_WHIP, SOUND_PAN_TARGET }, { 80, SE_M_TAIL_WHIP, SOUND_PAN_TARGET }, { 88, SE_M_TAIL_WHIP, SOUND_PAN_TARGET }, { 96, SE_M_TAIL_WHIP, SOUND_PAN_TARGET }, { 104, SE_M_TAIL_WHIP, SOUND_PAN_TARGET }, { 112, SE_M_TAIL_WHIP, SOUND_PAN_TARGET } },
++    [MOVE_COSMIC_POWER] = { { 0, SE_M_COSMIC_POWER, 0 }, { 0, SE_M_COSMIC_POWER, 0 }, { 78, SE_M_MORNING_SUN, SOUND_PAN_ATTACKER } },
++    [MOVE_WATER_SPOUT] = { { 0, SE_M_HEADBUTT, SOUND_PAN_ATTACKER }, { 44, SE_M_DIVE, SOUND_PAN_ATTACKER }, { 68, SE_M_SURF, SOUND_PAN_TARGET } },
++    [MOVE_SIGNAL_BEAM] = { { 6, SE_M_BUBBLE_BEAM, SOUND_PAN_ATTACKER } },
++    [MOVE_SHADOW_PUNCH] = { { 0, SE_M_JUMP_KICK, SOUND_PAN_ATTACKER }, { 6, SE_M_COMET_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_EXTRASENSORY] = { { 0, SE_M_BIND, SOUND_PAN_TARGET }, { 8, SE_M_BIND, SOUND_PAN_TARGET }, { 16, SE_M_LEER, SOUND_PAN_ATTACKER } },
++    [MOVE_SKY_UPPERCUT] = { { 0, SE_M_SKY_UPPERCUT, SOUND_PAN_ATTACKER }, { 42, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 43, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 43, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 44, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 45, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 46, SE_M_VITAL_THROW2, SOUND_PAN_TARGET } },
++    [MOVE_SAND_TOMB] = { { 0, SE_M_SAND_TOMB, SOUND_PAN_TARGET } },
++    [MOVE_SHEER_COLD] = { { 0, SE_M_ICY_WIND, 0 }, { 17, SE_M_HAIL, SOUND_PAN_TARGET } },
++    [MOVE_MUDDY_WATER] = { { 0, SE_M_WHIRLPOOL, SOUND_PAN_ATTACKER } },
++    [MOVE_AERIAL_ACE] = { { 0, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 5, SE_M_RAZOR_WIND, SOUND_PAN_TARGET } },
++    [MOVE_ICICLE_SPEAR] = { { 0, SE_M_ICY_WIND, SOUND_PAN_ATTACKER }, { 19, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 32, SE_M_HORN_ATTACK, SOUND_PAN_TARGET }, { 46, SE_M_HORN_ATTACK, SOUND_PAN_TARGET } },
++    [MOVE_IRON_DEFENSE] = { { 0, SE_SHINY, SOUND_PAN_ATTACKER }, { 28, SE_SHINY, SOUND_PAN_ATTACKER } },
++    [MOVE_BLOCK] = { { 0, SE_M_SWAGGER, SOUND_PAN_TARGET } },
++    [MOVE_HOWL] = { { 27, PKBN_SOUND_CRY, 0 } },
++    [MOVE_DRAGON_CLAW] = { { 0, SE_M_SACRED_FIRE2, SOUND_PAN_ATTACKER }, { 26, SE_M_RAZOR_WIND, SOUND_PAN_TARGET }, { 34, SE_M_RAZOR_WIND, SOUND_PAN_TARGET } },
++    [MOVE_FRENZY_PLANT] = { { 8, SE_M_SCRATCH, SOUND_PAN_ATTACKER }, { 13, SE_M_SCRATCH, -43 }, { 18, SE_M_SCRATCH, -22 }, { 23, SE_M_SCRATCH, 0 }, { 28, SE_M_SCRATCH, +21 }, { 33, SE_M_SCRATCH, +42 }, { 38, SE_M_SCRATCH, SOUND_PAN_TARGET }, { 43, SE_M_SCRATCH, SOUND_PAN_TARGET }, { 48, SE_M_SCRATCH, SOUND_PAN_TARGET }, { 53, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET }, { 56, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET }, { 59, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET }, { 62, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET }, { 64, SE_M_DOUBLE_SLAP, SOUND_PAN_TARGET } },
++    [MOVE_BULK_UP] = { { 0, SE_M_SWAGGER, SOUND_PAN_ATTACKER }, { 8, SE_M_SWAGGER, SOUND_PAN_ATTACKER }, { 12, SE_M_SWAGGER, SOUND_PAN_ATTACKER } },
++    [MOVE_BOUNCE] = { { 0, SE_M_TELEPORT, SOUND_PAN_ATTACKER } },
++    [MOVE_MUD_SHOT] = { { 6, SE_M_WHIRLPOOL, SOUND_PAN_ATTACKER } },
++    [MOVE_POISON_TAIL] = { { 0, SE_M_HARDEN, SOUND_PAN_ATTACKER }, { 14, SE_M_VITAL_THROW2, SOUND_PAN_TARGET }, { 22, SE_M_TOXIC, SOUND_PAN_TARGET }, { 28, SE_M_HARDEN, SOUND_PAN_ATTACKER }, { 28, SE_M_TOXIC, SOUND_PAN_TARGET }, { 34, SE_M_TOXIC, SOUND_PAN_TARGET }, { 40, SE_M_TOXIC, SOUND_PAN_TARGET }, { 46, SE_M_TOXIC, SOUND_PAN_TARGET }, { 52, SE_M_TOXIC, SOUND_PAN_TARGET } },
++    [MOVE_COVET] = { { 0, SE_M_CHARM, SOUND_PAN_ATTACKER }, { 15, SE_M_CHARM, SOUND_PAN_ATTACKER }, { 30, SE_M_CHARM, SOUND_PAN_ATTACKER }, { 38, SE_M_DIZZY_PUNCH, SOUND_PAN_TARGET }, { 42, SE_M_DIZZY_PUNCH, SOUND_PAN_TARGET }, { 46, SE_M_DIZZY_PUNCH, SOUND_PAN_TARGET } },
++    [MOVE_VOLT_TACKLE] = { { 8, SE_M_CHARGE, SOUND_PAN_ATTACKER }, { 24, SE_M_THUNDERBOLT, SOUND_PAN_ATTACKER }, { 32, SE_M_THUNDERBOLT, SOUND_PAN_TARGET }, { 40, SE_M_THUNDERBOLT, SOUND_PAN_ATTACKER }, { 48, SE_M_THUNDERBOLT, SOUND_PAN_TARGET }, { 56, SE_M_THUNDERBOLT, SOUND_PAN_ATTACKER }, { 64, SE_M_SELF_DESTRUCT, SOUND_PAN_TARGET }, { 82, SE_M_THUNDERBOLT2, SOUND_PAN_ATTACKER } },
++    [MOVE_MAGICAL_LEAF] = { { 1, SE_M_POISON_POWDER, SOUND_PAN_ATTACKER }, { 11, SE_M_POISON_POWDER, SOUND_PAN_ATTACKER }, { 21, SE_M_POISON_POWDER, SOUND_PAN_ATTACKER }, { 31, SE_M_POISON_POWDER, SOUND_PAN_ATTACKER }, { 41, SE_M_POISON_POWDER, SOUND_PAN_ATTACKER }, { 79, SE_M_RAZOR_WIND2, SOUND_PAN_ATTACKER }, { 109, SE_M_RAZOR_WIND, SOUND_PAN_TARGET } },
++    [MOVE_WATER_SPORT] = { { 8, SE_M_SURF, SOUND_PAN_ATTACKER }, { 52, SE_M_SURF, SOUND_PAN_ATTACKER }, { 96, SE_M_SURF, SOUND_PAN_ATTACKER }, { 140, SE_M_SURF, SOUND_PAN_ATTACKER } },
++    [MOVE_CALM_MIND] = { { 16, SE_M_SUPERSONIC, SOUND_PAN_ATTACKER }, { 30, SE_M_SUPERSONIC, SOUND_PAN_ATTACKER }, { 44, SE_M_SUPERSONIC, SOUND_PAN_ATTACKER } },
++    [MOVE_LEAF_BLADE] = { { 2, SE_M_CUT, SOUND_PAN_TARGET }, { 52, SE_M_CUT, SOUND_PAN_TARGET }, { 102, SE_M_CUT, SOUND_PAN_TARGET }, { 122, SE_M_LEER, SOUND_PAN_TARGET } },
++    [MOVE_DRAGON_DANCE] = { { 1, SE_M_TELEPORT, SOUND_PAN_ATTACKER }, { 39, SE_M_TELEPORT, SOUND_PAN_ATTACKER }, { 69, SE_M_TELEPORT, SOUND_PAN_ATTACKER } },
++    [MOVE_ROCK_BLAST] = { { 3, SE_M_SWAGGER, SOUND_PAN_ATTACKER }, { 11, SE_M_ROCK_THROW, SOUND_PAN_TARGET } },
++    [MOVE_SHOCK_WAVE] = { { 8, SE_M_CHARGE, SOUND_PAN_ATTACKER }, { 70, SE_M_TRI_ATTACK2, SOUND_PAN_TARGET } },
++    [MOVE_WATER_PULSE] = { { 0, SE_M_BUBBLE3, SOUND_PAN_ATTACKER }, { 10, SE_M_BUBBLE3, SOUND_PAN_TARGET }, { 18, SE_M_GIGA_DRAIN, SOUND_PAN_ATTACKER }, { 23, SE_M_GIGA_DRAIN, SOUND_PAN_ATTACKER }, { 28, SE_M_GIGA_DRAIN, SOUND_PAN_ATTACKER } },
++    [MOVE_DOOM_DESIRE] = { { 9, SE_M_PSYBEAM, SOUND_PAN_ATTACKER } },
++    [MOVE_PSYCHO_BOOST] = { { 16, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 30, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 44, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 58, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 72, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 86, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 100, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 114, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 126, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 128, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 133, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 134, SE_M_LEER, SOUND_PAN_TARGET }, { 140, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER }, { 142, SE_M_PSYBEAM2, SOUND_PAN_ATTACKER } },
++};
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index 07a00dc..42eefb2 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -201,9 +201,12 @@ void Pkbn_SelfTestAutopilot(void)
+ static u16 sGalMoves[MOVES_COUNT], sGalCount, sGalIdx, sGalT, sGalLen = 150;
+ static u8 sGalSide;
+ static void (*sGalInner)(u16 *fb);
++bool8 gPkbnAudioWanted = TRUE;   // POC-15: PKBN_DUMP_AUDIO keeps only the audio of recorded frames (src/platform/sdl2.c)
++
+ static void GalleryOverlay(u16 *fb)
+ {
+     sGalInner(fb);
++    gPkbnAudioWanted = FALSE;
+     if (sGalIdx < sGalCount && getenv("PKBN_GALLERY_LABEL") != NULL)
+     {
+         // a caption for recordings: "12/312  EMBER  CANNON  FIRE"
+@@ -223,6 +226,7 @@ static void GalleryOverlay(u16 *fb)
+         FILE *f;
+         s32 i;
+         snprintf(path, sizeof(path), "%s/g_%03u_%03u.ppm", sDumpDir, (unsigned)sGalMoves[sGalIdx], (unsigned)(sGalT - 1));
++        gPkbnAudioWanted = TRUE;   // this frame is in the recording: so is its sound
+         f = fopen(path, "wb");
+         if (f == NULL)
+             return;
+diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
+index 0e5e215..e3e7193 100644
+--- a/src/platform/sdl2.c
++++ b/src/platform/sdl2.c
+@@ -44,6 +44,10 @@ double timeScale = 1.0;
+ struct SiiRtcInfo internalClock;
+ 
+ static FILE *sSaveFile = NULL;
++// pkbn POC-15: PKBN_DUMP_AUDIO=file - headless recordings: one game tick per loop iteration, drawn every tick, and that
++// tick's audio (float32 stereo, 42048 Hz) written to the file when the recording tool wants it (gPkbnAudioWanted).
++static FILE *sAudioDump = NULL;
++extern bool8 gPkbnAudioWanted;
+ 
+ extern void AgbMain(void);
+ extern void MainLoop(void);
+@@ -144,6 +148,8 @@ int main(int argc, char **argv)
+         SDL_PauseAudio(0);
+     }
+ 
++    if (getenv("PKBN_DUMP_AUDIO") != NULL)
++        sAudioDump = fopen(getenv("PKBN_DUMP_AUDIO"), "wb");
+     AgbMain();
+     Pkbn_SelfTestMaybeStart(); // PKBN: headless grid-battle test when PKBN_SELFTEST is set
+ 
+@@ -160,6 +166,17 @@ int main(int argc, char **argv)
+ 
+         ProcessEvents();
+ 
++        if (sAudioDump != NULL)
++        {
++            // pkbn: a recording - every tick drawn and heard, as fast as the machine goes
++            ENTER_VBLANK();
++            MainLoop();
++            VDraw(sdlTexture);
++            RunDMAsAndVBlank();
++            AudioUpdate();
++            continue;
++        }
++
+         curGameTime = SDL_GetPerformanceCounter();
+         deltaTime = (double)((curGameTime - lastGameTime) / (double)SDL_GetPerformanceFrequency());
+         deltaTime *= timeScale; //apply speedup
+@@ -278,6 +295,12 @@ void Platform_ReadFlash(u16 sectorNum, u32 offset, u8 *dest, u32 size)
+ 
+ void Platform_QueueAudio(float *audioBuffer, s32 samplesPerFrame)
+ {
++    if (sAudioDump != NULL)
++    {
++        if (gPkbnAudioWanted)
++            fwrite(audioBuffer, 1, samplesPerFrame, sAudioDump);
++        return;
++    }
+     SDL_QueueAudio(1, audioBuffer, samplesPerFrame);
+ }
+ 
+-- 
+2.43.0
+
