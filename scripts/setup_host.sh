@@ -52,6 +52,14 @@ echo "==> Extracting BN6 effect sprites from upstream/bn6f"
 python3 "$PROJECT_DIR/tools/gen_bn6_gfx.py" "$PROJECT_DIR/upstream/bn6f" "$HOST_DIR/include/pkbn/bn6_gfx_data.h"
 
 # 4. Build
+# Linux and Windows builds share build/pc64, so objects from one can't be linked into the other (mingw then fails
+# with "undefined reference to `stderr'"). Switching target clears them; the converted graphics in build/assets stay.
+STAMP="$HOST_DIR/.pkbn_build_target"
+if [ "$(cat "$STAMP" 2>/dev/null || echo none)" != "$TARGET" ] && [ -d build/pc64 ]; then
+  echo "==> Target changed to $TARGET: clearing build/pc64"
+  rm -rf build/pc64
+fi
+echo "$TARGET" > "$STAMP"
 if [ "$TARGET" = linux ]; then
   echo "==> Building Linux binary (-j$JOBS)"
   make linux -j"$JOBS"
