@@ -59,3 +59,25 @@ run weather_rain 0:35:10:10 "W200,V3,W30,G288:20,W200,Q" "battle weather 5 (perm
 bt sand_stream "285:50:57/89,248:40:242/157" "WHIPPED UP A SANDSTORM"
 bt two_trainers "285:50:57/89/58/182|338:45:209/85/44/98,288:3:45" \
     "SENT OUT MACHOKE" PKBN_BOT=smart PKBN_TEST_TRAINER=29 PKBN_TEST_TRAINER_B=30
+# POC-14: a hidden item also holds chip data (Route 104's hidden Super Potion, a move of a Route 104 wild Pokémon)
+run hidden_chip_data 0:19:7:7 "W200,U,W20,A,Y,A,Y,A,Y,A,Y,A,W60,Q" "chip grant: hidden data"
+# POC-14: beating a Gym Leader gives their Leader chip and starts the rematch record (Swampert vs Roxanne)
+bt leader_chip "285:40:57/341/55/33,288:3:45" "LEADER CHIP V" PKBN_BOT=smart PKBN_TEST_TRAINER=265
+# POC-14: PC -> NET CHALLENGE -> PEBBLE STORM, won (first clear pays two programs), back at the PC
+OWPARTY="285:40:57/89/58/182|309:8:45/55" run net_challenge 2:2:10:2 \
+    "W200,U,W20,A,Y,A,Y,W30,D,W20,D,W20,A,W60,Y,A,W90,W900,P,A,W60,A,W60,A,W60,A,W60,A,W100,P,W10,Q" \
+    "net challenge 0 cleared" PKBN_OW_AUTOBATTLE=1 PKBN_BOT=smart PKBN_TEST_CHALLENGE_KEYS="A"
+# POC-14: a legendary fought as a BN boss (Kyogre's tide phase), and a NET CHALLENGE as a self-test (DEEP CURRENT)
+bt boss_kyogre "279:70:348/337/89/98|338:70:85/242/98/44,404:45" "boss phase: KYOGRE CALLS THE TIDE" PKBN_BOT=smart PKBN_TEST_LEGENDARY=1
+bt challenge_deep_current "285:70:57/89/58/182|279:70:348/337/89/98,74:5" "net challenge 7: DEEP CURRENT" PKBN_BOT=smart PKBN_TEST_CHALLENGE=7
+# POC-14: Maxie & Tabitha with Steven as the partner (his Pokémon assist), and their team Program Advance
+bt steven_partner "285:45:57/89/58/182|279:45:348/337/89/98,288:3" "partner: STEVEN's" PKBN_BOT=smart \
+    PKBN_TEST_TRAINER=734 PKBN_TEST_TRAINER_B=514 PKBN_TEST_PARTNER=1
+bt team_pa "285:60:57/89/58/182|279:60:348/337/89/98,288:3" "team program advance: TATE&LIZA" PKBN_BOT=smart PKBN_TEST_TRAINER=271
+# POC-14: battle replay - record a battle, replay it, and the fight log must be the same line for line
+bt replay_record "285:60:57/89/58/182|279:60:348/337/89/98,288:3" "replay saved" PKBN_BOT=smart PKBN_TEST_TRAINER=271
+bt replay_play "285:60:57/89/58/182|279:60:348/337/89/98,288:3" "replay: " PKBN_TEST_REPLAY=1
+if diff <(grep -a '^\[pkbn f[0-9]*\]' "$OUT/replay_record/log.txt" | grep -v ' f0\]' | grep -v busting) \
+        <(grep -a '^\[pkbn f[0-9]*\]' "$OUT/replay_play/log.txt" | grep -v ' f0\]' | grep -v busting) > /dev/null; then
+  echo "PASS replay_identical"; else echo "FAIL replay_identical (the replay played out differently)"; fi
+rm -f pkbn_replay.bin

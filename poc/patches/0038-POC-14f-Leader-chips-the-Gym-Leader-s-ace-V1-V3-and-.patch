@@ -1,0 +1,476 @@
+From f48ed037417490ac210edf221913c7c30efb6fc1 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 02:39:51 +0300
+Subject: [PATCH 38/44] POC-14f: Leader chips (the Gym Leader's ace, V1-V3) and
+ Leader rematch records
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/leader.h  |  18 ++++++
+ src/pkbn/bot.c         |   5 +-
+ src/pkbn/folder.c      |  32 ++++++++++
+ src/pkbn/grid_battle.c |  33 +++++++++-
+ src/pkbn/grid_draw.c   |  12 ++--
+ src/pkbn/leader.c      | 140 +++++++++++++++++++++++++++++++++++++++++
+ src/pkbn/post_battle.c |  14 +++++
+ src/pkbn/selftest.c    |  14 +++++
+ 8 files changed, 260 insertions(+), 8 deletions(-)
+ create mode 100644 include/pkbn/leader.h
+ create mode 100644 src/pkbn/leader.c
+
+diff --git a/include/pkbn/leader.h b/include/pkbn/leader.h
+new file mode 100644
+index 0000000..3d2ce3d
+--- /dev/null
++++ b/include/pkbn/leader.h
+@@ -0,0 +1,18 @@
++#ifndef GUARD_PKBN_LEADER_H
++#define GUARD_PKBN_LEADER_H
++// Leader chips and rematch records (POC-14): src/pkbn/leader.c
++#include "global.h"
++
++// A Leader chip in the folder: owner CHIP_SHARED, slot = LEADER_CHIP | level << 4 | leader
++#define LEADER_CHIP 0x80
++#define LEADER_INDEX(slot) ((slot) & 7)
++#define LEADER_LEVEL(slot) (((slot) >> 4) & 3)
++
++s8 Leader_FromTrainer(u16 trainerId);              // 0-7 for a Gym Leader (first battle or rematch), else -1
++bool8 Leader_IsRematch(u16 trainerId);
++void Leader_Ace(u8 leader, u16 *species, u8 *level, u16 *move);   // the ace a Leader chip calls in, and its move
++char Leader_Code(u8 leader);                       // 0-25
++const char *Leader_Name(u8 leader);
++// After a won Gym Leader battle: chip and record. Writes up to two lines of post-battle text (empty if none).
++void Leader_AfterWin(u16 trainerId, u8 bustingLevel, u32 fightFrames, char *line1, char *line2, u32 size);
++#endif // GUARD_PKBN_LEADER_H
+diff --git a/src/pkbn/bot.c b/src/pkbn/bot.c
+index 6aed657..1f246ca 100644
+--- a/src/pkbn/bot.c
++++ b/src/pkbn/bot.c
+@@ -11,6 +11,7 @@
+ #include "pkbn/grid_internal.h"
+ #include "pkbn/grid_battle.h"
+ #include "pkbn/bot.h"
++#include "pkbn/leader.h"
+ #include "constants/battle_move_effects.h"
+ #include "main.h"
+ 
+@@ -42,8 +43,8 @@ static s32 ChipScore(u8 handPos)
+     u8 kind = Moves_KindOf(mv);
+     s32 dmg;
+ 
+-    if (ch->owner != CHIP_SHARED)
+-        return 60;                                  // partner chips are strong by design
++    if (ch->owner != CHIP_SHARED || (ch->slot & LEADER_CHIP))
++        return 60;                                  // partner and Leader chips are strong by design
+     if (!Chip_CanUse(&me->bm, mv))
+         return 0;
+     switch (kind)
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index 1487df4..0f2c578 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -9,6 +9,7 @@
+ #include "constants/battle_move_effects.h"
+ #include "constants/species.h"
+ #include "pkbn/folder.h"
++#include "pkbn/leader.h"
+ #include "pkbn/chip_pack.h"
+ #include "pkbn/move_table.h"
+ #include "event_data.h"
+@@ -325,6 +326,35 @@ shuffle:
+         folder->chips[folder->count].slot = PkbnPartner_Level(&gPlayerParty[slot]);
+         folder->count++;
+     }
++    // Leader chips (POC-14, src/pkbn/leader.c): MegaChips, so only while the folder has room under the 5
++    {
++        u16 moves[FOLDER_MAX];
++        u8 megas = 0, l;
++        s32 k, j;
++        for (k = 0; k < folder->count; k++)
++            moves[k] = folder->chips[k].move;
++        for (k = 0; k < folder->count; k++)
++        {
++            for (j = 0; j < k && moves[j] != moves[k]; j++)
++                ;
++            if (j == k && Chip_Class(moves[k]) == CHIP_MEGA)
++                megas++;
++        }
++        for (l = 0; l < PKBN_LEADERS && megas < Chip_ClassMax(CHIP_MEGA) && folder->count < FOLDER_MAX; l++)
++        {
++            u16 species, mv;
++            u8 lv;
++            if (PkbnLeader_Chip(l) == 0)
++                continue;
++            Leader_Ace(l, &species, &lv, &mv);
++            folder->chips[folder->count].move = mv;
++            folder->chips[folder->count].letter = Leader_Code(l);
++            folder->chips[folder->count].owner = CHIP_SHARED;
++            folder->chips[folder->count].slot = LEADER_CHIP | (PkbnLeader_Chip(l) << 4) | l;
++            folder->count++;
++            megas++;
++        }
++    }
+     for (p = 0; p < folder->count; p++)
+         folder->pile[p] = p;
+     folder->pileCount = folder->count;
+@@ -448,6 +478,8 @@ bool8 PkbnFolder_CanAppend(const struct Folder *folder, const u8 *queue, u8 queu
+         // POC-10: the Pokémon in battle must be able to use it (shared chips don't switch anyone in)
+         if (c->owner != CHIP_SHARED)
+             return alive[c->owner];
++        if (c->slot & LEADER_CHIP)
++            return alive[active];   // a Leader chip calls its own Pokémon: anyone can use it
+         return alive[active] && Chip_CanUse(&party[active], c->move);
+     }
+ }
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 7c82ebb..7557a4c 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -38,6 +38,7 @@
+ #include "pkbn/render.h"
+ #include "wild_encounter.h"
+ #include "pkbn/rival.h"
++#include "pkbn/leader.h"
+ 
+ #ifdef PORTABLE
+ 
+@@ -542,6 +543,8 @@ static bool8 ChipAlive(u8 idx)
+     s32 p;
+     if (c->owner != CHIP_SHARED)
+         return PartyAlive(c->owner);
++    if (c->slot & LEADER_CHIP)
++        return TRUE;   // Leader chip (POC-14)
+     SyncActiveToParty();
+     for (p = 0; p < sB.partyCount; p++)
+         if (PartyAlive(p) && Chip_CanUse(&sB.party[p].bm, c->move))
+@@ -571,7 +574,8 @@ static void RefillHand(void)
+         for (i = 0; i < n; i++)
+         {
+             const struct FolderChip *c = &sB.folder.chips[keep[i]];
+-            if (c->owner != CHIP_SHARED ? PartyAlive(c->owner) : Chip_CanUse(&sB.f[SIDE_PLAYER].bm, c->move))
++            if (c->owner != CHIP_SHARED ? PartyAlive(c->owner)
++              : (c->slot & LEADER_CHIP) || Chip_CanUse(&sB.f[SIDE_PLAYER].bm, c->move))
+                 any = TRUE;
+         }
+         if (!any)
+@@ -614,7 +618,8 @@ static void RefillHand(void)
+         for (i = 0; i < sB.handCount; i++)
+         {
+             const struct FolderChip *c = &sB.folder.chips[sB.hand[i]];
+-            if (c->owner != CHIP_SHARED ? PartyAlive(c->owner) : Chip_CanUse(&sB.f[SIDE_PLAYER].bm, c->move))
++            if (c->owner != CHIP_SHARED ? PartyAlive(c->owner)
++              : (c->slot & LEADER_CHIP) || Chip_CanUse(&sB.f[SIDE_PLAYER].bm, c->move))
+                 usable = TRUE;
+         }
+         if (!usable)
+@@ -1299,6 +1304,30 @@ static void UseNextChip(void)
+         ChainUse(ch->move, 0);
+         return;
+     }
++    if (ch->slot & LEADER_CHIP)
++    {
++        // a Leader chip (POC-14): the Gym Leader's ace comes in for one attack, at the chip's power
++        struct Pokemon ace;
++        struct BattlePokemon bm;
++        u16 species, mv;
++        u8 lv, l = LEADER_INDEX(ch->slot);
++        char nm[POKEMON_NAME_LENGTH + 1], line[48];
++        Leader_Ace(l, &species, &lv, &mv);
++        if (lv < p->bm.level)
++            lv = p->bm.level;   // it keeps up with you (TUNE)
++        CreateMon(&ace, species, lv, 31, FALSE, 0, OT_ID_PLAYER_ID, 0);
++        MonToBattleMon(&ace, &bm);
++        Pkbn_GameStringToAscii(nm, gSpeciesNames[species], sizeof(nm));
++        snprintf(line, sizeof(line), "%s: GO, %s!", Leader_Name(l), nm);
++        Flash(line, 70);
++        PlaySE(SE_SUCCESS);
++        PKBN_LOG("leader chip V%u: %s's %s uses move %u", LEADER_LEVEL(ch->slot), Leader_Name(l), nm, mv);
++        PlayLog_NoteChip(mv);
++        sB.nextPowerPct = PkbnPartner_PowerPct(LEADER_LEVEL(ch->slot));
++        Moves_Use(SIDE_PLAYER, mv, 0, &bm, nm, sB.active);
++        sB.nextPowerPct = 0;
++        return;
++    }
+     if (!Chip_CanUse(&p->bm, ch->move))
+     {
+         // whoever is in now can't use it (the one who could fainted mid-queue): the copy is spent
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 078b179..c8b7b6b 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -6,6 +6,7 @@
+ //   - Text: Emerald's normal / small fonts.
+ // Panels, HUD frames and the backdrop are our own pixel art in the BN style (TUNE).
+ #include "pkbn/grid_internal.h"
++#include "pkbn/leader.h"
+ #include "data.h"
+ #include "item.h"
+ #include "constants/moves.h"
+@@ -858,10 +859,11 @@ static void DrawChipFace(u16 *fb, const struct FolderChip *ch, s32 x, s32 y, boo
+         BlitIconCropped(fb, sB.party[ch->owner].icon[0], x - 1, y - 2, dim);
+     else
+         DrawChipIcon(fb, x, y + 1, ch->move, dim);
+-    if (ch->owner == CHIP_SHARED && Chip_Class(ch->move) != CHIP_STANDARD)
++    if (ch->owner == CHIP_SHARED && (Chip_Class(ch->move) != CHIP_STANDARD || (ch->slot & LEADER_CHIP)))
+     {
+-        // POC-13: BN's chip colours - MegaChips blue, GigaChips pink - as a frame round the slot
+-        u16 c = Chip_Class(ch->move) == CHIP_GIGA ? RGB(31, 12, 24) : RGB(10, 20, 31);
++        // POC-13: BN's chip colours - MegaChips blue, GigaChips pink - as a frame round the slot; Leader chips are
++        // MegaChips (POC-14)
++        u16 c = Chip_Class(ch->move) == CHIP_GIGA && !(ch->slot & LEADER_CHIP) ? RGB(31, 12, 24) : RGB(10, 20, 31);
+         if (dim)
+             c = Gfx_Blend(c, COL_BLACK, 8);
+         Pkbn_FillRect(fb, x, y, SLOT_W - 2, 2, c);
+@@ -983,6 +985,8 @@ static void DrawChipInfo(u16 *fb)
+         }
+         if (ch->owner != CHIP_SHARED)
+             snprintf(line, sizeof(line), "PARTNER V%u", ch->slot);
++        else if (ch->slot & LEADER_CHIP)
++            snprintf(line, sizeof(line), "%s V%u", Leader_Name(LEADER_INDEX(ch->slot)), LEADER_LEVEL(ch->slot));
+         else if (sB.hand[cur] == FOLDER_STRUGGLE)
+             snprintf(line, sizeof(line), "FOLDER USED UP - NO LIMIT");
+         else
+@@ -993,7 +997,7 @@ static void DrawChipInfo(u16 *fb)
+             snprintf(line, sizeof(line), "%s IN", sB.party[ch->owner].name);
+             Text(fb, ART_X + ART_W - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), y + 13, line, COL_HP);
+         }
+-        else if (!Chip_CanUse(&sB.f[SIDE_PLAYER].bm, ch->move))
++        else if (!(ch->slot & LEADER_CHIP) && !Chip_CanUse(&sB.f[SIDE_PLAYER].bm, ch->move))
+         {
+             Text(fb, ART_X + ART_W - Pkbn_EmTextWidth("CAN'T USE", PKBN_FONT_SMALL), y + 13, "CAN'T USE", COL_HP_LOW);
+         }
+diff --git a/src/pkbn/leader.c b/src/pkbn/leader.c
+new file mode 100644
+index 0000000..d22f105
+--- /dev/null
++++ b/src/pkbn/leader.c
+@@ -0,0 +1,140 @@
++// Leader chips and rematch time attacks (POC-14, our design after BN's Navi chips - TUNE).
++//
++// BN gives a boss Navi as a chip when you delete it (ProtoMan V1), and better versions (V2, V3) for deleting it again
++// fast. Here each Gym Leader gives a Leader chip the first time you win: it calls the Leader's ace in for one big
++// attack. Winning with Busting Level 9+ makes it V2, an S on a rematch V3 (power x1.0 / x1.3 / x1.6, the partner chip
++// scale). Leader chips count as MegaChips (BN Navi chips are MegaChips) and join the folder like partner chips.
++// Every Leader battle also keeps a record: the best fight time and Busting Level, and a new record pays a chip.
++#include "global.h"
++#include "data.h"
++#include "pokemon.h"
++#include "battle.h"
++#include "pkbn/leader.h"
++#include "pkbn/chip_pack.h"
++#include "pkbn/folder.h"
++#include "pkbn/move_table.h"
++#include "constants/opponents.h"
++#include "constants/trainers.h"
++#include "constants/moves.h"
++
++#ifdef PORTABLE
++#include <stdio.h>
++#include <string.h>
++
++static const u16 sFirst[PKBN_LEADERS] = {
++    TRAINER_ROXANNE_1, TRAINER_BRAWLY_1, TRAINER_WATTSON_1, TRAINER_FLANNERY_1,
++    TRAINER_NORMAN_1, TRAINER_WINONA_1, TRAINER_TATE_AND_LIZA_1, TRAINER_JUAN_1 };
++static const char *const sNames[PKBN_LEADERS] = {
++    "ROXANNE", "BRAWLY", "WATTSON", "FLANNERY", "NORMAN", "WINONA", "TATE&LIZA", "JUAN" };
++static const char sCodes[PKBN_LEADERS] = { 'R', 'B', 'W', 'F', 'N', 'W', 'T', 'J' };   // their initials
++
++s8 Leader_FromTrainer(u16 id)
++{
++    if (id >= TRAINER_ROXANNE_1 && id <= TRAINER_JUAN_1)
++        return id - TRAINER_ROXANNE_1;
++    if (id >= TRAINER_ROXANNE_2 && id <= TRAINER_JUAN_5)
++        return (id - TRAINER_ROXANNE_2) / 4;   // _2.._5 for each Leader in order (include/constants/opponents.h)
++    return -1;
++}
++
++bool8 Leader_IsRematch(u16 id)
++{
++    return id >= TRAINER_ROXANNE_2 && id <= TRAINER_JUAN_5;
++}
++
++char Leader_Code(u8 leader)
++{
++    return sCodes[leader & 7] - 'A';
++}
++
++const char *Leader_Name(u8 leader)
++{
++    return sNames[leader & 7];
++}
++
++// The ace: the last Pokémon of the Leader's first battle; its move: the strongest one of its own type
++// (the strongest of all if none), from the Leader's real moveset (src/data/trainer_parties.h).
++void Leader_Ace(u8 leader, u16 *species, u8 *level, u16 *move)
++{
++    const struct Trainer *t = &gTrainers[sFirst[leader & 7]];
++    u8 last = t->partySize - 1, i;
++    u16 best = 0;
++    const u16 *moves = NULL;
++    *move = MOVE_TACKLE;
++    switch (t->partyFlags)
++    {
++    case F_TRAINER_PARTY_CUSTOM_MOVESET:
++        *species = t->party.NoItemCustomMoves[last].species, *level = t->party.NoItemCustomMoves[last].lvl;
++        moves = t->party.NoItemCustomMoves[last].moves;
++        break;
++    case F_TRAINER_PARTY_CUSTOM_MOVESET | F_TRAINER_PARTY_HELD_ITEM:
++        *species = t->party.ItemCustomMoves[last].species, *level = t->party.ItemCustomMoves[last].lvl;
++        moves = t->party.ItemCustomMoves[last].moves;
++        break;
++    case F_TRAINER_PARTY_HELD_ITEM:
++        *species = t->party.ItemDefaultMoves[last].species, *level = t->party.ItemDefaultMoves[last].lvl;
++        break;
++    default:
++        *species = t->party.NoItemDefaultMoves[last].species, *level = t->party.NoItemDefaultMoves[last].lvl;
++        break;
++    }
++    if (moves == NULL)
++        return;
++    for (i = 0; i < MAX_MON_MOVES; i++)
++    {
++        u16 m = moves[i], score;
++        bool8 stab = gBattleMoves[m].type == gSpeciesInfo[*species].types[0]
++                  || gBattleMoves[m].type == gSpeciesInfo[*species].types[1];
++        if (!PkbnFolder_MoveIsChip(m) || gBattleMoves[m].power <= 1)
++            continue;
++        score = (stab ? 256 : 0) + gBattleMoves[m].power;
++        if (score > best)
++            best = score, *move = m;
++    }
++}
++
++void Leader_AfterWin(u16 trainerId, u8 bust, u32 frames, char *line1, char *line2, u32 size)
++{
++    s8 l = Leader_FromTrainer(trainerId);
++    u8 have, want;
++    u16 bestF;
++    u8 bestL;
++    line1[0] = line2[0] = '\0';
++    if (l < 0)
++        return;
++    // the chip: V1 for any win, V2 with Busting Level 9+, V3 with an S on a rematch
++    have = PkbnLeader_Chip(l);
++    want = (bust >= 11 && Leader_IsRematch(trainerId)) ? 3 : bust >= 9 ? 2 : 1;
++    if (want > have)
++    {
++        PkbnLeader_SetChip(l, want);
++        snprintf(line1, size, have ? "%s CHIP UPGRADED TO V%u!" : "GOT %s'S LEADER CHIP V%u!", sNames[l], want);
++        printf("[pkbn] leader chip: %s V%u\n", sNames[l], want);
++    }
++    // the record: best time, then best level
++    PkbnLeader_Record(l, &bestF, &bestL);
++    if (frames > 0xFFFF)
++        frames = 0xFFFF;
++    if (bestF == 0 || frames < bestF || (frames == bestF && bust > bestL))
++    {
++        u16 species, mv;
++        u8 lv;
++        u32 s10 = frames * 10 / 60;   // tenths of a second
++        PkbnLeader_SetRecord(l, frames, bust > bestL ? bust : bestL);
++        Leader_Ace(l, &species, &lv, &mv);
++        if (bestF)
++        {
++            PkbnPack_Add(mv, LETTER_WILD, 1);   // a new record pays a * copy of the ace's move
++            snprintf(line2, size, "NEW RECORD %u:%02u.%u! GOT A * CHIP!", (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60),
++                     (unsigned)(s10 % 10));
++        }
++        else
++            snprintf(line2, size, "TIME %u:%02u.%u - THE RECORD TO BEAT", (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60),
++                     (unsigned)(s10 % 10));
++        printf("[pkbn] leader record: %s %u frames, level %u\n", sNames[l], (unsigned)frames, bust);
++    }
++    else if (bust > bestL)
++        PkbnLeader_SetRecord(l, bestF, bust);
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index dbbaabd..9c3e118 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -25,6 +25,7 @@
+ #include "item.h"
+ #include "main.h"
+ #include "money.h"
++#include "pkbn/leader.h"
+ #include "naming_screen.h"
+ #include "overworld.h"
+ #include "pokedex.h"
+@@ -69,6 +70,7 @@ enum
+     PB_CLEAR_GRADE_EXP,
+     PB_CODE_PICK,     // Ultra / Master Ball: the player picks the chip's code (POC-11)
+     PB_CLEAR_GRADE_NICK,
++    PB_LEADER,        // Leader chip and rematch record (POC-14)
+ };
+ 
+ struct PostBattle
+@@ -103,6 +105,8 @@ static void StepCodePick(void);
+ 
+ // ---- text ----------------------------------------------------------------------------------------
+ 
++static char sLeaderMsg[2][56];   // POC-14: Leader chip / record lines for PB_LEADER
++
+ static void Say(u8 next, const char *fmt, ...)
+ {
+     char buf[256];
+@@ -661,6 +665,9 @@ static void CB2_PkbnPostBattle(void)
+             {
+                 Busting_ScaleExp(level);
+                 Busting_Reward(level, sMsg, sizeof(sMsg));
++                if (sB.trainer)
++                    Leader_AfterWin(gTrainerBattleOpponent_A, level, sB.bust.fightFrames, sLeaderMsg[0], sLeaderMsg[1],
++                                    sizeof(sLeaderMsg[0]));
+             }
+             if (level >= 11)
+                 snprintf(lv, sizeof(lv), "S");
+@@ -675,6 +682,8 @@ static void CB2_PkbnPostBattle(void)
+         sPart = 0;
+         Say(capture ? PB_NICK_ASK : PB_EXP_NEXT, "%s", sMsg);
+         sPB.next = capture ? PB_CLEAR_GRADE_NICK : PB_CLEAR_GRADE_EXP;
++        if (!capture && (sLeaderMsg[0][0] || sLeaderMsg[1][0]))
++            sPB.next = PB_LEADER;
+         if (capture && gCapturePick.count)
+         {
+             sPB.next = PB_CODE_PICK;
+@@ -686,6 +695,11 @@ static void CB2_PkbnPostBattle(void)
+     case PB_CODE_PICK:
+         StepCodePick();
+         break;
++    case PB_LEADER:
++        Say(PB_EXP_NEXT, "%s%s%s", sLeaderMsg[0], sLeaderMsg[0][0] && sLeaderMsg[1][0] ? " " : "", sLeaderMsg[1]);
++        sPB.next = PB_CLEAR_GRADE_EXP;
++        sLeaderMsg[0][0] = sLeaderMsg[1][0] = '\0';
++        break;
+     case PB_NICK_ASK:
+         if (!sPB.prompt)
+         {
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index d044806..ee9b80e 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -518,6 +518,20 @@ void Pkbn_SelfTestMaybeStart(void)
+     }
+     ApplyTestNaviCusts();
+     SeedTestPack();
++    // PKBN_TEST_LEADER_CHIPS="leader:level,...": Leader chips owned (POC-14)
++    if (getenv("PKBN_TEST_LEADER_CHIPS") != NULL)
++    {
++        const char *t = getenv("PKBN_TEST_LEADER_CHIPS");
++        while (*t)
++        {
++            u8 l = (u8)strtol(t, (char **)&t, 10), v = 1;
++            if (*t == ':')
++                v = (u8)strtol(t + 1, (char **)&t, 10);
++            PkbnLeader_SetChip(l, v);
++            while (*t == ',')
++                t++;
++        }
++    }
+     if (getenv("PKBN_TEST_SAVE_ROUNDTRIP") != NULL)
+     {
+         // pkbn.sav round trip: write, wipe, read back, compare every party layout byte for byte
+-- 
+2.43.0
+

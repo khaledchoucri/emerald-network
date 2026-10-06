@@ -1,0 +1,310 @@
+From 855a2b6fe72845fc571b836d1655641dc9a86dbc Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 03:15:27 +0300
+Subject: [PATCH 41/44] POC-14i: rival pairs fire team Program Advances; admins
+ fight as rivals; the Space Center battle with Steven is on the grid (his
+ Pokemon assist)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |   4 +
+ src/battle_tower.c           |   8 ++
+ src/pkbn/battle_stub.c       |   6 +-
+ src/pkbn/grid_battle.c       | 139 ++++++++++++++++++++++++++++++++++-
+ src/pkbn/render.c            |   1 +
+ src/pkbn/rival.c             |   3 +
+ src/pkbn/selftest.c          |  17 +++++
+ 7 files changed, 176 insertions(+), 2 deletions(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index a3d85d7..7ebf4d1 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -283,6 +283,10 @@ struct GridBattle
+     u8 boss;                   // POC-14: a legendary fought as a BN boss (index into sBosses + 1)
+     u16 bossTimer;             // fight frames to its next field phase
+     u8 bossPending;            // the phase was announced; it lands when this reaches 0
++    u8 teamPAs;                // POC-14: team Program Advances fired by a pair of rival foes
++    bool8 partner;             // POC-14: an in-game partner (Steven at the Space Center) fights alongside
++    u16 partnerTimer;          // fight frames to the partner's next attack
++    u8 partnerNext;            // which of the partner's Pokémon comes next
+     u8 challenge;              // POC-14 NET CHALLENGE: index + 1 (a simulation: no EXP, no catching, nothing lost)
+     u32 timeLimit;             // POC-14: fight frames before TIME UP (0 = none)
+     u8 rivalTier;              // POC-11: 1-5 for Gym Leaders, the rival, E4... (src/pkbn/rival.c), 0 otherwise
+diff --git a/src/battle_tower.c b/src/battle_tower.c
+index 35852a1..45ba3c5 100644
+--- a/src/battle_tower.c
++++ b/src/battle_tower.c
+@@ -1,4 +1,6 @@
+ #include "global.h"
++#include "main.h"
++#include "pkbn/battle_stub.h"
+ #include "battle_tower.h"
+ #include "apprentice.h"
+ #include "event_data.h"
+@@ -1999,6 +2001,12 @@ static void Task_StartBattleAfterTransition(u8 taskId)
+     if (IsBattleTransitionDone() == TRUE)
+     {
+         gMain.savedCallback = HandleSpecialTrainerBattleEnd;
++#ifdef PORTABLE
++        // pkbn POC-14: the Space Center battle with Steven (Maxie & Tabitha) is fought on the grid
++        if (gBattleScripting.specialTrainerBattleType == SPECIAL_BATTLE_STEVEN && PkbnBattle_ShouldHandle())
++            SetMainCallback2(PkbnBattle_GetEntryCallback());
++        else
++#endif
+         SetMainCallback2(CB2_InitBattle);
+         DestroyTask(taskId);
+     }
+diff --git a/src/pkbn/battle_stub.c b/src/pkbn/battle_stub.c
+index eaa1106..35ce610 100644
+--- a/src/pkbn/battle_stub.c
++++ b/src/pkbn/battle_stub.c
+@@ -75,7 +75,11 @@ bool8 PkbnBattle_ShouldHandle(void)
+     // the grid at once. Multi battles (an in-game partner) stay vanilla.
+     return GetMode() == PKBN_MODE_GRID && gTrainerBattleOpponent_A != TRAINER_SECRET_BASE
+         && (gBattleTypeFlags == BATTLE_TYPE_TRAINER
+-            || gBattleTypeFlags == (BATTLE_TYPE_TRAINER | BATTLE_TYPE_DOUBLE | BATTLE_TYPE_TWO_OPPONENTS));
++            || gBattleTypeFlags == (BATTLE_TYPE_TRAINER | BATTLE_TYPE_DOUBLE | BATTLE_TYPE_TWO_OPPONENTS)
++            // POC-14: the one multi battle of the story, with Steven as the in-game partner (DoSpecialTrainerBattle,
++            // SPECIAL_BATTLE_STEVEN, battle_tower.c:2123): Steven's Pokémon assist from the side
++            || gBattleTypeFlags == (BATTLE_TYPE_TRAINER | BATTLE_TYPE_DOUBLE | BATTLE_TYPE_TWO_OPPONENTS | BATTLE_TYPE_MULTI
++                                   | BATTLE_TYPE_INGAME_PARTNER));
+ }
+ 
+ MainCallback PkbnBattle_GetEntryCallback(void)
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 472efda..cea913a 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -713,6 +713,62 @@ static void AddWildPack(void)
+         PKBN_LOG("wild pack roll %d with %d badges: +%d", (int)r, (int)b, (int)extra);
+ }
+ 
++// ---- An in-game partner (POC-14, our design - TUNE) ------------------------------------------------------------------
++// Steven at the Space Center: his Pokémon don't stand on the grid; every few seconds the next one comes in from the
++// side for one attack - its strongest move (power, x1.5 for STAB) - like a Leader chip.
++static bool8 BusyOrDisabled(u8 side);
++
++#define PARTNER_FIRST_FRAMES 300
++#define PARTNER_FRAMES       600
++
++static void PartnerFrame(void)
++{
++    struct Pokemon *mon;
++    struct BattlePokemon bm;
++    u16 mv = MOVE_NONE, species;
++    s32 m, best = 0, tries;
++    char nm[POKEMON_NAME_LENGTH + 1], who[12], line[48];
++    if (!sB.partner || --sB.partnerTimer)
++        return;
++    sB.partnerTimer = PARTNER_FRAMES;
++    if (BusyOrDisabled(SIDE_PLAYER) || Foe_LiveCount() == 0)
++    {
++        sB.partnerTimer = 30;
++        return;
++    }
++    for (tries = 0; tries < MULTI_PARTY_SIZE; tries++)
++    {
++        mon = &gPlayerParty[MULTI_PARTY_SIZE + sB.partnerNext];
++        sB.partnerNext = (sB.partnerNext + 1) % MULTI_PARTY_SIZE;
++        if (GetMonData(mon, MON_DATA_SPECIES) != SPECIES_NONE)
++            break;
++    }
++    if (tries == MULTI_PARTY_SIZE)
++        return;
++    species = GetMonData(mon, MON_DATA_SPECIES);
++    MonToBattleMon(mon, &bm);
++    for (m = 0; m < MAX_MON_MOVES; m++)
++    {
++        u16 x = bm.moves[m];
++        s32 score = gBattleMoves[x].power;
++        if (score == 0)
++            continue;
++        if (gBattleMoves[x].type == bm.types[0] || gBattleMoves[x].type == bm.types[1])
++            score = score * 3 / 2;
++        if (score > best)
++            best = score, mv = x;
++    }
++    if (mv == MOVE_NONE)
++        return;
++    Pkbn_GameStringToAscii(nm, gSpeciesNames[species], sizeof(nm));
++    Pkbn_GameStringToAscii(who, gTrainers[TRAINER_STEVEN].trainerName, sizeof(who));
++    snprintf(line, sizeof(line), "%s: GO, %s!", who, nm);
++    Flash(line, 70);
++    PlaySE(SE_SUCCESS);
++    PKBN_LOG("partner: %s's %s uses move %u", who, nm, mv);
++    Moves_Use(SIDE_PLAYER, mv, 0, &bm, nm, sB.active);
++}
++
+ // ---- Legendaries as BN boss battles (POC-14, our design - TUNE) -------------------------------------------------------
+ // A BN boss reshapes the field on a rhythm and saves a big attack for when it's hurt. Each legendary here keeps its
+ // Gen 3 stats and moves; on top it has a field phase every few seconds (announced first, so you can move) and a
+@@ -790,7 +846,11 @@ static void Begin(void)
+     else if (gMapHeader.mapLayout != NULL && getenv("PKBN_SELFTEST") == NULL)
+         Field_StartConditions();   // self-tests have no map: their battles start as before
+ 
+-    for (i = 0; i < PARTY_SIZE; i++)
++    // POC-14: with an in-game partner (Steven) the player's half of gPlayerParty is the first 3 (FillPartnerParty puts
++    // the partner's Pokémon in slots 3-5, battle_tower.c:2977); those assist from the side instead.
++    sB.partner = (gBattleTypeFlags & BATTLE_TYPE_INGAME_PARTNER) != 0;
++    sB.partnerTimer = PARTNER_FIRST_FRAMES;
++    for (i = 0; i < (sB.partner ? MULTI_PARTY_SIZE : PARTY_SIZE); i++)
+     {
+         if (GetMonData(&gPlayerParty[i], MON_DATA_SPECIES) == SPECIES_NONE)
+             break;
+@@ -1802,6 +1862,80 @@ static void BossFrame(void)
+     sB.bossPending = BOSS_WARN_FRAMES;
+ }
+ 
++// A pair of rival foes on the grid at once (Tate & Liza, Maxie & Tabitha, two admins or leaders who spot you together)
++// fights as a team (POC-14, our design - TUNE): once either is below half its HP (tier 5: again below a quarter),
++// they fire a team Program Advance - a PA whose recipe the two know between them (2 of 3 moves), or else the PA of
++// a type they share, or else of the first one's type. Both line up for it.
++static s8 TeamPA(const struct Fighter *a, const struct Fighter *b)
++{
++    struct Fighter both = *a;
++    s32 k, m, best = -1, bestPow = 0;
++    u8 n = 0;
++    for (m = 0; m < MAX_MON_MOVES; m++)   // the union of their moves (first 4 distinct)
++        both.bm.moves[m] = MOVE_NONE;
++    for (k = 0; k < 2; k++)
++        for (m = 0; m < MAX_MON_MOVES && n < MAX_MON_MOVES; m++)
++        {
++            u16 mv = (k ? b : a)->bm.moves[m];
++            if (mv && (k == 0 || (mv != a->bm.moves[0] && mv != a->bm.moves[1] && mv != a->bm.moves[2] && mv != a->bm.moves[3])))
++                both.bm.moves[n++] = mv;
++        }
++    {
++        s8 pa = RivalPA(&both);
++        if (pa >= 0)
++            return pa;
++    }
++    for (k = 0; k < PKBN_PA_COUNT; k++)
++    {
++        u8 t = gPkbnProgramAdvances[k].type;
++        if ((a->bm.types[0] == t || a->bm.types[1] == t) && (b->bm.types[0] == t || b->bm.types[1] == t)
++         && gPkbnProgramAdvances[k].power > bestPow)
++            best = k, bestPow = gPkbnProgramAdvances[k].power;
++    }
++    for (k = 0; k < PKBN_PA_COUNT && best < 0; k++)   // no type in common: the PA of the leader's lead type
++        if (gPkbnProgramAdvances[k].type == a->bm.types[0])
++            best = k;
++    return best;
++}
++
++static bool8 TeamSpecial(struct Fighter *e)
++{
++    const struct Fighter *a, *b;
++    u32 hp, maxHP;
++    u8 allowed = sB.rivalTier >= 5 ? 2 : 1;
++    s8 pa;
++    char names[24], line[56];
++    if (sB.foeCount != 2 || Foe_LiveCount() != 2 || sB.teamPAs >= allowed)
++        return FALSE;
++    a = Foe_Get(0), b = Foe_Get(1);
++    // the one more hurt decides: below half, then (tier 5) below a quarter
++    if (a->bm.hp * b->bm.maxHP <= b->bm.hp * a->bm.maxHP)
++        hp = a->bm.hp, maxHP = a->bm.maxHP;
++    else
++        hp = b->bm.hp, maxHP = b->bm.maxHP;
++    if (hp > (sB.teamPAs == 0 ? maxHP / 2 : maxHP / 4) || (pa = TeamPA(a, b)) < 0)
++        return FALSE;
++    if (gBattleTypeFlags & BATTLE_TYPE_TWO_OPPONENTS)
++    {
++        char x[12], y[12];
++        Pkbn_GameStringToAscii(x, gTrainers[gTrainerBattleOpponent_A].trainerName, sizeof(x));
++        Pkbn_GameStringToAscii(y, gTrainers[gTrainerBattleOpponent_B].trainerName, sizeof(y));
++        snprintf(names, sizeof(names), "%s & %s", x, y);
++    }
++    else
++        Pkbn_GameStringToAscii(names, gTrainers[gTrainerBattleOpponent_A].trainerName, sizeof(names));
++    snprintf(line, sizeof(line), "%s: TEAM %s!", names, gPkbnProgramAdvances[pa].name);
++    Flash(line, 100);
++    PlaySE(SE_SUCCESS);
++    PKBN_LOG("team program advance: %s (%s + %s)", line, a->name, b->name);
++    sB.teamPAs++;
++    e->chainSlot = 0;
++    sB.foeAi[sB.cur ^ 1][1] += 60;   // the partner lines up too: its next attack waits
++    EnemyLineUp(gPkbnProgramAdvances[pa].kind);
++    Moves_UsePA(SIDE_ENEMY, pa, &e->bm, e->name, 0);
++    return TRUE;
++}
++
+ static bool8 RivalSpecial(struct Fighter *e)
+ {
+     s8 pa;
+@@ -1861,6 +1995,8 @@ static void UpdateOneEnemy(void)
+             SetMsg(line, 50);
+             return;
+         }
++        if (sB.rivalTier >= 3 && TeamSpecial(e))
++            return;
+         if (sB.rivalTier && RivalSpecial(e))
+             return;
+         if (e->chainSlot && e->bm.pp[e->chainSlot - 1])
+@@ -2272,6 +2408,7 @@ static void UpdateFight(void)
+     if (sB.state != ST_FIGHT)
+         return;
+     BossFrame();
++    PartnerFrame();
+     Moves_Update();
+     CheckFaints();
+ }
+diff --git a/src/pkbn/render.c b/src/pkbn/render.c
+index bc03f62..8de201a 100644
+--- a/src/pkbn/render.c
++++ b/src/pkbn/render.c
+@@ -117,6 +117,7 @@ void Pkbn_GameStringToAscii(char *dst, const u8 *src, u32 maxLen)
+         else if (c >= 0xD5 && c <= 0xEE) o = 'A' + (c - 0xD5);
+         else if (c == 0xF0) o = ':';
+         else if (c == 0x1B) o = 'E'; // é (POKé)
++        else if (c == 0x2D) o = '&'; // CHAR_AMPERSAND (TATE&LIZA)
+         dst[i] = o;
+     }
+     dst[i] = '\0';
+diff --git a/src/pkbn/rival.c b/src/pkbn/rival.c
+index c4dec36..3d37816 100644
+--- a/src/pkbn/rival.c
++++ b/src/pkbn/rival.c
+@@ -42,6 +42,9 @@ u8 Rival_Tier(u16 trainerId)
+     case TRAINER_CLASS_AQUA_LEADER:
+     case TRAINER_CLASS_MAGMA_LEADER:
+         return 4;
++    case TRAINER_CLASS_AQUA_ADMIN:                               // POC-14: the admins fight as rivals too (TUNE)
++    case TRAINER_CLASS_MAGMA_ADMIN:
++        return 3;
+     case TRAINER_CLASS_RIVAL:
+     {
+         // the rival grows with the story: by the level of their lead Pokémon (TUNE)
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index c9061de..bd7f03a 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -507,6 +507,23 @@ void Pkbn_SelfTestMaybeStart(void)
+         {
+             gBattleTypeFlags = BATTLE_TYPE_TRAINER | BATTLE_TYPE_DOUBLE | BATTLE_TYPE_TWO_OPPONENTS;
+             gTrainerBattleOpponent_B = (u16)atoi(getenv("PKBN_TEST_TRAINER_B"));
++            // PKBN_TEST_PARTNER=1: Steven's multi battle (POC-14); his team as sStevenMons (battle_tower.c:115)
++            if (getenv("PKBN_TEST_PARTNER") != NULL)
++            {
++                static const u16 sMons[3][6] = {   // sStevenMons (battle_tower.c:775-799)
++                    { SPECIES_METANG, 42, MOVE_LIGHT_SCREEN, MOVE_PSYCHIC, MOVE_REFLECT, MOVE_METAL_CLAW },
++                    { SPECIES_SKARMORY, 43, MOVE_TOXIC, MOVE_AERIAL_ACE, MOVE_PROTECT, MOVE_STEEL_WING },
++                    { SPECIES_AGGRON, 44, MOVE_THUNDER, MOVE_PROTECT, MOVE_SOLAR_BEAM, MOVE_DRAGON_CLAW },
++                };
++                s32 k, m;
++                gBattleTypeFlags |= BATTLE_TYPE_MULTI | BATTLE_TYPE_INGAME_PARTNER;
++                for (k = 0; k < 3; k++)
++                {
++                    CreateMon(&gPlayerParty[3 + k], sMons[k][0], sMons[k][1], 31, FALSE, 0, OT_ID_PRESET, 0);
++                    for (m = 0; m < MAX_MON_MOVES; m++)
++                        SetMonMoveSlot(&gPlayerParty[3 + k], sMons[k][2 + m], m);
++                }
++            }
+         }
+     }
+     gMain.savedCallback = CB2_SelfTestDone;
+-- 
+2.43.0
+

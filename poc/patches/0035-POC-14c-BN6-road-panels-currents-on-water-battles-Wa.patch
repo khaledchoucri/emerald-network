@@ -1,0 +1,145 @@
+From 0c00489c62bbafadef44630c8c248db06ed965ee Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 02:30:45 +0300
+Subject: [PATCH 35/44] POC-14c: BN6 road panels - currents on water battles,
+ Water/Flying combo panels carry the target back
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |  7 +++++++
+ src/pkbn/grid_draw.c         | 20 ++++++++++++++++++++
+ src/pkbn/grid_field.c        | 20 ++++++++++++++++++++
+ src/pkbn/grid_moves.c        |  7 +++++--
+ 4 files changed, 52 insertions(+), 2 deletions(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 01c71ba..11e9dfa 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -58,6 +58,7 @@
+ #define POISON_PANEL_PERIOD  7    // BN6: poison panel timer reloads 6 and fires below 0 (asm00_2.s sub_801A186)
+ #define BROKEN_PANEL_FRAMES  600  // TUNE: a broken panel comes back after this long
+ #define PANEL_EFFECT_FRAMES  900  // TUNE: poison / holy / grass panels fade after this long
++#define ROAD_FRAMES          18   // TUNE: a road panel carries you one panel per this many frames
+ #define MAX_ATTACKS          10
+ #define MAX_FOES             3    // POC-11: wild packs of up to 3 on the enemy side (BN virus battles have 1-3)
+ 
+@@ -76,6 +77,12 @@ enum
+     PANEL_HOLY,     // 5: halves damage taken on it (object_calculateFinalDamage1, object.s:4811)
+     PANEL_GRASS,    // 6: heals Wood-element objects (sub_801A186) -> here: Grass types
+     PANEL_ICE,      // 7: non-Aqua objects keep sliding (asm00_2.s:16535) -> here: non-Water types
++    // POC-14: BN6 road panels, types 9-12 (sub_800E500, asm/object.s:4970-4990; directions in byte_800E538: up, down,
++    // left, right): whoever stands on one is carried a panel that way. Here: currents (Water) and wind (Flying).
++    PANEL_ROAD_UP,
++    PANEL_ROAD_DOWN,
++    PANEL_ROAD_LEFT,
++    PANEL_ROAD_RIGHT,
+ };
+ 
+ struct Fighter
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index f94ab5b..078b179 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -166,6 +166,8 @@ static void PanelColorsFor(s32 c, u8 type, struct PanelColors *pc)
+     case PANEL_GRASS:  pc->face = RGB(8, 21, 7);   pc->faceDark = RGB(4, 13, 4);  pc->faceLight = RGB(14, 27, 11); break;
+     case PANEL_ICE:    pc->face = RGB(20, 28, 31); pc->faceDark = RGB(13, 21, 28); pc->faceLight = RGB(29, 31, 31); break;
+     case PANEL_CRACKED: pc->face = RGB(18, 18, 21); pc->faceDark = RGB(12, 12, 15); break;
++    case PANEL_ROAD_UP: case PANEL_ROAD_DOWN: case PANEL_ROAD_LEFT: case PANEL_ROAD_RIGHT:
++        pc->face = RGB(10, 18, 24); pc->faceDark = RGB(5, 11, 17); pc->faceLight = RGB(18, 26, 31); break;
+     }
+ }
+ 
+@@ -244,6 +246,24 @@ static void DrawPanel(u16 *fb, s32 c, s32 r, u32 t)
+             Pkbn_FillRect(fb, gx, y + PANEL_H - 9, 1, 4, pc.faceDark);
+         }
+         break;
++    case PANEL_ROAD_UP: case PANEL_ROAD_DOWN: case PANEL_ROAD_LEFT: case PANEL_ROAD_RIGHT:
++    {
++        // BN6 road panel: chevrons crawling the way it carries you
++        static const s8 sDir[4][2] = { {0, -1}, {0, 1}, {-1, 0}, {1, 0} };
++        const s8 *d = sDir[type - PANEL_ROAD_UP];
++        s32 k, cx = x + PANEL_W / 2, cy = y + PANEL_H / 2, ph = (s32)((t / 4) % 8);
++        for (k = -1; k <= 1; k++)
++        {
++            s32 off = k * 8 + ph - 4, px = cx + d[0] * off, py = cy + d[1] * off / 2, j;
++            for (j = -3; j <= 3; j++)
++            {
++                s32 ax = px - d[0] * abs(j) + (d[0] == 0 ? j : 0), ay = py - d[1] * abs(j) + (d[1] == 0 ? j / 2 : 0);
++                if (ax > x + 3 && ax < x + PANEL_W - 4 && ay > y + 2 && ay < y + PANEL_H - 3)
++                    Pkbn_FillRect(fb, ax, ay, 2, 1, pc.faceLight);
++            }
++        }
++        break;
++    }
+     case PANEL_ICE:
+     {
+         // a glint sliding across
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index 63178eb..6ee89b8 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -74,6 +74,12 @@ void Field_StartConditions(void)
+     }
+     if (sB.weather)
+         PKBN_LOG("overworld weather %u -> battle weather %x (permanent)", GetCurrentWeather(), sB.weather);
++    if (gBattleEnvironment == BATTLE_ENVIRONMENT_WATER || gBattleEnvironment == BATTLE_ENVIRONMENT_POND)
++    {
++        // on the water (POC-14, TUNE): a current runs across the middle of each side, carrying toward its back
++        sB.panel[1][0] = PANEL_ROAD_LEFT;
++        sB.panel[1][GRID_COLS - 1] = PANEL_ROAD_RIGHT;
++    }
+     for (side = 0; side < 2; side++)
+     {
+         u8 type = PANEL_NORMAL;
+@@ -249,6 +255,7 @@ void Field_SetPanel(s8 x, s8 y, u8 type)
+     case PANEL_HOLY:
+     case PANEL_GRASS:
+     case PANEL_ICE:
++    case PANEL_ROAD_UP: case PANEL_ROAD_DOWN: case PANEL_ROAD_LEFT: case PANEL_ROAD_RIGHT:
+         sB.panelTimer[y][x] = PANEL_EFFECT_FRAMES;
+         break;
+     default:
+@@ -619,6 +626,19 @@ static void FighterFrame(u8 s)
+             else
+                 f->slideDx = f->slideDy = 0;
+         }
++        // BN6 road panels carry you one panel along (POC-14). TUNE: one panel every ROAD_FRAMES, not while
++        // floating, airborne / underground or held in place; a wall or a hole stops it.
++        if (sB.panel[f->y][f->x] >= PANEL_ROAD_UP && sB.panel[f->y][f->x] <= PANEL_ROAD_RIGHT && f->moveCd == 0
++         && !f->invuln && !f->hold && !Field_Floats(f))
++        {
++            static const s8 sRoad[4][2] = { {0, -1}, {0, 1}, {-1, 0}, {1, 0} };   // byte_800E538 order
++            const s8 *d = sRoad[sB.panel[f->y][f->x] - PANEL_ROAD_UP];
++            if (Field_CanStand(s, f->x + d[0], f->y + d[1]))
++            {
++                Field_Step(s, f->x + d[0], f->y + d[1]);
++                f->moveCd = ROAD_FRAMES;
++            }
++        }
+         // BN6 poison panel: 1 damage every 7 frames while standing on it (sub_801A186).
+         // Pokémon HP is far lower than a Navi's, so one "damage" here is maxHP/128 (TUNE).
+         NaviBugsTick(s);
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index cfcd05d..ddfc4b6 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -2588,9 +2588,12 @@ void Moves_ComboPanel(u8 type, s8 x, s8 y)
+     case TYPE_GROUND: case TYPE_ROCK: case TYPE_FIGHTING: panel = PANEL_CRACKED; break; // quakes and blows crack it
+     case TYPE_POISON: case TYPE_BUG:                      panel = PANEL_POISON; break;
+     case TYPE_GRASS:                                      panel = PANEL_GRASS; break;
+-    case TYPE_ICE: case TYPE_WATER:                       panel = PANEL_ICE; break;    // BN6 ice panel: you slide
++    case TYPE_ICE:                                        panel = PANEL_ICE; break;    // BN6 ice panel: you slide
++    case TYPE_WATER: case TYPE_FLYING:                    // POC-14: a current / a gust - a BN6 road panel that
++        panel = x >= PLAYER_COLS ? PANEL_ROAD_RIGHT : PANEL_ROAD_LEFT;   // carries the target toward its own back
++        break;
+     case TYPE_PSYCHIC: case TYPE_NORMAL:                 panel = PANEL_HOLY; break;
+-    default: return; // Fire, Electric, Flying, Dark, Ghost, Dragon, Steel: no panel of their own in BN6
++    default: return; // Fire, Electric, Dark, Ghost, Dragon, Steel: no panel of their own in BN6
+     }
+     Field_SetPanel(x, y, panel);
+     FlashPanel(x, y, 10);
+-- 
+2.43.0
+

@@ -1,0 +1,398 @@
+From a68ce21011bc12836ccf8e84d1a8c43e7a997045 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 02:35:49 +0300
+Subject: [PATCH 37/44] POC-14e: chip LIBRARY page (every chip, seen ones,
+ milestones with PP items and programs); pkbn.sav v5
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/chip_pack.h |  13 +++++
+ src/pkbn/folder_ui.c     | 115 ++++++++++++++++++++++++++++++++++-----
+ src/pkbn/pkbn_save.c     |  67 ++++++++++++++++++++++-
+ 3 files changed, 177 insertions(+), 18 deletions(-)
+
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index cf2e90a..3cd8a30 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -17,6 +17,7 @@
+ #define CANDY_MAX    9999
+ #define PKBN_FOLDER_SLOTS FOLDER_MAX
+ #define PKBN_FOLDERS 3              // BN6: Folder 1, Folder 2, the extra folder (POC-13)
++#define PKBN_LEADERS 8              // the eight Gym Leaders (Leader chips, POC-14)
+ 
+ // Partner chips (POC-11, design 10 §10.3): earned at fixed story points, each assigned to one Pokémon (by its
+ // Navi ID) and one of its moves. In battle it switches that Pokémon in and uses the move (costing the Custom),
+@@ -38,6 +39,18 @@ void PkbnPack_SetGranted(u16 move);
+ void PkbnFolder_SortForTests(struct Folder *folder, const struct BattlePokemon *party, u8 partyCount);
+ u8 PkbnFolderEdit_Get(u16 *moves, u8 *letters);            // the equipped folder; 0 = auto-build
+ u8 PkbnFolder_Equipped(void);                               // 0-2
++// POC-14 (src/pkbn/pkbn_save.c)
++bool8 PkbnLibrary_Has(u16 move);
++u8 PkbnLibrary_Paid(void);
++void PkbnLibrary_SetPaid(u8 bits);
++u8 PkbnLeader_Chip(u8 leader);
++void PkbnLeader_SetChip(u8 leader, u8 level);
++void PkbnLeader_Record(u8 leader, u16 *frames, u8 *level);
++void PkbnLeader_SetRecord(u8 leader, u16 frames, u8 level);
++bool8 PkbnChallenge_Cleared(u8 n);
++void PkbnChallenge_SetCleared(u8 n);
++void PkbnProgram_Grant(u8 prog, u8 n);
++bool8 PkbnProgram_Economy(void);
+ void PkbnFolder_Equip(u8 n);
+ void PkbnFolderEdit_Set(const u16 *moves, const u8 *letters, u8 count);
+ u8 PkbnFolder_PartyBattleMons(struct BattlePokemon *out);    // the party as BattlePokemon (species/moves/types)
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index 31ff8fd..b80ef3d 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -46,7 +46,7 @@ extern const struct Evolution gEvolutionTable[][EVOS_PER_MON];
+ #define ROW_H 11
+ #define PANEL_X 164
+ 
+-enum { PAGE_FOLDER, PAGE_PACK, PAGE_CANDY, PAGE_PARTNER, PAGE_COUNT, PAGE_SHELF = PAGE_COUNT };   // SHELF: the Poké Mart's chip shelf
++enum { PAGE_FOLDER, PAGE_PACK, PAGE_CANDY, PAGE_PARTNER, PAGE_LIBRARY, PAGE_COUNT, PAGE_SHELF = PAGE_COUNT };   // SHELF: the Poké Mart's chip shelf
+ 
+ struct PackRow { u16 move; u8 letter; };
+ struct CandyRow { u16 move; u8 letter; u8 needLevel; u16 species; };   // needLevel 0 = buyable now
+@@ -56,7 +56,9 @@ static struct
+ {
+     MainCallback exit;
+     u8 page;
+-    u8 cursor[PAGE_COUNT + 1], top[PAGE_COUNT + 1];
++    u16 cursor[PAGE_COUNT + 1], top[PAGE_COUNT + 1];
++    u16 lib[MOVES_COUNT];      // POC-14 LIBRARY page: every chip, by type
++    u16 libCount, libSeen;
+     bool8 shelfMode;
+     struct CandyRow shelf[16];
+     u8 shelfCount;
+@@ -456,13 +458,14 @@ static void DrawPartnerList(u16 *fb)
+ 
+ // ---- drawing ---------------------------------------------------------------------------------------------------
+ 
+-static u8 RowCount(void)
++static u16 RowCount(void)
+ {
+     return sF.page == PAGE_FOLDER ? sF.groupCount : sF.page == PAGE_PACK ? sF.packCount
+-         : sF.page == PAGE_SHELF ? sF.shelfCount : sF.page == PAGE_PARTNER ? PKBN_PARTNER_SLOTS : sF.candyCount;
++         : sF.page == PAGE_SHELF ? sF.shelfCount : sF.page == PAGE_PARTNER ? PKBN_PARTNER_SLOTS
++         : sF.page == PAGE_LIBRARY ? sF.libCount : sF.candyCount;
+ }
+ 
+-static void RowChip(u8 row, u16 *move, u8 *letter)
++static void RowChip(u16 row, u16 *move, u8 *letter)
+ {
+     if (sF.page == PAGE_FOLDER)
+         *move = sF.groups[row].move, *letter = sF.groups[row].letter;
+@@ -472,13 +475,15 @@ static void RowChip(u8 row, u16 *move, u8 *letter)
+         *move = sF.shelf[row].move, *letter = sF.shelf[row].letter;
+     else if (sF.page == PAGE_PARTNER)
+         *move = PartnerMove(row), *letter = LETTER_WILD;
++    else if (sF.page == PAGE_LIBRARY)
++        *move = sF.lib[row], *letter = gPkbnMoveInfo[sF.lib[row]].lanes[0];
+     else
+         *move = sF.candy[row].move, *letter = sF.candy[row].letter;
+ }
+ 
+ static void DrawTabs(u16 *fb)
+ {
+-    static const char *const names[PAGE_COUNT] = { "FOLDER", "PACK", "CANDY", "PARTNER" };
++    static const char *const names[PAGE_COUNT] = { "FOLDER", "PACK", "CANDY", "PARTNER", "LIBRARY" };
+     s32 i, x = 4;
+     char line[32];
+     if (sF.shelfMode)
+@@ -490,22 +495,23 @@ static void DrawTabs(u16 *fb)
+     }
+     for (i = 0; i < PAGE_COUNT; i++)
+     {
+-        s32 w = Pkbn_EmTextWidth(names[i], PKBN_FONT_SMALL) + 10;
++        s32 w = Pkbn_EmTextWidth(names[i], PKBN_FONT_SMALL) + 6;
+         bool8 on = i == sF.page;
+         Pkbn_FillRect(fb, x, 3, w, 14, on ? RGB(6, 10, 22) : RGB(2, 3, 8));
+         Pkbn_FrameRect(fb, x, 3, w, 14, on ? RGB(31, 26, 6) : RGB(8, 10, 16));
+-        Pkbn_DrawEmText(fb, x + 5, 3, names[i], PKBN_FONT_SMALL, on ? RGB(31, 26, 6) : RGB(14, 16, 22), RGB(2, 2, 5));
+-        x += w + 2;
++        Pkbn_DrawEmText(fb, x + 3, 3, names[i], PKBN_FONT_SMALL, on ? RGB(31, 26, 6) : RGB(14, 16, 22), RGB(2, 2, 5));
++        x += w + 1;
+     }
+     // POC-13: which of the 3 folders is equipped (the one shown is the one you fight with)
+-    snprintf(line, sizeof(line), "F%u  %u/%u%s", PkbnFolder_Equipped() + 1, sF.fCount, sF.fMax, sF.edited ? "" : " AUTO");
++    snprintf(line, sizeof(line), "F%u %u/%u%s", PkbnFolder_Equipped() + 1, sF.fCount, sF.fMax,
++             sF.edited || sF.page != PAGE_FOLDER ? "" : " AUTO");
+     Text(fb, CW - 4 - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), 4, line, sF.fCount > sF.fMax ? RGB(31, 10, 8) : RGB(31, 31, 31));
+ }
+ 
+ static void DrawList(u16 *fb)
+ {
+     s32 i, n = RowCount();
+-    u8 *cur = &sF.cursor[sF.page], *top = &sF.top[sF.page];
++    u16 *cur = &sF.cursor[sF.page], *top = &sF.top[sF.page];
+     if (*cur >= n && n > 0)
+         *cur = n - 1;
+     if (*cur < *top)
+@@ -514,14 +520,21 @@ static void DrawList(u16 *fb)
+         *top = *cur - LIST_ROWS + 1;
+     Pkbn_FillRect(fb, LIST_X - 2, LIST_Y - 2, PANEL_X - LIST_X - 2, LIST_ROWS * ROW_H + 4, RGB(2, 3, 8));
+     {
+-        static const char *const qtyHead[PAGE_COUNT + 1] = { "QTY", "IN/OWN", "CANDY", "", "PRICE" };
++        static const char *const qtyHead[PAGE_COUNT + 1] = { "QTY", "IN/OWN", "CANDY", "", "OWN", "PRICE" };
+         if (sF.page == PAGE_PARTNER)
+         {
+             DrawPartnerList(fb);
+             return;
+         }
+         Text(fb, LIST_X + 96, LIST_Y - 14, qtyHead[sF.page], RGB(12, 14, 20));
+-        Text(fb, PANEL_X - 8 - Pkbn_EmTextWidth("LIMIT", PKBN_FONT_SMALL), LIST_Y - 14, "LIMIT", RGB(12, 14, 20));
++        if (sF.page != PAGE_LIBRARY)
++            Text(fb, PANEL_X - 8 - Pkbn_EmTextWidth("LIMIT", PKBN_FONT_SMALL), LIST_Y - 14, "LIMIT", RGB(12, 14, 20));
++        if (sF.page == PAGE_LIBRARY)
++        {
++            char cl[24];
++            snprintf(cl, sizeof(cl), "SEEN %u/%u", sF.libSeen, sF.libCount);
++            Text(fb, LIST_X + 2, LIST_Y - 14, cl, RGB(31, 26, 6));
++        }
+         if (sF.page == PAGE_FOLDER)
+         {
+             // POC-13: Mega / Giga chips in the folder against BN6's 5 / 1
+@@ -546,7 +559,7 @@ static void DrawList(u16 *fb)
+     }
+     for (i = 0; i < LIST_ROWS && *top + i < n; i++)
+     {
+-        u8 row = *top + i;
++        u16 row = *top + i;
+         u16 mv;
+         u8 letter;
+         char nm[MOVE_NAME_LENGTH + 1], right[16], qty[12];
+@@ -576,6 +589,17 @@ static void DrawList(u16 *fb)
+             if (InFolder(mv, -1) >= Chip_CopyCap(mv))
+                 rcol = RGB(31, 20, 6);
+         }
++        else if (sF.page == PAGE_LIBRARY)
++        {
++            // BN's Library: every chip there is, the ones you never had shown as ?????
++            if (!PkbnLibrary_Has(mv))
++            {
++                snprintf(nm, sizeof(nm), "?????");
++                col = RGB(14, 14, 16);
++            }
++            snprintf(qty, sizeof(qty), PkbnPack_Total(mv) ? "%u" : "-", PkbnPack_Total(mv));
++            snprintf(right, sizeof(right), "%s", Chip_Class(mv) == CHIP_GIGA ? "GIGA" : Chip_Class(mv) == CHIP_MEGA ? "MEGA" : "");
++        }
+         else if (sF.page == PAGE_SHELF)
+         {
+             u32 price = ShelfPrice(mv);
+@@ -610,6 +634,7 @@ static void DrawList(u16 *fb)
+         // small type-coloured chip mark + code letter
+         Pkbn_FillRect(fb, LIST_X, y + 1, 4, 8, Vfx_TypeColor(gBattleMoves[mv].type));
+         Text(fb, LIST_X + 7, y - 2, nm, dim ? RGB(14, 14, 16) : col);
++        if (sF.page != PAGE_LIBRARY || PkbnLibrary_Has(mv))
+         {
+             char c[2] = { PkbnFolder_LetterChar(letter), 0 };
+             Text(fb, LIST_X + 84, y - 2, c, RGB(31, 26, 6));
+@@ -637,6 +662,12 @@ static void DrawPanel(u16 *fb)
+     if (n == 0)
+         return;
+     RowChip(sF.cursor[sF.page], &mv, &letter);
++    if (sF.page == PAGE_LIBRARY && !PkbnLibrary_Has(mv))
++    {
++        Text(fb, x + 2, y + 4, "NOT SEEN YET", RGB(16, 18, 22));
++        TextWrap(fb, x + 2, y + 20, CW - x - 6, 6, "Learn it, catch a Pokemon that knows it, buy it, find it as chip data or win it to fill this page.", RGB(22, 26, 31));
++        return;
++    }
+     // the chip: BN-style icon, code, name
+     Pkbn_FillRect(fb, x + 2, y + 2, 26, 22, RGB(1, 2, 5));
+     if (mv == MOVE_NONE)
+@@ -700,6 +731,7 @@ static void DrawHints(u16 *fb)
+         "A:ADD  START:PP UP  SELECT:PP MAX  B:DONE",
+         "A:BUY  SELECT:CODE (+2)  L/R:PAGE  B:DONE",
+         "A:POKEMON  SELECT:MOVE  L/R:PAGE  B:DONE",
++        "L/R:PAGE  B:DONE",
+         "A:BUY  B:DONE",
+     };
+     Pkbn_FillRect(fb, 0, CH - 24, CW, 24, RGB(1, 2, 5));
+@@ -871,7 +903,7 @@ static void CycleCode(void)
+ 
+ static void HandleInput(u16 keys)
+ {
+-    u8 n = RowCount(), *cur = &sF.cursor[sF.page];
++    u16 n = RowCount(), *cur = &sF.cursor[sF.page];
+     if (keys & DPAD_UP)
+         *cur = n ? (*cur + n - 1) % n : 0;
+     if (keys & DPAD_DOWN)
+@@ -1005,6 +1037,57 @@ void PkbnFolderEdit_Open(MainCallback exitCallback)
+     SetMainCallback2(CB2_Folder);
+ }
+ 
++// POC-14 LIBRARY page: every chip move, by type then move number; how many you have ever owned
++static void BuildLibrary(void)
++{
++    u16 mv;
++    u8 t;
++    sF.libCount = sF.libSeen = 0;
++    for (t = 0; t < NUMBER_OF_MON_TYPES; t++)
++        for (mv = 1; mv < MOVES_COUNT; mv++)
++            if (gBattleMoves[mv].type == t && PkbnFolder_MoveIsChip(mv))
++            {
++                sF.lib[sF.libCount++] = mv;
++                sF.libSeen += PkbnLibrary_Has(mv);
++            }
++}
++
++// Library milestones (POC-14, TUNE): PP Up / PP Max and NaviCust programs, paid once each.
++static void LibraryMilestones(void)
++{
++    static const struct { u16 seen; u16 item; const char *program; } sMilestones[] = {
++        { 25, ITEM_PP_UP, NULL }, { 50, 0, "Custom1" }, { 100, ITEM_PP_MAX, NULL }, { 150, 0, "HP+100" },
++        { 200, 0, "Custom2" }, { 250, 0, "BugStop" }, { 0xFFFF, 0, "BustPack" },   // 0xFFFF = all of them
++    };
++    u8 paid = PkbnLibrary_Paid(), i;
++    char line[64];
++    line[0] = '\0';
++    for (i = 0; i < ARRAY_COUNT(sMilestones); i++)
++    {
++        u16 need = sMilestones[i].seen == 0xFFFF ? sF.libCount : sMilestones[i].seen;
++        if ((paid & (1 << i)) || sF.libSeen < need)
++            continue;
++        paid |= 1 << i;
++        if (sMilestones[i].item)
++        {
++            AddBagItem(sMilestones[i].item, 1);
++            snprintf(line, sizeof(line), "LIBRARY %u: GOT A %s!", need, sMilestones[i].item == ITEM_PP_UP ? "PP UP" : "PP MAX");
++        }
++        else
++        {
++            s32 k;
++            for (k = 0; k < NCP_COUNT; k++)
++                if (strcmp(gPkbnNcps[k].name, sMilestones[i].program) == 0)
++                    PkbnProgram_Grant(k, 1);
++            snprintf(line, sizeof(line), "LIBRARY %u: GOT PROGRAM %s!", need, sMilestones[i].program);
++        }
++        printf("[pkbn] %s\n", line);
++    }
++    PkbnLibrary_SetPaid(paid);
++    if (line[0])
++        Note(line);
++}
++
+ static void OpenCommon(MainCallback exitCallback)
+ {
+     s32 i;
+@@ -1024,6 +1107,8 @@ static void OpenCommon(MainCallback exitCallback)
+     BuildGroups();
+     BuildPack();
+     BuildCandy();
++    BuildLibrary();
++    LibraryMilestones();
+     sKeys = getenv("PKBN_TEST_FOLDER_KEYS");
+     sKeyClock = 0;
+ }
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index 97a4ef4..d1fea8a 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -24,8 +24,10 @@
+ #include <stddef.h>
+ 
+ #define PKBN_SAVE_PATH    "pkbn.sav"
+-#define PKBN_SAVE_VERSION 4   // v2 (POC-10): chip pack, grants, candy, folder; v3 (POC-11): partner chips;
+-                              // v4 (POC-13): folders 2 and 3 and which one is equipped. Append-only.
++#define PKBN_SAVE_VERSION 5   // v2 (POC-10): chip pack, grants, candy, folder; v3 (POC-11): partner chips;
++                              // v4 (POC-13): folders 2 and 3 and which one is equipped;
++                              // v5 (POC-14): chip library, Leader chips and rematch records, challenges, programs.
++                              // Append-only.
+ 
+ struct PkbnSaveFile
+ {
+@@ -51,8 +53,17 @@ struct PkbnSaveFile
+     u8 extraLetter[PKBN_FOLDERS - 1][PKBN_FOLDER_SLOTS];
+     u8 extraCount[PKBN_FOLDERS - 1];
+     u8 activeFolder;          // 0 = folder 1
++    // ---- v5 (POC-14) ----
++    u8 library[(MOVES_COUNT + 7) / 8];        // chips ever owned
++    u8 libraryPaid;                           // library milestones already rewarded (bits)
++    u8 leaderChip[PKBN_LEADERS];              // Leader chips: 0 = none, 1-3 = V1-V3
++    u16 leaderBestFrames[PKBN_LEADERS];       // rematch time attack: best fight time (0 = none)
++    u8 leaderBestLevel[PKBN_LEADERS];         // ... and best Busting Level
++    u32 challengeCleared;                     // challenge battles won (bits)
++    u8 programEconomy;                        // 1: programs are earned (new games); 0: everything owned (older saves)
+ };
+ 
++#define V4_SIZE offsetof(struct PkbnSaveFile, library)
+ #define V3_SIZE offsetof(struct PkbnSaveFile, extraMove)
+ #define V2_SIZE offsetof(struct PkbnSaveFile, partners)
+ 
+@@ -97,7 +108,18 @@ void PkbnSave_Read(void)
+     else if (tmp.version == 2)
+         memset((u8 *)&tmp + V2_SIZE, 0, sizeof(tmp) - V2_SIZE); // v2 -> v4: no partner chips yet
+     else if (tmp.version == 3)
+-        memset((u8 *)&tmp + V3_SIZE, 0, sizeof(tmp) - V3_SIZE); // v3 -> v4: folders 2 and 3 empty, folder 1 equipped
++        memset((u8 *)&tmp + V3_SIZE, 0, sizeof(tmp) - V3_SIZE); // v3 -> v5: folders 2 and 3 empty, folder 1 equipped
++    else if (tmp.version == 4)
++        memset((u8 *)&tmp + V4_SIZE, 0, sizeof(tmp) - V4_SIZE); // v4 -> v5: library rebuilt from the pack below
++    if (tmp.version < 5)
++    {
++        u16 mv;
++        u8 l;
++        for (mv = 1; mv < MOVES_COUNT; mv++)
++            for (l = 0; l < PACK_LETTERS; l++)
++                if (tmp.pack[mv][l])
++                    tmp.library[mv / 8] |= 1 << (mv % 8);
++    }
+     tmp.version = PKBN_SAVE_VERSION;
+     sSave = tmp;
+     for (i = sSave.ncpCount; i < NCP_COUNT; i++) // programs added since this file was written
+@@ -204,6 +226,8 @@ void PkbnPack_Add(u16 move, u8 letter, s32 n)
+     s32 v;
+     if (move == MOVE_NONE || move >= MOVES_COUNT || letter >= PACK_LETTERS)
+         return;
++    if (n > 0)
++        sSave.library[move / 8] |= 1 << (move % 8);   // the chip library (POC-14)
+     v = sSave.pack[move][letter] + n;
+     sSave.pack[move][letter] = v < 0 ? 0 : v > PACK_MAX ? PACK_MAX : v;
+ }
+@@ -427,4 +451,41 @@ void PkbnCandy_Add(u8 type, s32 n)
+     sSave.candy[type] = v < 0 ? 0 : v > CANDY_MAX ? CANDY_MAX : v;
+ }
+ 
++// ---- POC-14: library, Leader chips, records, challenges, programs ------------------------------------------------
++
++bool8 PkbnLibrary_Has(u16 move)
++{
++    return move < MOVES_COUNT && (sSave.library[move / 8] & (1 << (move % 8)));
++}
++
++u8 PkbnLibrary_Paid(void) { return sSave.libraryPaid; }
++void PkbnLibrary_SetPaid(u8 bits) { sSave.libraryPaid = bits; }
++
++u8 PkbnLeader_Chip(u8 leader) { return leader < PKBN_LEADERS ? sSave.leaderChip[leader] : 0; }
++void PkbnLeader_SetChip(u8 leader, u8 level) { if (leader < PKBN_LEADERS) sSave.leaderChip[leader] = level; }
++void PkbnLeader_Record(u8 leader, u16 *frames, u8 *level)
++{
++    *frames = leader < PKBN_LEADERS ? sSave.leaderBestFrames[leader] : 0;
++    *level = leader < PKBN_LEADERS ? sSave.leaderBestLevel[leader] : 0;
++}
++void PkbnLeader_SetRecord(u8 leader, u16 frames, u8 level)
++{
++    if (leader < PKBN_LEADERS)
++        sSave.leaderBestFrames[leader] = frames, sSave.leaderBestLevel[leader] = level;
++}
++
++bool8 PkbnChallenge_Cleared(u8 n) { return n < 32 && (sSave.challengeCleared & (1u << n)); }
++void PkbnChallenge_SetCleared(u8 n) { if (n < 32) sSave.challengeCleared |= 1u << n; }
++
++// NaviCust programs owned (POC-14: earned in new games)
++void PkbnProgram_Grant(u8 prog, u8 n)
++{
++    if (prog >= NCP_COUNT)
++        return;
++    sSave.owned[prog] = sSave.owned[prog] + n > NCP_OWNED_TEST ? NCP_OWNED_TEST : sSave.owned[prog] + n;
++    printf("[pkbn] program grant: %s x%u (now %u)\n", gPkbnNcps[prog].name, n, sSave.owned[prog]);
++}
++
++bool8 PkbnProgram_Economy(void) { return sSave.programEconomy; }
++
+ #endif // PORTABLE
+-- 
+2.43.0
+

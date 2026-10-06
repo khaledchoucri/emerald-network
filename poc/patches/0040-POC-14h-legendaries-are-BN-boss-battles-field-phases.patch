@@ -1,0 +1,305 @@
+From f6219989a11e33a05abda52ace92267d4d41088c Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 03:03:58 +0300
+Subject: [PATCH 40/44] POC-14h: legendaries are BN boss battles - field phases
+ (Groudon cracks, Kyogre's tide, Regice's ice), signature Program Advances,
+ the Regis stand with Super Armor
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |   3 +
+ src/pkbn/battle_stub.c       |   6 ++
+ src/pkbn/grid_battle.c       | 153 ++++++++++++++++++++++++++++++++++-
+ src/pkbn/grid_draw.c         |   4 +-
+ src/pkbn/selftest.c          |  11 +++
+ 5 files changed, 174 insertions(+), 3 deletions(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index aed6295..a3d85d7 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -280,6 +280,9 @@ struct GridBattle
+     u16 foeAi[MAX_FOES][2];    // aiStepTimer / aiAttackTimer of the foes that aren't selected
+     // trainer battles
+     bool8 trainer;
++    u8 boss;                   // POC-14: a legendary fought as a BN boss (index into sBosses + 1)
++    u16 bossTimer;             // fight frames to its next field phase
++    u8 bossPending;            // the phase was announced; it lands when this reaches 0
+     u8 challenge;              // POC-14 NET CHALLENGE: index + 1 (a simulation: no EXP, no catching, nothing lost)
+     u32 timeLimit;             // POC-14: fight frames before TIME UP (0 = none)
+     u8 rivalTier;              // POC-11: 1-5 for Gym Leaders, the rival, E4... (src/pkbn/rival.c), 0 otherwise
+diff --git a/src/pkbn/battle_stub.c b/src/pkbn/battle_stub.c
+index 46606b7..eaa1106 100644
+--- a/src/pkbn/battle_stub.c
++++ b/src/pkbn/battle_stub.c
+@@ -64,6 +64,12 @@ bool8 PkbnBattle_ShouldHandle(void)
+         return FALSE;
+     if (gBattleTypeFlags == 0)
+         return TRUE;
++    // POC-14: the legendaries' scripted battles (BattleSetup_StartLegendaryBattle, StartRegiBattle,
++    // StartGroudonKyogreBattle, BattleSetup_StartLatiBattle) are fought on the grid as boss battles.
++    if (GetMode() == PKBN_MODE_GRID && (gBattleTypeFlags & BATTLE_TYPE_LEGENDARY)
++     && !(gBattleTypeFlags & ~(BATTLE_TYPE_LEGENDARY | BATTLE_TYPE_REGI | BATTLE_TYPE_GROUDON | BATTLE_TYPE_KYOGRE
++                               | BATTLE_TYPE_RAYQUAZA | BATTLE_TYPE_KYOGRE_GROUDON)))
++        return TRUE;
+     // POC-13: double battles too - a double-battle trainer (gTrainers[].doubleBattle) and two trainers at once
+     // (BattleSetup_StartTrainerBattle sets DOUBLE | TWO_OPPONENTS | TRAINER, battle_setup.c:1319). Both foes stand on
+     // the grid at once. Multi battles (an in-game partner) stay vanilla.
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 219b85c..472efda 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -713,6 +713,58 @@ static void AddWildPack(void)
+         PKBN_LOG("wild pack roll %d with %d badges: +%d", (int)r, (int)b, (int)extra);
+ }
+ 
++// ---- Legendaries as BN boss battles (POC-14, our design - TUNE) -------------------------------------------------------
++// A BN boss reshapes the field on a rhythm and saves a big attack for when it's hurt. Each legendary here keeps its
++// Gen 3 stats and moves; on top it has a field phase every few seconds (announced first, so you can move) and a
++// signature Program Advance it fires below half HP and again below a quarter. The Regis stand still with Super Armor.
++enum { BOSS_CRACK, BOSS_TIDE, BOSS_FREEZE, BOSS_PA };
++struct BossDef
++{
++    u16 species;
++    u8 phase;
++    const char *phaseText;
++    const char *phasePA;      // BOSS_PA: the Program Advance the phase fires
++    const char *signature;    // below 1/2 and 1/4 HP
++    bool8 still;              // stands its ground (the Regis)
++};
++static const struct BossDef sBosses[] = {
++    { SPECIES_GROUDON,   BOSS_CRACK,  "GROUDON SPLITS THE GROUND!",  NULL,             "EARTH RENDER", FALSE },
++    { SPECIES_KYOGRE,    BOSS_TIDE,   "KYOGRE CALLS THE TIDE!",      NULL,             "TSUNAMI",      FALSE },
++    { SPECIES_RAYQUAZA,  BOSS_PA,     "RAYQUAZA DIVES!",             "DIVE BOMBER",    "DRAGON RUSH",  FALSE },
++    { SPECIES_REGIROCK,  BOSS_PA,     "REGIROCK: ROCK AVALANCHE!",   "ROCK AVALANCHE", NULL,           TRUE },
++    { SPECIES_REGICE,    BOSS_FREEZE, "REGICE FREEZES THE GROUND!",  NULL,             "GLACIAL TOMB", TRUE },
++    { SPECIES_REGISTEEL, BOSS_PA,     "REGISTEEL: IRON FIST!",       "IRON FIST",      NULL,           TRUE },
++    { SPECIES_LATIAS,    BOSS_PA,     "LATIAS: COSMIC DUET!",        "COSMIC DUET",    "DRAGON RUSH",  FALSE },
++    { SPECIES_LATIOS,    BOSS_PA,     "LATIOS: COSMIC DUET!",        "COSMIC DUET",    "DRAGON RUSH",  FALSE },
++    { SPECIES_DEOXYS,    BOSS_PA,     "DEOXYS: Z-PSI!",              "Z-PSI",          "COSMIC DUET",  FALSE },
++    { SPECIES_MEW,       BOSS_PA,     "MEW: Z-PSI!",                 "Z-PSI",          NULL,           FALSE },
++    { SPECIES_LUGIA,     BOSS_PA,     "LUGIA: GEYSER!",              "GEYSER",         "DIVE BOMBER",  FALSE },
++    { SPECIES_HO_OH,     BOSS_PA,     "HO-OH: SOLAR FLARE!",         "SOLAR FLARE",    "DIVE BOMBER",  FALSE },
++};
++#define BOSS_PHASE_FRAMES     540   // TUNE: 9 s of fight time; 6 s below half HP
++#define BOSS_PHASE_FRAMES_LOW 360
++#define BOSS_WARN_FRAMES      45    // TUNE: the announcement, then the phase lands
++
++static s8 PAByName(const char *name)
++{
++    s32 k;
++    if (name == NULL)
++        return -1;
++    for (k = 0; k < PKBN_PA_COUNT; k++)
++        if (strcmp(gPkbnProgramAdvances[k].name, name) == 0)
++            return k;
++    return -1;
++}
++
++static u8 BossOf(u16 species)
++{
++    u32 i;
++    for (i = 0; i < ARRAY_COUNT(sBosses); i++)
++        if (sBosses[i].species == species)
++            return i + 1;
++    return 0;
++}
++
+ static void Begin(void)
+ {
+     s32 i;
+@@ -798,6 +850,17 @@ static void Begin(void)
+         sB.timeLimit = c->seconds * 60;
+         PKBN_LOG("net challenge %u: %s, tier %u, %u at once, %u s", sB.challenge - 1, c->name, c->tier, c->together, c->seconds);
+     }
++    else if (!sB.trainer && (gBattleTypeFlags & BATTLE_TYPE_LEGENDARY))
++    {
++        sB.boss = BossOf(GetMonData(&gEnemyParty[0], MON_DATA_SPECIES));
++        if (sB.boss)
++        {
++            sB.rivalTier = 4;   // Emerald's trainer AI and a tier-4 NaviCust (TUNE)
++            sB.aiFlags = AI_SCRIPT_CHECK_BAD_MOVE | AI_SCRIPT_TRY_TO_FAINT | AI_SCRIPT_CHECK_VIABILITY;
++            sB.bossTimer = BOSS_PHASE_FRAMES / 2;
++            PKBN_LOG("boss battle: %s", sBosses[sB.boss - 1].phaseText);
++        }
++    }
+     else if (!sB.trainer)
+         AddWildPack();
+     PkbnWild_ClearPack();
+@@ -808,6 +871,8 @@ static void Begin(void)
+     sB.ballItem = Catch_NextBall(0, 1);
+     LoadActiveFromParty(lead < 0 ? 0 : lead);
+     LoadEnemy(&gEnemyParty[0]);
++    if (sB.boss && sBosses[sB.boss - 1].still)
++        sB.f[SIDE_ENEMY].navi.flags |= NCPF_SUPER_ARMOR;
+     sB.f[SIDE_PLAYER].x = 1;
+     sB.f[SIDE_PLAYER].y = 1;
+     sB.f[SIDE_ENEMY].x = 4;
+@@ -1657,12 +1722,93 @@ static s8 RivalPA(const struct Fighter *e)
+     return best;
+ }
+ 
++static void BossPhaseLands(struct Fighter *e)
++{
++    const struct BossDef *b = &sBosses[sB.boss - 1];
++    s32 n, tries;
++    switch (b->phase)
++    {
++    case BOSS_CRACK:
++        // 3 of your panels crack; one already cracked breaks (never the one you stand on, never more than 3 holes)
++        for (n = 0, tries = 0; n < 3 && tries < 40; tries++)
++        {
++            s8 x = Random() % PLAYER_COLS, y = Random() % GRID_ROWS;
++            u8 holes = 0, r, c;
++            for (r = 0; r < GRID_ROWS; r++)
++                for (c = 0; c < PLAYER_COLS; c++)
++                    holes += sB.panel[r][c] == PANEL_BROKEN;
++            if (sB.panel[y][x] == PANEL_CRACKED && holes < 3 && (x != sB.f[SIDE_PLAYER].x || y != sB.f[SIDE_PLAYER].y))
++                Field_SetPanel(x, y, PANEL_BROKEN), n++;
++            else if (sB.panel[y][x] == PANEL_NORMAL)
++                Moves_ComboPanel(TYPE_GROUND, x, y), n++;
++        }
++        PlaySE(SE_M_EARTHQUAKE);
++        break;
++    case BOSS_TIDE:
++    {
++        // the row you're on becomes a current toward the foes: it carries you to your front column
++        s8 y = sB.f[SIDE_PLAYER].y, x;
++        for (x = 0; x < PLAYER_COLS; x++)
++            if (sB.panel[y][x] != PANEL_BROKEN)
++                Field_SetPanel(x, y, PANEL_ROAD_RIGHT);
++        PlaySE(SE_M_SURF);
++        break;
++    }
++    case BOSS_FREEZE:
++        for (n = 0, tries = 0; n < 3 && tries < 40; tries++)
++        {
++            s8 x = Random() % PLAYER_COLS, y = Random() % GRID_ROWS;
++            if (sB.panel[y][x] == PANEL_NORMAL)
++                Moves_ComboPanel(TYPE_ICE, x, y), n++;
++        }
++        PlaySE(SE_M_ICY_WIND);
++        break;
++    case BOSS_PA:
++    {
++        s8 pa = PAByName(b->phasePA);
++        if (pa >= 0)
++        {
++            EnemyLineUp(gPkbnProgramAdvances[pa].kind);
++            Moves_UsePA(SIDE_ENEMY, pa, &e->bm, e->name, 0);
++        }
++        break;
++    }
++    }
++    PKBN_LOG("boss phase: %s", b->phaseText);
++}
++
++// Per fight frame for a boss: the phase rhythm (time stops with the Custom screen, like everything else).
++static void BossFrame(void)
++{
++    struct Fighter *e = &sB.f[SIDE_ENEMY];
++    if (!sB.boss || e->bm.hp == 0)
++        return;
++    if (sB.bossPending)
++    {
++        if (--sB.bossPending == 0 && !BusyOrDisabled(SIDE_ENEMY))
++            BossPhaseLands(e);
++        return;
++    }
++    if (sB.bossTimer && --sB.bossTimer)
++        return;
++    sB.bossTimer = e->bm.hp <= e->bm.maxHP / 2 ? BOSS_PHASE_FRAMES_LOW : BOSS_PHASE_FRAMES;
++    if (Moves_SideHasPending(SIDE_ENEMY))
++    {
++        sB.bossTimer = 30;   // after its attack lands
++        return;
++    }
++    Flash(sBosses[sB.boss - 1].phaseText, BOSS_WARN_FRAMES + 30);
++    PlayCry_Normal(e->bm.species, 0);
++    sB.bossPending = BOSS_WARN_FRAMES;
++}
++
+ static bool8 RivalSpecial(struct Fighter *e)
+ {
+     s8 pa;
+-    u8 allowed = sB.rivalTier >= 5 ? 2 : sB.rivalTier >= 3 ? 1 : 0;
++    u8 allowed = sB.boss ? 2 : sB.rivalTier >= 5 ? 2 : sB.rivalTier >= 3 ? 1 : 0;
+     u32 hpLine = e->paUses == 0 ? e->bm.maxHP / 2 : e->bm.maxHP / 4;
+-    if (e->paUses >= allowed || e->bm.hp > hpLine || (pa = RivalPA(e)) < 0)
++    if (e->paUses >= allowed || e->bm.hp > hpLine
++     || (pa = sB.boss ? PAByName(sBosses[sB.boss - 1].signature) : RivalPA(e)) < 0)
+         return FALSE;
+     {
+         char line[48];
+@@ -1746,6 +1892,8 @@ static void UpdateOneEnemy(void)
+         return;
+     }
+ 
++    if (sB.boss && sBosses[sB.boss - 1].still)
++        return;   // a Regi stands its ground
+     if (sB.aiStepTimer && --sB.aiStepTimer == 0 && !e->hold)
+     {
+         if (e->style)
+@@ -2123,6 +2271,7 @@ static void UpdateFight(void)
+     UpdateEnemy();
+     if (sB.state != ST_FIGHT)
+         return;
++    BossFrame();
+     Moves_Update();
+     CheckFaints();
+ }
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index c8b7b6b..a17f48d 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -548,6 +548,8 @@ static void DrawStages(u16 *fb, s32 x, s32 y, const struct Fighter *f)
+     if (f->recharge)  Text(fb, x, y, "RCH", COL_HP_LOW);
+ }
+ 
++static const char *WeatherName(void);
++
+ static void DrawPlayerHud(u16 *fb)
+ {
+     const struct Fighter *f = &sB.f[SIDE_PLAYER];
+@@ -607,7 +609,7 @@ static void DrawEnemyHud(u16 *fb)
+         Text(fb, x - 4 - nw, 0, ncp, COL_WHITE);
+     }
+     x = CW - 4 - w;
+-    DrawStages(fb, x - 4, 20, f);
++    DrawStages(fb, x - 4, WeatherName() ? 29 : 20, f);   // under the weather tag when there is one
+     if (sB.trainer)
+     {
+         // the trainer's remaining Pokémon
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index ee9b80e..c9061de 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -19,6 +19,7 @@
+ #include "money.h"
+ #include "battle_setup.h"
+ #include "pkbn/grid_battle.h"
++#include "pkbn/challenge.h"
+ #include "pkbn/render.h"
+ #include "pokedex.h"
+ #include "pkbn/bot.h"
+@@ -486,6 +487,16 @@ void Pkbn_SelfTestMaybeStart(void)
+     if (getenv("PKBN_TEST_THROW") != NULL)
+         sThrowsLeft = (u8)atoi(getenv("PKBN_TEST_THROW"));
+     gBattleTypeFlags = 0;
++    // PKBN_TEST_LEGENDARY=1: the wild Pokémon is fought as a scripted legendary (POC-14 boss battles)
++    if (getenv("PKBN_TEST_LEGENDARY") != NULL)
++        gBattleTypeFlags = BATTLE_TYPE_LEGENDARY;
++    // PKBN_TEST_CHALLENGE=n: NET CHALLENGE n instead of the wild Pokémon (POC-14)
++    if (getenv("PKBN_TEST_CHALLENGE") != NULL)
++    {
++        u8 ch = (u8)atoi(getenv("PKBN_TEST_CHALLENGE"));
++        PkbnChallenge_BuildParty(ch);
++        gPkbnChallengeActive = ch + 1;
++    }
+     // PKBN_TEST_TRAINER=id: a single trainer battle against gTrainers[id] instead of the wild Pokémon
+     if (getenv("PKBN_TEST_TRAINER") != NULL)
+     {
+-- 
+2.43.0
+

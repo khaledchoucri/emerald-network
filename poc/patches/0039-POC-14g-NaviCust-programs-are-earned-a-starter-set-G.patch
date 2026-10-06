@@ -1,0 +1,1284 @@
+From c4715aeb14a26f0c94e9a6f3ef90167ed2441aa0 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 02:58:49 +0300
+Subject: [PATCH 39/44] POC-14g: NaviCust programs are earned - a starter set,
+ Gym Leaders' first wins, NET CHALLENGE custom battles on the PC
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ data/scripts/pc.inc          |  23 ++++
+ data/specials.inc            |   3 +
+ include/battle_setup.h       |   1 +
+ include/pkbn/challenge.h     |  47 +++++++
+ include/pkbn/chip_pack.h     |   2 +
+ include/pkbn/grid_internal.h |   3 +
+ include/pkbn/navicust.h      |   1 +
+ pkbn_playlog.jsonl           |   2 +
+ src/battle_setup.c           |  14 +-
+ src/field_specials.c         |  51 ++++++++
+ src/new_game.c               |   2 +-
+ src/pkbn/challenge.c         |  88 +++++++++++++
+ src/pkbn/challenge_table.inc | 123 +++++++++++++++++
+ src/pkbn/challenge_ui.c      | 247 +++++++++++++++++++++++++++++++++++
+ src/pkbn/grid_battle.c       |  78 +++++++++--
+ src/pkbn/grid_field.c        |  38 ++++++
+ src/pkbn/leader.c            |  20 +++
+ src/pkbn/pkbn_save.c         |  33 ++++-
+ src/pkbn/post_battle.c       |  15 ++-
+ src/script_menu.c            |  26 +++-
+ 20 files changed, 792 insertions(+), 25 deletions(-)
+ create mode 100644 include/pkbn/challenge.h
+ create mode 100644 pkbn_playlog.jsonl
+ create mode 100644 src/pkbn/challenge.c
+ create mode 100644 src/pkbn/challenge_table.inc
+ create mode 100644 src/pkbn/challenge_ui.c
+
+diff --git a/data/scripts/pc.inc b/data/scripts/pc.inc
+index f2b8f47..d659978 100644
+--- a/data/scripts/pc.inc
++++ b/data/scripts/pc.inc
+@@ -11,6 +11,7 @@ EventScript_PCMainMenu::
+ 	message gText_WhichPCShouldBeAccessed
+ 	waitmessage
+ 	special ScriptMenu_CreatePCMultichoice
++	special PkbnPcMenuRemap
+ 	goto EventScript_AccessPC
+ 	end
+ 
+@@ -20,9 +21,31 @@ EventScript_AccessPC::
+ 	case 1, EventScript_AccessPlayersPC
+ 	case 2, EventScript_AccessHallOfFame
+ 	case 3, EventScript_TurnOffPC
++	case 10, EventScript_PkbnNetChallenge
+ 	case MULTI_B_PRESSED, EventScript_TurnOffPC
+ 	end
+ 
++@ pkbn POC-14: NET CHALLENGE - custom battles that pay NaviCust programs (src/pkbn/challenge.c)
++EventScript_PkbnNetChallenge::
++	playse SE_PC_LOGIN
++	msgbox Text_PkbnNetChallengeLogin, MSGBOX_DEFAULT
++	special PkbnNetChallengeMenu
++	waitstate
++	goto_if_eq VAR_RESULT, 0xFF, EventScript_PCMainMenu
++	special PkbnStartNetChallenge
++	waitstate
++	msgbox Text_PkbnNetChallengeOut, MSGBOX_DEFAULT
++	goto EventScript_PCMainMenu
++	end
++
++Text_PkbnNetChallengeLogin:
++	.string "Connected to the NET.\n"
++	.string "Challenge data received!$"
++
++Text_PkbnNetChallengeOut:
++	.string "Jacked out. Your POKéMON are just\n"
++	.string "as they were before the simulation.$"
++
+ EventScript_AccessPlayersPC::
+ 	playse SE_PC_LOGIN
+ 	msgbox gText_AccessedPlayersPC, MSGBOX_DEFAULT
+diff --git a/data/specials.inc b/data/specials.inc
+index 360dee9..70a42c7 100644
+--- a/data/specials.inc
++++ b/data/specials.inc
+@@ -541,3 +541,6 @@ gSpecials::
+ 	def_special CloseDeptStoreElevatorWindow
+ 	def_special TrySetBattleTowerLinkType
+ 	def_special PkbnHiddenChipData
++	def_special PkbnPcMenuRemap
++	def_special PkbnNetChallengeMenu
++	def_special PkbnStartNetChallenge
+diff --git a/include/battle_setup.h b/include/battle_setup.h
+index 41ab138..3b423ef 100755
+--- a/include/battle_setup.h
++++ b/include/battle_setup.h
+@@ -23,6 +23,7 @@ void BattleSetup_StartBattlePikeWildBattle(void);
+ void BattleSetup_StartRoamerBattle(void);
+ void StartWallyTutorialBattle(void);
+ void BattleSetup_StartScriptedWildBattle(void);
++void BattleSetup_StartPkbnChallenge(void);
+ void BattleSetup_StartLatiBattle(void);
+ void BattleSetup_StartLegendaryBattle(void);
+ void StartGroudonKyogreBattle(void);
+diff --git a/include/pkbn/challenge.h b/include/pkbn/challenge.h
+new file mode 100644
+index 0000000..da34e1d
+--- /dev/null
++++ b/include/pkbn/challenge.h
+@@ -0,0 +1,47 @@
++#ifndef GUARD_PKBN_CHALLENGE_H
++#define GUARD_PKBN_CHALLENGE_H
++
++#include "main.h"
++
++// NET CHALLENGE (POC-14): custom battles from the PC, our own content (TUNE throughout). A challenge is a
++// simulation: nothing is lost, no EXP is gained, and the first clear pays two NaviCust programs.
++
++enum { CH_WEATHER_NONE, CH_WEATHER_SUN, CH_WEATHER_RAIN, CH_WEATHER_SAND, CH_WEATHER_HAIL };
++enum { CH_PANELS_NONE, CH_PANELS_CRACKED, CH_PANELS_HOLY, CH_PANELS_CURRENT, CH_PANELS_POISON };
++
++#define PKBN_CHALLENGE_COUNT 12
++#define PKBN_CHALLENGE_BADGES_CHAMPION 9   // "badges" 9: the Champion beaten (FLAG_SYS_GAME_CLEAR)
++
++struct PkbnChallengeMon
++{
++    u16 species;
++    u8 level;
++    u16 moves[MAX_MON_MOVES];
++};
++
++struct PkbnChallenge
++{
++    const char *name;
++    const char *desc;
++    u8 badges;       // badges needed to open it
++    u8 tier;         // rival strength of the foes (AI, NaviCust, combos and PAs)
++    u8 together;     // foes on the grid at once; the rest come in as they fall
++    u8 weather;
++    u8 panels;
++    u16 seconds;     // time limit, 0 = none
++    const char *rewards[2];   // NaviCust programs for the first clear
++    u8 monCount;
++    struct PkbnChallengeMon mons[PARTY_SIZE];
++};
++
++extern const struct PkbnChallenge gPkbnChallenges[PKBN_CHALLENGE_COUNT];
++extern u8 gPkbnChallengeActive;   // 0: none; else the running challenge + 1
++
++u8 PkbnChallenge_Badges(void);                 // badges for unlocking, 9 once the game is cleared
++bool8 PkbnChallenge_Unlocked(u8 i);
++void PkbnChallenge_BuildParty(u8 i);           // fills gEnemyParty
++// After a challenge battle: the first clear pays its programs; any clear pays a * copy of a foe's move.
++void PkbnChallenge_AfterWin(u8 i, char *line1, char *line2, u32 size);
++void PkbnChallengeMenu_Open(MainCallback exitCallback);   // the NET CHALLENGE list (gSpecialVar_Result: pick or 0xFF)
++
++#endif // GUARD_PKBN_CHALLENGE_H
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index 3cd8a30..9583733 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -51,6 +51,8 @@ bool8 PkbnChallenge_Cleared(u8 n);
+ void PkbnChallenge_SetCleared(u8 n);
+ void PkbnProgram_Grant(u8 prog, u8 n);
+ bool8 PkbnProgram_Economy(void);
++s32 PkbnProgram_ByName(const char *name);
++bool8 PkbnProgram_GrantByName(const char *name, u8 n);
+ void PkbnFolder_Equip(u8 n);
+ void PkbnFolderEdit_Set(const u16 *moves, const u8 *letters, u8 count);
+ u8 PkbnFolder_PartyBattleMons(struct BattlePokemon *out);    // the party as BattlePokemon (species/moves/types)
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 11e9dfa..aed6295 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -280,6 +280,8 @@ struct GridBattle
+     u16 foeAi[MAX_FOES][2];    // aiStepTimer / aiAttackTimer of the foes that aren't selected
+     // trainer battles
+     bool8 trainer;
++    u8 challenge;              // POC-14 NET CHALLENGE: index + 1 (a simulation: no EXP, no catching, nothing lost)
++    u32 timeLimit;             // POC-14: fight frames before TIME UP (0 = none)
+     u8 rivalTier;              // POC-11: 1-5 for Gym Leaders, the rival, E4... (src/pkbn/rival.c), 0 otherwise
+     u32 aiFlags;               // the trainer's Emerald AI scripts (gTrainers[].aiFlags), used when rivalTier
+     u8 enemySlot;              // gEnemyParty index currently out
+@@ -341,6 +343,7 @@ bool8 Moves_WouldHit(u8 kind, u16 move, s8 x, s8 y, s8 tx, s8 ty);
+ // grid_field.c
+ void Field_Init(void);
+ void Field_StartConditions(void);   // overworld weather and terrain (real maps only)
++void Field_ChallengeConditions(u8 weather, u8 panels);   // a NET CHALLENGE's preset (POC-14)
+ void Field_Update(void);          // per fight frame: panels, poison, timers
+ void Field_EndTurn(void);         // every CUSTOM_FRAMES of fight time
+ bool8 Field_CanStand(u8 side, s8 x, s8 y);
+diff --git a/include/pkbn/navicust.h b/include/pkbn/navicust.h
+index d0334d4..5b3fa1d 100644
+--- a/include/pkbn/navicust.h
++++ b/include/pkbn/navicust.h
+@@ -97,6 +97,7 @@ const char *Navi_BugShort(u8 bugType);
+ 
+ // Sidecar save (src/pkbn/pkbn_save.c)
+ void PkbnSave_Reset(void);
++void PkbnSave_NewGame(void);   // a new game: programs are earned, a starter set is owned
+ void PkbnSave_Read(void);
+ void PkbnSave_Write(void);
+ struct PkbnNavi *PkbnSave_FindNavi(u16 id);
+diff --git a/pkbn_playlog.jsonl b/pkbn_playlog.jsonl
+new file mode 100644
+index 0000000..9453638
+--- /dev/null
++++ b/pkbn_playlog.jsonl
+@@ -0,0 +1,2 @@
++{"time":1791244515,"map":[2,2],"badges":0,"trainer":-1,"outcome":4,"frames":1364,"turns":2,"enemies":[[74,12],[74,12],[74,12]],"party":[[281,20,54,54],[309,8,25,25]],"busting":{"turns":-1,"seconds":-1,"used":0,"time":0,"hits":0,"steps":0,"chain":0,"counters":0,"nofaint":0},"capture":-1,"reward":"","folder":6,"folderLeft":1,"chips":[64,24,116],"pas":[],"pack":6,"candy":0,"money":3000}
++{"time":1791244716,"map":[2,2],"badges":0,"trainer":-1,"outcome":1,"frames":875,"turns":1,"enemies":[[74,12],[74,12],[74,12]],"party":[[285,40,130,130],[309,8,25,25]],"busting":{"turns":7,"seconds":6,"used":7,"time":5,"hits":1,"steps":0,"chain":0,"counters":0,"nofaint":1},"capture":-1,"reward":"GOT A CHIP: DEFENSE CURL *!","folder":6,"folderLeft":0,"chips":[58,89],"pas":[],"pack":7,"candy":0,"money":3000}
+diff --git a/src/battle_setup.c b/src/battle_setup.c
+index 881b9e0..ed16207 100644
+--- a/src/battle_setup.c
++++ b/src/battle_setup.c
+@@ -375,7 +375,8 @@ static void Task_BattleStart(u8 taskId)
+             // PKBN POC-0: route plain wild battles to our module (research/02, §1)
+             // PKBN POC-7: and single trainer battles (CB2_EndTrainerBattle / CB2_EndRematchBattle)
+             if ((gMain.savedCallback == CB2_EndWildBattle || gMain.savedCallback == CB2_EndTrainerBattle
+-                 || gMain.savedCallback == CB2_EndRematchBattle) && PkbnBattle_ShouldHandle())
++                 || gMain.savedCallback == CB2_EndRematchBattle || gMain.savedCallback == CB2_EndScriptedWildBattle)
++                && PkbnBattle_ShouldHandle())
+                 SetMainCallback2(PkbnBattle_GetEntryCallback());
+             else
+                 SetMainCallback2(CB2_InitBattle);
+@@ -510,6 +511,17 @@ void BattleSetup_StartScriptedWildBattle(void)
+     TryUpdateGymLeaderRematchFromWild();
+ }
+ 
++// pkbn POC-14: a NET CHALLENGE (src/pkbn/challenge.c). gEnemyParty is already built; it runs like a scripted wild
++// battle (the script waits, a loss is turned into RAN by the grid: it's a simulation).
++void BattleSetup_StartPkbnChallenge(void)
++{
++    LockPlayerFieldControls();
++    gMain.savedCallback = CB2_EndScriptedWildBattle;
++    gBattleTypeFlags = 0;
++    CreateBattleStartTask(B_TRANSITION_GRID_SQUARES, MUS_VS_TRAINER);
++    IncrementGameStat(GAME_STAT_TOTAL_BATTLES);
++}
++
+ void BattleSetup_StartLatiBattle(void)
+ {
+     LockPlayerFieldControls();
+diff --git a/src/field_specials.c b/src/field_specials.c
+index ab003f9..58c4daf 100644
+--- a/src/field_specials.c
++++ b/src/field_specials.c
+@@ -66,6 +66,8 @@
+ #include "constants/metatile_labels.h"
+ #include "palette.h"
+ #include "pkbn/chip_pack.h"
++#include "pkbn/challenge.h"
++#include "battle_setup.h"
+ 
+ #define TAG_ITEM_ICON 5500
+ 
+@@ -949,6 +951,55 @@ void PkbnHiddenChipData(void)
+ #endif
+ }
+ 
++// pkbn POC-14: NET CHALLENGE on the PC (data/scripts/pc.inc). The PC menu gets a NET CHALLENGE row (script_menu.c);
++// PkbnPcMenuRemap turns its answer back into the vanilla numbering, with 10 for NET CHALLENGE.
++void PkbnPcMenuRemap(void)
++{
++#ifdef PORTABLE
++    if (gSpecialVar_Result == 2)
++        gSpecialVar_Result = 10;
++    else if (gSpecialVar_Result > 2 && gSpecialVar_Result != MULTI_B_PRESSED)
++        gSpecialVar_Result--;
++#endif
++}
++
++#ifdef PORTABLE
++static void Task_OpenNetChallenge(u8 taskId)
++{
++    if (!gPaletteFade.active)
++    {
++        CleanupOverworldWindowsAndTilemaps();
++        PkbnChallengeMenu_Open(CB2_ReturnToFieldContinueScript);
++        DestroyTask(taskId);
++    }
++}
++#endif
++
++// The challenge list; VAR_RESULT: the challenge picked, or 0xFF.
++void PkbnNetChallengeMenu(void)
++{
++#ifdef PORTABLE
++    LockPlayerFieldControls();
++    FadeScreen(FADE_TO_BLACK, 0);
++    CreateTask(Task_OpenNetChallenge, 10);
++#else
++    gSpecialVar_Result = 0xFF;
++    ScriptContext_Enable();
++#endif
++}
++
++// Jack in: the foes of challenge VAR_RESULT, then the battle (battle_setup.c).
++void PkbnStartNetChallenge(void)
++{
++#ifdef PORTABLE
++    PkbnChallenge_BuildParty(gSpecialVar_Result);
++    gPkbnChallengeActive = gSpecialVar_Result + 1;
++    BattleSetup_StartPkbnChallenge();
++#else
++    ScriptContext_Enable();
++#endif
++}
++
+ u16 GetWeekCount(void)
+ {
+     u16 weekCount = gLocalTime.days / 7;
+diff --git a/src/new_game.c b/src/new_game.c
+index c686641..850af93 100644
+--- a/src/new_game.c
++++ b/src/new_game.c
+@@ -168,7 +168,7 @@ void NewGameInitData(void)
+     gDifferentSaveFile = TRUE;
+     gSaveBlock2Ptr->encryptionKey = 0;
+ #ifdef PORTABLE
+-    PkbnSave_Reset();   // pkbn: a new game starts a new sidecar save
++    PkbnSave_NewGame();   // pkbn: a new game starts a new sidecar save (programs are earned)
+ #endif
+     ZeroPlayerPartyMons();
+     ZeroEnemyPartyMons();
+diff --git a/src/pkbn/challenge.c b/src/pkbn/challenge.c
+new file mode 100644
+index 0000000..3782125
+--- /dev/null
++++ b/src/pkbn/challenge.c
+@@ -0,0 +1,88 @@
++// NET CHALLENGE (POC-14): custom battles on the PC that pay NaviCust programs. Our own content (TUNE): the foes,
++// levels, rules and rewards are not from either game. See include/pkbn/challenge.h.
++#ifdef PORTABLE
++#include <stdio.h>
++#include <string.h>
++#include "global.h"
++#include "pokemon.h"
++#include "event_data.h"
++#include "random.h"
++#include "constants/species.h"
++#include "constants/moves.h"
++#include "constants/flags.h"
++#include "pkbn/challenge.h"
++#include "pkbn/chip_pack.h"
++#include "pkbn/navicust.h"
++#include "pkbn/folder.h"
++#include "pkbn/render.h"
++#include "data.h"
++
++u8 gPkbnChallengeActive;
++
++const struct PkbnChallenge gPkbnChallenges[PKBN_CHALLENGE_COUNT] = {
++#include "challenge_table.inc"
++};
++
++u8 PkbnChallenge_Badges(void)
++{
++    u8 b = 0;
++    u16 f;
++    if (FlagGet(FLAG_SYS_GAME_CLEAR))
++        return PKBN_CHALLENGE_BADGES_CHAMPION;
++    for (f = FLAG_BADGE01_GET; f <= FLAG_BADGE08_GET; f++)
++        b += FlagGet(f) ? 1 : 0;
++    return b;
++}
++
++bool8 PkbnChallenge_Unlocked(u8 i)
++{
++    return i < PKBN_CHALLENGE_COUNT && PkbnChallenge_Badges() >= gPkbnChallenges[i].badges;
++}
++
++void PkbnChallenge_BuildParty(u8 i)
++{
++    const struct PkbnChallenge *c = &gPkbnChallenges[i];
++    u8 m, k;
++    ZeroEnemyPartyMons();
++    for (m = 0; m < c->monCount && m < PARTY_SIZE; m++)
++    {
++        // full IVs, like a strong trainer (CreateNPCTrainerParty uses fixedIV from the party data)
++        CreateMon(&gEnemyParty[m], c->mons[m].species, c->mons[m].level, MAX_PER_STAT_IVS, FALSE, 0, OT_ID_RANDOM_NO_SHINY, 0);
++        for (k = 0; k < MAX_MON_MOVES; k++)
++        {
++            u16 mv = c->mons[m].moves[k];
++            u8 pp = gBattleMoves[mv].pp;
++            SetMonData(&gEnemyParty[m], MON_DATA_MOVE1 + k, &mv);
++            SetMonData(&gEnemyParty[m], MON_DATA_PP1 + k, &pp);
++        }
++    }
++    printf("[pkbn] net challenge %u: %s, %u Pokemon, tier %u, %u at once\n", i, c->name, c->monCount, c->tier, c->together);
++}
++
++void PkbnChallenge_AfterWin(u8 i, char *line1, char *line2, u32 size)
++{
++    const struct PkbnChallenge *c = &gPkbnChallenges[i];
++    line1[0] = line2[0] = '\0';
++    if (!PkbnChallenge_Cleared(i))
++    {
++        PkbnChallenge_SetCleared(i);
++        PkbnProgram_GrantByName(c->rewards[0], 1);
++        PkbnProgram_GrantByName(c->rewards[1], 1);
++        snprintf(line1, size, "%s CLEARED!", c->name);
++        snprintf(line2, size, "GOT PROGRAMS %s AND %s!", c->rewards[0], c->rewards[1]);
++    }
++    else
++    {
++        // a repeat clear: a * copy of one of the foes' moves (TUNE)
++        const struct PkbnChallengeMon *m = &c->mons[Random() % c->monCount];
++        u16 mv = m->moves[Random() % MAX_MON_MOVES];
++        char nm[16];
++        PkbnPack_Add(mv, LETTER_WILD, 1);
++        Pkbn_GameStringToAscii(nm, gMoveNames[mv], sizeof(nm));
++        snprintf(line1, size, "%s CLEARED AGAIN!", c->name);
++        snprintf(line2, size, "GOT %s * CHIP DATA!", nm);
++    }
++    printf("[pkbn] net challenge %u cleared: %s / %s\n", i, line1, line2);
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/challenge_table.inc b/src/pkbn/challenge_table.inc
+new file mode 100644
+index 0000000..9a24fea
+--- /dev/null
++++ b/src/pkbn/challenge_table.inc
+@@ -0,0 +1,123 @@
++    {
++        "PEBBLE STORM", "Three Geodude roll in at once.",
++        0, 1, 3, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "HardStn", "Zinc" }, 3,
++        {
++            { SPECIES_GEODUDE, 12, { MOVE_TACKLE, MOVE_ROCK_THROW, MOVE_DEFENSE_CURL, MOVE_MUD_SPORT } },
++            { SPECIES_GEODUDE, 12, { MOVE_TACKLE, MOVE_ROCK_THROW, MOVE_DEFENSE_CURL, MOVE_MUD_SPORT } },
++            { SPECIES_GEODUDE, 12, { MOVE_TACKLE, MOVE_ROCK_THROW, MOVE_DEFENSE_CURL, MOVE_MUD_SPORT } }
++        },
++    },
++    {
++        "BUG SWARM", "A swarm that won't wait: clear it in 60 seconds.",
++        1, 1, 3, CH_WEATHER_NONE, CH_PANELS_NONE, 60, { "SlvPowdr", "QuickClw" }, 4,
++        {
++            { SPECIES_VOLBEAT, 16, { MOVE_TACKLE, MOVE_CONFUSE_RAY, MOVE_QUICK_ATTACK, MOVE_SIGNAL_BEAM } },
++            { SPECIES_ILLUMISE, 16, { MOVE_TACKLE, MOVE_SWEET_SCENT, MOVE_CHARM, MOVE_QUICK_ATTACK } },
++            { SPECIES_SURSKIT, 17, { MOVE_QUICK_ATTACK, MOVE_BUBBLE, MOVE_SWEET_SCENT, MOVE_WATER_SPORT } },
++            { SPECIES_NINJASK, 18, { MOVE_SCRATCH, MOVE_FURY_CUTTER, MOVE_LEECH_LIFE, MOVE_SAND_ATTACK } }
++        },
++    },
++    {
++        "STATIC FIELD", "Magnets on cracked ground.",
++        2, 2, 2, CH_WEATHER_NONE, CH_PANELS_CRACKED, 0, { "Carbos", "BrtPowdr" }, 4,
++        {
++            { SPECIES_MAGNEMITE, 22, { MOVE_THUNDER_WAVE, MOVE_THUNDER_SHOCK, MOVE_SPARK, MOVE_SUPERSONIC } },
++            { SPECIES_MAGNEMITE, 22, { MOVE_THUNDER_WAVE, MOVE_THUNDER_SHOCK, MOVE_SPARK, MOVE_SUPERSONIC } },
++            { SPECIES_VOLTORB, 23, { MOVE_SPARK, MOVE_SELF_DESTRUCT, MOVE_ROLLOUT, MOVE_SCREECH } },
++            { SPECIES_MANECTRIC, 25, { MOVE_SPARK, MOVE_QUICK_ATTACK, MOVE_BITE, MOVE_THUNDER_WAVE } }
++        },
++    },
++    {
++        "HEAT WAVE", "Under a burning sun.",
++        3, 2, 2, CH_WEATHER_SUN, CH_PANELS_NONE, 0, { "Calcium", "MircSeed" }, 4,
++        {
++            { SPECIES_SLUGMA, 26, { MOVE_EMBER, MOVE_ROCK_THROW, MOVE_HARDEN, MOVE_AMNESIA } },
++            { SPECIES_TORKOAL, 27, { MOVE_FIRE_SPIN, MOVE_BODY_SLAM, MOVE_PROTECT, MOVE_SMOKESCREEN } },
++            { SPECIES_NUMEL, 26, { MOVE_EMBER, MOVE_MAGNITUDE, MOVE_TAKE_DOWN, MOVE_FOCUS_ENERGY } },
++            { SPECIES_CAMERUPT, 30, { MOVE_EMBER, MOVE_MAGNITUDE, MOVE_TAKE_DOWN, MOVE_ROCK_SLIDE } }
++        },
++    },
++    {
++        "DESERT GAUNTLET", "Six in a row in a sandstorm, three minutes.",
++        4, 3, 1, CH_WEATHER_SAND, CH_PANELS_NONE, 180, { "SoftSand", "HP Up" }, 6,
++        {
++            { SPECIES_SANDSHREW, 28, { MOVE_SLASH, MOVE_SAND_ATTACK, MOVE_POISON_STING, MOVE_SWIFT } },
++            { SPECIES_TRAPINCH, 28, { MOVE_BITE, MOVE_SAND_ATTACK, MOVE_FAINT_ATTACK, MOVE_DIG } },
++            { SPECIES_CACNEA, 28, { MOVE_NEEDLE_ARM, MOVE_LEECH_SEED, MOVE_FAINT_ATTACK, MOVE_SAND_ATTACK } },
++            { SPECIES_BALTOY, 29, { MOVE_CONFUSION, MOVE_ROCK_TOMB, MOVE_HARDEN, MOVE_ANCIENT_POWER } },
++            { SPECIES_SANDSLASH, 31, { MOVE_SLASH, MOVE_SWIFT, MOVE_SAND_ATTACK, MOVE_FURY_SWIPES } },
++            { SPECIES_VIBRAVA, 33, { MOVE_DRAGON_BREATH, MOVE_SAND_TOMB, MOVE_CRUNCH, MOVE_DIG } }
++        },
++    },
++    {
++        "SKY RAID", "Three flyers dive at once.",
++        5, 3, 3, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "PoisBarb", "KingRock" }, 4,
++        {
++            { SPECIES_SWELLOW, 32, { MOVE_WING_ATTACK, MOVE_QUICK_ATTACK, MOVE_ENDEAVOR, MOVE_AERIAL_ACE } },
++            { SPECIES_PELIPPER, 32, { MOVE_WING_ATTACK, MOVE_WATER_GUN, MOVE_SUPERSONIC, MOVE_MIST } },
++            { SPECIES_ALTARIA, 33, { MOVE_PECK, MOVE_SING, MOVE_DRAGON_BREATH, MOVE_SAFEGUARD } },
++            { SPECIES_XATU, 34, { MOVE_NIGHT_SHADE, MOVE_CONFUSE_RAY, MOVE_PSYCHIC, MOVE_FUTURE_SIGHT } }
++        },
++    },
++    {
++        "DREAM MAZE", "Minds that put you to sleep.",
++        6, 4, 2, CH_WEATHER_NONE, CH_PANELS_HOLY, 0, { "ScopLens", "ShelBell" }, 4,
++        {
++            { SPECIES_KIRLIA, 36, { MOVE_HYPNOSIS, MOVE_PSYCHIC, MOVE_CALM_MIND, MOVE_DREAM_EATER } },
++            { SPECIES_GRUMPIG, 36, { MOVE_PSYBEAM, MOVE_CONFUSE_RAY, MOVE_MAGIC_COAT, MOVE_REST } },
++            { SPECIES_LUNATONE, 38, { MOVE_HYPNOSIS, MOVE_PSYCHIC, MOVE_COSMIC_POWER, MOVE_EXPLOSION } },
++            { SPECIES_GARDEVOIR, 40, { MOVE_PSYCHIC, MOVE_CALM_MIND, MOVE_HYPNOSIS, MOVE_DREAM_EATER } }
++        },
++    },
++    {
++        "DEEP CURRENT", "In the rain, on the water, three at once.",
++        7, 4, 3, CH_WEATHER_RAIN, CH_PANELS_CURRENT, 0, { "NevMeltI", "Leftovrs" }, 4,
++        {
++            { SPECIES_SHARPEDO, 40, { MOVE_CRUNCH, MOVE_SURF, MOVE_AGILITY, MOVE_SLASH } },
++            { SPECIES_WAILMER, 40, { MOVE_WATER_SPOUT, MOVE_ROLLOUT, MOVE_REST, MOVE_BODY_SLAM } },
++            { SPECIES_TENTACRUEL, 40, { MOVE_SURF, MOVE_SLUDGE_BOMB, MOVE_WRAP, MOVE_BARRIER } },
++            { SPECIES_WHISCASH, 42, { MOVE_EARTHQUAKE, MOVE_SURF, MOVE_AMNESIA, MOVE_RAIN_DANCE } }
++        },
++    },
++    {
++        "DRAGON'S DEN", "Four dragons, one after another.",
++        8, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "DrgnFang", "SuprArmr" }, 4,
++        {
++            { SPECIES_SHELGON, 45, { MOVE_DRAGON_CLAW, MOVE_HEADBUTT, MOVE_PROTECT, MOVE_ROCK_TOMB } },
++            { SPECIES_ALTARIA, 46, { MOVE_DRAGON_DANCE, MOVE_DRAGON_BREATH, MOVE_AERIAL_ACE, MOVE_EARTHQUAKE } },
++            { SPECIES_FLYGON, 48, { MOVE_DRAGON_CLAW, MOVE_EARTHQUAKE, MOVE_FLAMETHROWER, MOVE_CRUNCH } },
++            { SPECIES_SALAMENCE, 50, { MOVE_DRAGON_CLAW, MOVE_FLAMETHROWER, MOVE_CRUNCH, MOVE_ROCK_SLIDE } }
++        },
++    },
++    {
++        "PHANTOM HOUR", "Three ghosts at once, two minutes.",
++        8, 5, 3, CH_WEATHER_NONE, CH_PANELS_POISON, 120, { "SpellTag", "BlkGlass" }, 4,
++        {
++            { SPECIES_BANETTE, 45, { MOVE_SHADOW_BALL, MOVE_WILL_O_WISP, MOVE_FAINT_ATTACK, MOVE_CURSE } },
++            { SPECIES_DUSCLOPS, 45, { MOVE_SHADOW_PUNCH, MOVE_CONFUSE_RAY, MOVE_CURSE, MOVE_ICE_BEAM } },
++            { SPECIES_SABLEYE, 45, { MOVE_SHADOW_BALL, MOVE_NIGHT_SHADE, MOVE_FAINT_ATTACK, MOVE_CONFUSE_RAY } },
++            { SPECIES_BANETTE, 47, { MOVE_SHADOW_BALL, MOVE_PSYCHIC, MOVE_THUNDERBOLT, MOVE_SKILL_SWAP } }
++        },
++    },
++    {
++        "IRON WALL", "Steel that doesn't break.",
++        8, 5, 2, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "MetlCoat", "FocsBand" }, 4,
++        {
++            { SPECIES_AGGRON, 50, { MOVE_IRON_TAIL, MOVE_DOUBLE_EDGE, MOVE_METAL_SOUND, MOVE_PROTECT } },
++            { SPECIES_METANG, 48, { MOVE_METEOR_MASH, MOVE_CONFUSION, MOVE_AGILITY, MOVE_SCARY_FACE } },
++            { SPECIES_SKARMORY, 48, { MOVE_STEEL_WING, MOVE_SPIKES, MOVE_AGILITY, MOVE_AIR_CUTTER } },
++            { SPECIES_REGISTEEL, 50, { MOVE_IRON_DEFENSE, MOVE_AMNESIA, MOVE_ANCIENT_POWER, MOVE_METAL_CLAW } }
++        },
++    },
++    {
++        "MASTER NET", "The hardest challenge: six champions, three at once.",
++        9, 5, 3, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "HP+200", "ChoiceBd" }, 6,
++        {
++            { SPECIES_METAGROSS, 60, { MOVE_METEOR_MASH, MOVE_PSYCHIC, MOVE_EARTHQUAKE, MOVE_AGILITY } },
++            { SPECIES_SALAMENCE, 60, { MOVE_DRAGON_CLAW, MOVE_FLAMETHROWER, MOVE_AERIAL_ACE, MOVE_EARTHQUAKE } },
++            { SPECIES_MILOTIC, 60, { MOVE_SURF, MOVE_ICE_BEAM, MOVE_RECOVER, MOVE_TOXIC } },
++            { SPECIES_GARDEVOIR, 60, { MOVE_PSYCHIC, MOVE_THUNDERBOLT, MOVE_CALM_MIND, MOVE_SHADOW_BALL } },
++            { SPECIES_BLAZIKEN, 60, { MOVE_SKY_UPPERCUT, MOVE_BLAZE_KICK, MOVE_SLASH, MOVE_BULK_UP } },
++            { SPECIES_SCEPTILE, 60, { MOVE_LEAF_BLADE, MOVE_DRAGON_CLAW, MOVE_EARTHQUAKE, MOVE_QUICK_ATTACK } }
++        },
++    },
+diff --git a/src/pkbn/challenge_ui.c b/src/pkbn/challenge_ui.c
+new file mode 100644
+index 0000000..a3b7966
+--- /dev/null
++++ b/src/pkbn/challenge_ui.c
+@@ -0,0 +1,247 @@
++// NET CHALLENGE list (POC-14): PC -> NET CHALLENGE. Drawn on our 264x176 canvas like the FOLDER screen.
++// Up/Down: pick a challenge. A: start it (gSpecialVar_Result = its index). B: back (0xFF).
++#include "pkbn/grid_vfx.h"   // first: it pulls in <stdlib.h> before global.h's macros
++#include "global.h"
++#include "data.h"
++#include "main.h"
++#include "pokemon.h"
++#include "sound.h"
++#include "event_data.h"
++#include "constants/songs.h"
++#include "pkbn/challenge.h"
++#include "pkbn/chip_pack.h"
++#include "pkbn/render.h"
++#include "pkbn/gfx.h"
++
++#ifdef PORTABLE
++#include <stdio.h>
++#include <string.h>
++
++#define CW PKBN_CANVAS_W
++#define CH PKBN_CANVAS_H
++#define RGB PKBN_RGB
++#define LIST_X 4
++#define LIST_Y 24
++#define ROW_H 11
++#define PANEL_X 150
++
++static struct
++{
++    MainCallback exit;
++    u8 cursor;
++    u8 iconsFor;
++    u16 icons[PARTY_SIZE][32 * 32];
++    u32 t;
++} sC;
++
++static const char *sKeys;
++static u32 sKeyClock;
++
++static s32 Text(u16 *fb, s32 x, s32 y, const char *s, u16 col)
++{
++    return Pkbn_DrawEmText(fb, x, y, s, PKBN_FONT_SMALL, col, RGB(2, 2, 5));
++}
++
++static s32 TextWrap(u16 *fb, s32 x, s32 y, s32 width, s32 lines, const char *s, u16 col)
++{
++    char line[96];
++    while (*s && lines-- > 0)
++    {
++        s32 n = 0, lastSpace = -1;
++        while (s[n] && n < (s32)sizeof(line) - 1)
++        {
++            memcpy(line, s, n + 1);
++            line[n + 1] = '\0';
++            if (Pkbn_EmTextWidth(line, PKBN_FONT_SMALL) > width)
++                break;
++            if (s[n] == ' ')
++                lastSpace = n;
++            n++;
++        }
++        if (s[n] && lastSpace > 0)
++            n = lastSpace;
++        memcpy(line, s, n);
++        line[n] = '\0';
++        Text(fb, x, y, line, col);
++        y += 10;
++        s += n;
++        while (*s == ' ')
++            s++;
++    }
++    return y;
++}
++
++static void LoadIcons(void)
++{
++    const struct PkbnChallenge *c = &gPkbnChallenges[sC.cursor];
++    u8 i;
++    for (i = 0; i < c->monCount; i++)
++        Pkbn_DecodeMonIcon(sC.icons[i], c->mons[i].species, 0, 0);
++    sC.iconsFor = sC.cursor;
++}
++
++static void DrawList(u16 *fb)
++{
++    u8 i, cleared = 0;
++    char line[40];
++    for (i = 0; i < PKBN_CHALLENGE_COUNT; i++)
++        cleared += PkbnChallenge_Cleared(i);
++    Pkbn_DrawEmText(fb, 6, 0, "NET CHALLENGE", PKBN_FONT_NORMAL, RGB(8, 28, 31), RGB(2, 2, 5));
++    snprintf(line, sizeof(line), "CLEARED %u/%u", cleared, PKBN_CHALLENGE_COUNT);
++    Text(fb, CW - 4 - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), 4, line, RGB(31, 31, 31));
++    for (i = 0; i < PKBN_CHALLENGE_COUNT; i++)
++    {
++        s32 y = LIST_Y + i * ROW_H;
++        bool8 open = PkbnChallenge_Unlocked(i), on = i == sC.cursor;
++        if (on)
++        {
++            Pkbn_FillRect(fb, LIST_X, y, PANEL_X - LIST_X - 4, ROW_H, RGB(6, 10, 22));
++            Pkbn_FrameRect(fb, LIST_X, y, PANEL_X - LIST_X - 4, ROW_H, RGB(8, 28, 31));
++        }
++        if (PkbnChallenge_Cleared(i))
++            Text(fb, LIST_X + 3, y, "*", RGB(31, 26, 6));
++        Text(fb, LIST_X + 12, y, gPkbnChallenges[i].name, open ? RGB(31, 31, 31) : RGB(12, 13, 16));
++        if (!open)
++        {
++            snprintf(line, sizeof(line), gPkbnChallenges[i].badges == PKBN_CHALLENGE_BADGES_CHAMPION ? "CHAMP"
++                     : gPkbnChallenges[i].badges == 1 ? "%u BADGE" : "%u BADGES",
++                     gPkbnChallenges[i].badges);
++            Text(fb, PANEL_X - 8 - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), y, line, RGB(20, 10, 10));
++        }
++    }
++}
++
++static void DrawPanel(u16 *fb)
++{
++    static const char *const sWeather[] = { NULL, "SUN", "RAIN", "SANDSTORM", "HAIL" };
++    static const char *const sPanels[] = { NULL, "CRACKED PANELS", "HOLY PANELS", "CURRENTS", "POISON PANELS" };
++    const struct PkbnChallenge *c = &gPkbnChallenges[sC.cursor];
++    bool8 open = PkbnChallenge_Unlocked(sC.cursor), done = PkbnChallenge_Cleared(sC.cursor);
++    char line[64];
++    s32 i, y, lo = 100, hi = 0;
++    if (sC.iconsFor != sC.cursor)
++        LoadIcons();
++    Pkbn_FillRect(fb, PANEL_X, LIST_Y - 2, CW - PANEL_X - 4, CH - LIST_Y - 24, RGB(2, 3, 9));
++    Pkbn_FrameRect(fb, PANEL_X, LIST_Y - 2, CW - PANEL_X - 4, CH - LIST_Y - 24, RGB(8, 10, 16));
++    for (i = 0; i < c->monCount; i++)
++        Pkbn_BlitIcon(fb, sC.icons[i], PANEL_X + 4 + (i % 3) * 34, LIST_Y - 6 + (i / 3) * 26, FALSE,
++                      open ? 0 : RGB(4, 4, 8));
++    y = LIST_Y + 2 + ((c->monCount + 2) / 3) * 26;
++    y = TextWrap(fb, PANEL_X + 4, y, CW - PANEL_X - 12, 2, c->desc, RGB(22, 26, 31));
++    for (i = 0; i < c->monCount; i++)
++    {
++        if (c->mons[i].level < lo) lo = c->mons[i].level;
++        if (c->mons[i].level > hi) hi = c->mons[i].level;
++    }
++    if (lo == hi)
++        snprintf(line, sizeof(line), "%u FOES LV%u, %u AT ONCE", c->monCount, lo, c->together);
++    else
++        snprintf(line, sizeof(line), "%u FOES LV%u-%u, %u AT ONCE", c->monCount, lo, hi, c->together);
++    Text(fb, PANEL_X + 4, y, line, RGB(31, 31, 31));
++    y += 10;
++    line[0] = '\0';
++    if (c->weather)
++        snprintf(line, sizeof(line), "%s", sWeather[c->weather]);
++    if (c->panels)
++        snprintf(line + strlen(line), sizeof(line) - strlen(line), "%s%s", line[0] ? ", " : "", sPanels[c->panels]);
++    if (c->seconds)
++        snprintf(line + strlen(line), sizeof(line) - strlen(line), "%s%u SEC", line[0] ? ", " : "", c->seconds);
++    if (line[0])
++    {
++        Text(fb, PANEL_X + 4, y, line, RGB(31, 20, 10));
++        y += 10;
++    }
++    snprintf(line, sizeof(line), "FOE STRENGTH %u/5", c->tier);
++    Text(fb, PANEL_X + 4, y, line, RGB(16, 18, 24));
++    y += 11;
++    if (done)
++        Text(fb, PANEL_X + 4, y, "CLEARED: PAYS * CHIP DATA", RGB(31, 26, 6));
++    else
++    {
++        Text(fb, PANEL_X + 4, y, "FIRST CLEAR PAYS PROGRAMS", RGB(10, 31, 12));
++        snprintf(line, sizeof(line), "%s + %s", c->rewards[0], c->rewards[1]);
++        Text(fb, PANEL_X + 10, y + 10, line, RGB(10, 31, 12));
++    }
++}
++
++static void Draw(u16 *fb)
++{
++    s32 i;
++    for (i = 0; i < CW * CH; i++)
++        fb[i] = RGB(1, 2, 6);
++    for (i = 0; i < CH; i += 16)
++        Gfx_FillBlend(fb, 0, (i + (s32)(sC.t / 4)) % CH, CW, 1, RGB(4, 18, 22), 4);
++    DrawList(fb);
++    DrawPanel(fb);
++    Pkbn_FillRect(fb, 0, CH - 13, CW, 13, RGB(1, 2, 5));
++    Text(fb, 4, CH - 13, PkbnChallenge_Unlocked(sC.cursor) ? "A:JACK IN  B:BACK   A SIMULATION: NOTHING IS LOST"
++                                                           : "LOCKED: EARN MORE BADGES   B:BACK", RGB(16, 18, 24));
++}
++
++static void Leave(u16 result)
++{
++    gSpecialVar_Result = result;
++    gPkbnCanvasOverlay = NULL;
++    SetMainCallback2(sC.exit);
++}
++
++static void HandleInput(u16 keys)
++{
++    if (keys & DPAD_UP)
++        sC.cursor = sC.cursor ? sC.cursor - 1 : PKBN_CHALLENGE_COUNT - 1, PlaySE(SE_SELECT);
++    else if (keys & DPAD_DOWN)
++        sC.cursor = (sC.cursor + 1) % PKBN_CHALLENGE_COUNT, PlaySE(SE_SELECT);
++    else if (keys & A_BUTTON)
++    {
++        if (!PkbnChallenge_Unlocked(sC.cursor))
++        {
++            PlaySE(SE_FAILURE);
++            return;
++        }
++        PlaySE(SE_SELECT);
++        Leave(sC.cursor);
++    }
++    else if (keys & B_BUTTON)
++    {
++        PlaySE(SE_SELECT);
++        Leave(0xFF);
++    }
++}
++
++static void CB2_ChallengeMenu(void)
++{
++    u16 keys = gMain.newKeys;
++    sC.t++;
++    if (sKeys != NULL)
++    {
++        keys = 0;
++        if (++sKeyClock % 4 == 0)
++        {
++            switch (*sKeys)
++            {
++            case 'U': keys = DPAD_UP; break;
++            case 'D': keys = DPAD_DOWN; break;
++            case 'A': keys = A_BUTTON; break;
++            case 'B': keys = B_BUTTON; break;
++            }
++            if (*sKeys)
++                sKeys++;
++            if (*sKeys == '\0')
++                sKeys = NULL;   // the script is done: real keys again
++        }
++    }
++    HandleInput(keys);
++}
++
++void PkbnChallengeMenu_Open(MainCallback exitCallback)
++{
++    memset(&sC, 0, sizeof(sC));
++    sC.exit = exitCallback;
++    sC.iconsFor = 0xFF;
++    sKeys = getenv("PKBN_TEST_CHALLENGE_KEYS");
++    sKeyClock = 0;
++    gPkbnCanvasOverlay = Draw;
++    SetMainCallback2(CB2_ChallengeMenu);
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 7557a4c..219b85c 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -39,6 +39,8 @@
+ #include "wild_encounter.h"
+ #include "pkbn/rival.h"
+ #include "pkbn/leader.h"
++#include "pkbn/challenge.h"
++#include "constants/battle_ai.h"
+ 
+ #ifdef PORTABLE
+ 
+@@ -495,7 +497,7 @@ static void LoadEnemy(struct Pokemon *mon)
+     memset(&f->navi, 0, sizeof(f->navi));
+     f->chainSlot = 0;
+     f->paUses = 0;
+-    f->style = (!sB.trainer && getenv("PKBN_NO_STYLES") == NULL) ? StyleOf(f->bm.species) : STYLE_NONE;
++    f->style = (!sB.trainer && !sB.challenge && getenv("PKBN_NO_STYLES") == NULL) ? StyleOf(f->bm.species) : STYLE_NONE;
+     if (f->style)
+         PKBN_LOG("%s fights as a %s", f->name, sStyleNames[f->style]);
+     if (sB.rivalTier)
+@@ -722,6 +724,8 @@ static void Begin(void)
+     PlayLog_Reset();
+ 
+     PkbnContract_Enter();
++    sB.challenge = gPkbnChallengeActive;   // POC-14 NET CHALLENGE (set by PkbnStartNetChallenge)
++    gPkbnChallengeActive = 0;
+     // Same resource setup as CB2_InitBattle (battle_main.c:588-592) so Emerald's damage
+     // code finds gBattleResources/gBattleStruct allocated.
+     MoveSaveBlocks_ResetHeap();
+@@ -729,7 +733,9 @@ static void Begin(void)
+     // battle_main.c:672 (Nature Power, Secret Power read it)
+     gBattleEnvironment = (gMapHeader.mapLayout != NULL) ? BattleSetup_GetEnvironmentId() : BATTLE_ENVIRONMENT_GRASS;
+     Field_Init();
+-    if (gMapHeader.mapLayout != NULL && getenv("PKBN_SELFTEST") == NULL)
++    if (sB.challenge)
++        Field_ChallengeConditions(gPkbnChallenges[sB.challenge - 1].weather, gPkbnChallenges[sB.challenge - 1].panels);
++    else if (gMapHeader.mapLayout != NULL && getenv("PKBN_SELFTEST") == NULL)
+         Field_StartConditions();   // self-tests have no map: their battles start as before
+ 
+     for (i = 0; i < PARTY_SIZE; i++)
+@@ -783,7 +789,16 @@ static void Begin(void)
+         if (sB.rivalTier)
+             PKBN_LOG("rival: trainer %u tier %u ai flags %x", gTrainerBattleOpponent_A, sB.rivalTier, (unsigned)sB.aiFlags);
+     }
+-    if (!sB.trainer)
++    if (sB.challenge)
++    {
++        // the foes fight as a rival of the challenge's tier: Emerald's trainer AI, NaviCust, combos and PAs
++        const struct PkbnChallenge *c = &gPkbnChallenges[sB.challenge - 1];
++        sB.rivalTier = c->tier;
++        sB.aiFlags = AI_SCRIPT_CHECK_BAD_MOVE | AI_SCRIPT_TRY_TO_FAINT | AI_SCRIPT_CHECK_VIABILITY;
++        sB.timeLimit = c->seconds * 60;
++        PKBN_LOG("net challenge %u: %s, tier %u, %u at once, %u s", sB.challenge - 1, c->name, c->tier, c->together, c->seconds);
++    }
++    else if (!sB.trainer)
+         AddWildPack();
+     PkbnWild_ClearPack();
+     for (i = 0; i < PARTY_SIZE; i++)
+@@ -825,9 +840,13 @@ static void Begin(void)
+     {
+         // the rest of the pack: back corners, attacks staggered (TUNE)
+         static const s8 sPos[MAX_FOES][2] = { {4, 1}, {5, 0}, {5, 2} };
++        u8 out = MAX_FOES;
++        if (sB.challenge && gPkbnChallenges[sB.challenge - 1].together < out)
++            out = gPkbnChallenges[sB.challenge - 1].together;   // the rest come in as these fall
+         sB.foes[0] = sB.f[SIDE_ENEMY];
+-        for (i = 1; i < sB.enemyCount && i < MAX_FOES; i++)
++        for (i = 1; i < sB.enemyCount && i < out; i++)
+         {
++            sB.enemyUsed |= 1 << i;
+             LoadEnemy(&gEnemyParty[i]);
+             sB.f[SIDE_ENEMY].x = sPos[i][0];
+             sB.f[SIDE_ENEMY].y = sPos[i][1];
+@@ -840,6 +859,9 @@ static void Begin(void)
+         sB.f[SIDE_ENEMY] = sB.foes[0];
+         PKBN_LOG("wild pack: %u Pokemon", sB.foeCount);
+     }
++    if (sB.challenge)
++        snprintf(sB.banner, sizeof(sB.banner), "NET CHALLENGE: %s!", gPkbnChallenges[sB.challenge - 1].name);
++    else
+     if (sB.trainer && (gBattleTypeFlags & BATTLE_TYPE_TWO_OPPONENTS))
+     {
+         char a[16], b[16];
+@@ -882,7 +904,8 @@ static void Finish(void)
+ 
+     SyncActiveToParty();
+     // Write-back required by the contract (research/02 §4): HP, PP and status for every party member.
+-    for (i = 0; i < sB.partyCount; i++)
++    // A NET CHALLENGE is a simulation (POC-14): the party comes back exactly as it went in.
++    for (i = 0; i < (sB.challenge ? 0 : sB.partyCount); i++)
+     {
+         u32 hp = sB.party[i].bm.hp;
+         u32 status = hp ? sB.party[i].bm.status1 : 0;
+@@ -924,6 +947,8 @@ static u16 EnemyAttackInterval(void)
+ 
+ static void EndBattle(u8 outcome, const char *text)
+ {
++    if (sB.challenge && outcome == B_OUTCOME_LOST)
++        outcome = B_OUTCOME_RAN;   // a NET CHALLENGE is a simulation: losing it costs nothing (no whiteout)
+     sB.outcome = outcome;
+     strncpy(sB.banner, text, sizeof(sB.banner) - 1);
+     sB.state = ST_END;
+@@ -945,6 +970,8 @@ static void EndBattle(u8 outcome, const char *text)
+             PlayBGM(MUS_VICTORY_TRAINER); break;
+         }
+     }
++    else if (outcome == B_OUTCOME_WON && sB.challenge)
++        PlayBGM(MUS_VICTORY_TRAINER);
+     else if (outcome == B_OUTCOME_WON)
+         PlayBGM(MUS_VICTORY_WILD);
+     else if (outcome == B_OUTCOME_CAUGHT)
+@@ -1057,6 +1084,11 @@ static void UpdateCustom(void)
+             SetMsg("THE TRAINER BLOCKED THE BALL!", 60); // sText_TrainerBlockedBall
+             PlaySE(SE_FAILURE);
+         }
++        else if (sB.challenge)
++        {
++            SetMsg("CAN'T CATCH DATA IN A SIMULATION!", 60);
++            PlaySE(SE_FAILURE);
++        }
+         else if (sB.ballItem == 0 || sB.queueCount > 0)
+             PlaySE(SE_FAILURE);
+         else if (Foe_LiveCount() > 1)
+@@ -1391,6 +1423,11 @@ static void UpdatePlayer(void)
+ 
+     if (keys & SELECT_BUTTON)
+     {
++        if (sB.challenge)
++        {
++            EndBattle(B_OUTCOME_RAN, "JACKED OUT!");   // a simulation: you can always leave
++            return;
++        }
+         if (sB.trainer)
+             SetMsg("NO RUNNING FROM A TRAINER BATTLE!", 50);
+         else if (p->noEscape && p->bm.ability != ABILITY_RUN_AWAY)   // Run Away beats Mean Look (battle_util.c:427)
+@@ -1922,7 +1959,10 @@ static bool8 SendOutReplacement(u8 k)
+     Pkbn_GameStringToAscii(mon, gSpeciesNames[sB.f[SIDE_ENEMY].bm.species], sizeof(mon));
+     {
+         char line[40];
+-        snprintf(line, sizeof(line), "%s SENT OUT %s!", nm, mon);
++        if (sB.challenge)
++            snprintf(line, sizeof(line), "NEXT UP: %s!", mon);
++        else
++            snprintf(line, sizeof(line), "%s SENT OUT %s!", nm, mon);
+         SetMsg(line, 70);
+         PKBN_LOG("%s", line);
+     }
+@@ -1945,14 +1985,15 @@ static bool8 CheckPackFaints(void)
+         sB.foeDown[k] = TRUE;
+         last = k;
+         SetMonData(&gEnemyParty[sB.foeSlot[k]], MON_DATA_HP, &zero);
+-        AwardExpForFaintedEnemy();
++        if (!sB.challenge)
++            AwardExpForFaintedEnemy();
+         Busting_NoteDelete();
+         for (i = 0; i < MAX_ATTACKS; i++)   // a deleted virus's attacks go with it (BN)
+             if (sB.attacks[i].active && sB.attacks[i].side == SIDE_ENEMY && sB.attacks[i].foe == k)
+                 sB.attacks[i].active = FALSE;
+-        snprintf(text, sizeof(text), sB.trainer ? "FOE %s FAINTED!" : "WILD %s FAINTED!", sB.f[SIDE_ENEMY].name);
++        snprintf(text, sizeof(text), sB.trainer || sB.challenge ? "FOE %s FAINTED!" : "WILD %s FAINTED!", sB.f[SIDE_ENEMY].name);
+         PKBN_LOG("pack: %s down, %u left", sB.f[SIDE_ENEMY].name, Foe_LiveCount());
+-        if (sB.trainer && SendOutReplacement(k))
++        if ((sB.trainer || sB.challenge) && SendOutReplacement(k))
+             continue;
+         if (Foe_LiveCount() == 0)
+         {
+@@ -1981,8 +2022,9 @@ static void CheckFaints(void)
+         s8 next;
+         u32 zero = 0;
+         SetMonData(&gEnemyParty[sB.enemySlot], MON_DATA_HP, &zero);
+-        AwardExpForFaintedEnemy();
+-        next = sB.trainer ? NextEnemySlot() : -1;
++        if (!sB.challenge)
++            AwardExpForFaintedEnemy();
++        next = (sB.trainer || sB.challenge) ? NextEnemySlot() : -1;
+         if (next >= 0)
+         {
+             // Gen 3 trainers send out their next Pokémon (the party order here; Emerald's AI may
+@@ -1991,7 +2033,10 @@ static void CheckFaints(void)
+             Pkbn_GameStringToAscii(cls, gTrainerClassNames[gTrainers[gTrainerBattleOpponent_A].trainerClass], sizeof(cls));
+             Pkbn_GameStringToAscii(nm, gTrainers[gTrainerBattleOpponent_A].trainerName, sizeof(nm));
+             Pkbn_GameStringToAscii(mon, gSpeciesNames[GetMonData(&gEnemyParty[next], MON_DATA_SPECIES)], sizeof(mon));
+-            snprintf(sB.banner, sizeof(sB.banner), "%s SENT OUT %s!", nm, mon);
++            if (sB.challenge)
++                snprintf(sB.banner, sizeof(sB.banner), "NEXT UP: %s!", mon);
++            else
++                snprintf(sB.banner, sizeof(sB.banner), "%s SENT OUT %s!", nm, mon);
+             (void)cls;
+             sB.enemySlot = next;
+             sB.state = ST_SENDOUT;
+@@ -2001,7 +2046,7 @@ static void CheckFaints(void)
+             PKBN_LOG("trainer sends out slot %d", (int)next);
+             return;
+         }
+-        if (sB.trainer)
++        if (sB.trainer || sB.challenge)
+             snprintf(text, sizeof(text), "FOE %s FAINTED!", sB.f[SIDE_ENEMY].name);
+         else
+             snprintf(text, sizeof(text), "WILD %s FAINTED!", sB.f[SIDE_ENEMY].name);
+@@ -2055,6 +2100,11 @@ static void UpdateFight(void)
+     if (sB.busterCd)
+         sB.busterCd--;
+     Busting_OnFightFrame();
++    if (sB.timeLimit && sB.bust.fightFrames >= sB.timeLimit)
++    {
++        EndBattle(B_OUTCOME_RAN, "TIME UP!");   // a timed NET CHALLENGE (POC-14)
++        return;
++    }
+     Tick(&sB.f[SIDE_PLAYER]);
+     for (r = 0; r < sB.foeCount; r++)
+     {
+@@ -2185,7 +2235,7 @@ void PkbnGrid_GetDebug(struct PkbnGridDebug *d)
+                 d->anySelectable = TRUE;
+     d->cursorIsWild = sB.cursor == sB.handCount;
+     d->itemRow = sB.handCount + 1;
+-    d->ballUsable = !sB.trainer && sB.ballItem && sB.queueCount == 0 && Foe_LiveCount() <= 1;
++    d->ballUsable = !sB.trainer && !sB.challenge && sB.ballItem && sB.queueCount == 0 && Foe_LiveCount() <= 1;
+     d->pickedCount = 0;
+     for (i = 0; i < sB.handCount; i++)
+         d->pickedCount += sB.picked[i];
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index 6ee89b8..e4ed784 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -7,6 +7,7 @@
+ //    sandstorm / hail 1/16, Ingrain 1/16 (battle_util.c DoBattlerEndTurnEffects / DoFieldEndTurnEffects).
+ //  - Sleep 2-5 turns, confusion 2-5 turns, freeze thaws 20% (Gen 3). Review rule: sleep breaks when hit.
+ #include "pkbn/grid_internal.h"
++#include "pkbn/challenge.h"
+ #include "field_weather.h"
+ #include "random.h"
+ #include "constants/weather.h"
+@@ -99,6 +100,43 @@ void Field_StartConditions(void)
+     }
+ }
+ 
++// A NET CHALLENGE's preset field (POC-14, TUNE): permanent weather and panels that never fade.
++void Field_ChallengeConditions(u8 weather, u8 panels)
++{
++    static const u8 sPanelType[] = { 0, PANEL_CRACKED, PANEL_HOLY, 0, PANEL_POISON };
++    s32 side, n;
++    switch (weather)
++    {
++    case CH_WEATHER_SUN:  sB.weather = B_WEATHER_SUN; SetMsg("THE SUNLIGHT IS STRONG.", 70); break;
++    case CH_WEATHER_RAIN: sB.weather = B_WEATHER_RAIN_TEMPORARY | B_WEATHER_RAIN_PERMANENT; SetMsg("IT IS RAINING.", 70); break;
++    case CH_WEATHER_SAND: sB.weather = B_WEATHER_SANDSTORM; SetMsg("A SANDSTORM IS RAGING.", 70); break;
++    case CH_WEATHER_HAIL: sB.weather = B_WEATHER_HAIL; SetMsg("IT IS HAILING.", 70); break;
++    }
++    if (panels == CH_PANELS_CURRENT)
++    {
++        // currents on both sides' middle rows and the top row of the foes' side, carrying toward each back
++        sB.panel[1][0] = PANEL_ROAD_LEFT;
++        sB.panel[1][GRID_COLS - 1] = PANEL_ROAD_RIGHT;
++        sB.panel[0][PLAYER_COLS - 1] = PANEL_ROAD_LEFT;
++        sB.panel[2][PLAYER_COLS] = PANEL_ROAD_RIGHT;
++        return;
++    }
++    if (panels == CH_PANELS_NONE)
++        return;
++    for (side = 0; side < 2; side++)
++    {
++        n = panels == CH_PANELS_HOLY ? 1 : 2;
++        while (n > 0)
++        {
++            s8 x = (side == SIDE_PLAYER ? 0 : PLAYER_COLS) + Random() % PLAYER_COLS, y = Random() % GRID_ROWS;
++            if (sB.panel[y][x] != PANEL_NORMAL || (y == 1 && (x == 1 || x == 4)) || (side == SIDE_ENEMY && x == 5))
++                continue;   // not where the fighters start (the pack's back corners included)
++            sB.panel[y][x] = sPanelType[panels];
++            n--;
++        }
++    }
++}
++
+ // ---- Abilities on the grid (POC-13) ------------------------------------------------------------------------
+ // Gen 3 rules where the grid has the same situation; ADAPT where it needs a grid meaning (Levitate, Truant).
+ 
+diff --git a/src/pkbn/leader.c b/src/pkbn/leader.c
+index d22f105..69808e9 100644
+--- a/src/pkbn/leader.c
++++ b/src/pkbn/leader.c
+@@ -93,6 +93,18 @@ void Leader_Ace(u8 leader, u16 *species, u8 *level, u16 *move)
+     }
+ }
+ 
++// The programs a Gym Leader's first defeat pays (POC-14, TUNE): one fits the leader's type, one their style.
++static const char *const sFirstWinPrograms[PKBN_LEADERS][2] = {
++    { "Iron", "UnderSht" },     // Roxanne
++    { "Protein", "BlkBelt" },   // Brawly
++    { "Magnet", "Charge+1" },   // Wattson
++    { "Charcoal", "FstBarr" },  // Flannery
++    { "HP+100", "SilkScrf" },   // Norman
++    { "AirShoes", "ShrpBeak" }, // Winona
++    { "Custom1", "TwstSpn" },   // Tate & Liza
++    { "FlotShoe", "MystcWtr" }, // Juan
++};
++
+ void Leader_AfterWin(u16 trainerId, u8 bust, u32 frames, char *line1, char *line2, u32 size)
+ {
+     s8 l = Leader_FromTrainer(trainerId);
+@@ -111,6 +123,12 @@ void Leader_AfterWin(u16 trainerId, u8 bust, u32 frames, char *line1, char *line
+         snprintf(line1, size, have ? "%s CHIP UPGRADED TO V%u!" : "GOT %s'S LEADER CHIP V%u!", sNames[l], want);
+         printf("[pkbn] leader chip: %s V%u\n", sNames[l], want);
+     }
++    // the first win also pays two NaviCust programs
++    if (have == 0)
++    {
++        PkbnProgram_GrantByName(sFirstWinPrograms[l][0], 1);
++        PkbnProgram_GrantByName(sFirstWinPrograms[l][1], 1);
++    }
+     // the record: best time, then best level
+     PkbnLeader_Record(l, &bestF, &bestL);
+     if (frames > 0xFFFF)
+@@ -128,6 +146,8 @@ void Leader_AfterWin(u16 trainerId, u8 bust, u32 frames, char *line1, char *line
+             snprintf(line2, size, "NEW RECORD %u:%02u.%u! GOT A * CHIP!", (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60),
+                      (unsigned)(s10 % 10));
+         }
++        else if (have == 0)
++            snprintf(line2, size, "GOT PROGRAMS %s AND %s!", sFirstWinPrograms[l][0], sFirstWinPrograms[l][1]);
+         else
+             snprintf(line2, size, "TIME %u:%02u.%u - THE RECORD TO BEAT", (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60),
+                      (unsigned)(s10 % 10));
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index d1fea8a..5ea7256 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -87,6 +87,19 @@ void PkbnSave_Reset(void)
+         sSave.owned[i] = NCP_OWNED_TEST; // everything unlocked for now (decision of 2026-10-05)
+ }
+ 
++// A new game: programs are earned (POC-14). It starts with one each of a small starter set (TUNE).
++static const char *const sStarterPrograms[] = { "HP+50", "Attack+1", "Speed+1", "Charge+1" };
++
++void PkbnSave_NewGame(void)
++{
++    u32 i;
++    PkbnSave_Reset();
++    memset(sSave.owned, 0, sizeof(sSave.owned));
++    sSave.programEconomy = 1;
++    for (i = 0; i < ARRAY_COUNT(sStarterPrograms); i++)
++        PkbnProgram_GrantByName(sStarterPrograms[i], 1);
++}
++
+ void PkbnSave_Read(void)
+ {
+     FILE *f = fopen(PKBN_SAVE_PATH, "rb");
+@@ -123,7 +136,7 @@ void PkbnSave_Read(void)
+     tmp.version = PKBN_SAVE_VERSION;
+     sSave = tmp;
+     for (i = sSave.ncpCount; i < NCP_COUNT; i++) // programs added since this file was written
+-        sSave.owned[i] = NCP_OWNED_TEST;
++        sSave.owned[i] = sSave.programEconomy ? 0 : NCP_OWNED_TEST;
+     sSave.ncpCount = NCP_COUNT;
+ }
+ 
+@@ -488,4 +501,22 @@ void PkbnProgram_Grant(u8 prog, u8 n)
+ 
+ bool8 PkbnProgram_Economy(void) { return sSave.programEconomy; }
+ 
++s32 PkbnProgram_ByName(const char *name)
++{
++    s32 i;
++    for (i = 0; i < NCP_COUNT; i++)
++        if (strcmp(gPkbnNcps[i].name, name) == 0)
++            return i;
++    return -1;
++}
++
++bool8 PkbnProgram_GrantByName(const char *name, u8 n)
++{
++    s32 prog = PkbnProgram_ByName(name);
++    if (prog < 0)
++        return FALSE;
++    PkbnProgram_Grant(prog, n);
++    return TRUE;
++}
++
+ #endif // PORTABLE
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index 9c3e118..14b9777 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -26,6 +26,7 @@
+ #include "main.h"
+ #include "money.h"
+ #include "pkbn/leader.h"
++#include "pkbn/challenge.h"
+ #include "naming_screen.h"
+ #include "overworld.h"
+ #include "pokedex.h"
+@@ -368,6 +369,16 @@ static void StepStart(void)
+         return;
+     }
+     default:
++        if (sB.challenge && sB.outcome == B_OUTCOME_RAN)
++        {
++            static u8 sPart;
++            if (sPart++ == 0)
++            {
++                Say(PB_START, "SIMULATION ENDED. NOTHING WAS LOST.");
++                return;
++            }
++            sPart = 0;
++        }
+         sPB.step = PB_EXP_NEXT;
+         return;
+     }
+@@ -665,7 +676,9 @@ static void CB2_PkbnPostBattle(void)
+             {
+                 Busting_ScaleExp(level);
+                 Busting_Reward(level, sMsg, sizeof(sMsg));
+-                if (sB.trainer)
++                if (sB.challenge)
++                    PkbnChallenge_AfterWin(sB.challenge - 1, sLeaderMsg[0], sLeaderMsg[1], sizeof(sLeaderMsg[0]));
++                else if (sB.trainer)
+                     Leader_AfterWin(gTrainerBattleOpponent_A, level, sB.bust.fightFrames, sLeaderMsg[0], sLeaderMsg[1],
+                                     sizeof(sLeaderMsg[0]));
+             }
+diff --git a/src/script_menu.c b/src/script_menu.c
+index e923f40..3321f8c 100644
+--- a/src/script_menu.c
++++ b/src/script_menu.c
+@@ -325,6 +325,10 @@ bool16 ScriptMenu_CreatePCMultichoice(void)
+     }
+ }
+ 
++#ifdef PORTABLE
++static const u8 sText_PkbnNetChallenge[] = _("NET CHALLENGE");
++#endif
++
+ static void CreatePCMultichoice(void)
+ {
+     u8 x = 8;
+@@ -333,6 +337,7 @@ static void CreatePCMultichoice(void)
+     u8 numChoices;
+     u8 windowId;
+     int i;
++    u8 netRows = 0;
+ 
+     for (i = 0; i < ARRAY_COUNT(sPCNameStrings); i++)
+     {
+@@ -344,24 +349,31 @@ static void CreatePCMultichoice(void)
+         pixelWidth = DisplayTextAndGetWidth(gText_HallOfFame, pixelWidth);
+     }
+ 
++#ifdef PORTABLE
++    pixelWidth = DisplayTextAndGetWidth(sText_PkbnNetChallenge, pixelWidth);
++    netRows = 1;   // pkbn POC-14: NET CHALLENGE (PkbnPcMenuRemap turns it into 10)
++#endif
+     width = ConvertPixelWidthToTileWidth(pixelWidth);
+ 
+     // Include Hall of Fame option if player is champion
+     if (FlagGet(FLAG_SYS_GAME_CLEAR))
+     {
+-        numChoices = 4;
+-        windowId = CreateWindowFromRect(0, 0, width, 8);
++        numChoices = 4 + netRows;
++        windowId = CreateWindowFromRect(0, 0, width, 8 + 2 * netRows);
+         SetStandardWindowBorderStyle(windowId, FALSE);
+-        AddTextPrinterParameterized(windowId, FONT_NORMAL, gText_HallOfFame, x, 33, TEXT_SKIP_DRAW, NULL);
+-        AddTextPrinterParameterized(windowId, FONT_NORMAL, gText_LogOff, x, 49, TEXT_SKIP_DRAW, NULL);
++        AddTextPrinterParameterized(windowId, FONT_NORMAL, gText_HallOfFame, x, 33 + 16 * netRows, TEXT_SKIP_DRAW, NULL);
++        AddTextPrinterParameterized(windowId, FONT_NORMAL, gText_LogOff, x, 49 + 16 * netRows, TEXT_SKIP_DRAW, NULL);
+     }
+     else
+     {
+-        numChoices = 3;
+-        windowId = CreateWindowFromRect(0, 0, width, 6);
++        numChoices = 3 + netRows;
++        windowId = CreateWindowFromRect(0, 0, width, 6 + 2 * netRows);
+         SetStandardWindowBorderStyle(windowId, FALSE);
+-        AddTextPrinterParameterized(windowId, FONT_NORMAL, gText_LogOff, x, 33, TEXT_SKIP_DRAW, NULL);
++        AddTextPrinterParameterized(windowId, FONT_NORMAL, gText_LogOff, x, 33 + 16 * netRows, TEXT_SKIP_DRAW, NULL);
+     }
++#ifdef PORTABLE
++    AddTextPrinterParameterized(windowId, FONT_NORMAL, sText_PkbnNetChallenge, x, 33, TEXT_SKIP_DRAW, NULL);
++#endif
+ 
+     // Change PC name if player has met Lanette
+     if (FlagGet(FLAG_SYS_PC_LANETTE))
+-- 
+2.43.0
+

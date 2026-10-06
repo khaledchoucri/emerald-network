@@ -1,0 +1,276 @@
+From 53dd1969f6c8d65582b2094df82cbb26a65c4045 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 03:23:44 +0300
+Subject: [PATCH 43/44] POC-14k: TIME ATTACK records page (Gym Leader rematch
+ times, Busting, Leader chip) and NET CHALLENGE best clear times
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/challenge.h |  5 ++-
+ include/pkbn/chip_pack.h |  2 +
+ src/pkbn/challenge.c     | 17 ++++++--
+ src/pkbn/challenge_ui.c  | 87 +++++++++++++++++++++++++++++++++++++++-
+ src/pkbn/pkbn_save.c     |  4 ++
+ src/pkbn/post_battle.c   |  2 +-
+ 6 files changed, 109 insertions(+), 8 deletions(-)
+
+diff --git a/include/pkbn/challenge.h b/include/pkbn/challenge.h
+index da34e1d..42c8e30 100644
+--- a/include/pkbn/challenge.h
++++ b/include/pkbn/challenge.h
+@@ -40,8 +40,9 @@ extern u8 gPkbnChallengeActive;   // 0: none; else the running challenge + 1
+ u8 PkbnChallenge_Badges(void);                 // badges for unlocking, 9 once the game is cleared
+ bool8 PkbnChallenge_Unlocked(u8 i);
+ void PkbnChallenge_BuildParty(u8 i);           // fills gEnemyParty
+-// After a challenge battle: the first clear pays its programs; any clear pays a * copy of a foe's move.
+-void PkbnChallenge_AfterWin(u8 i, char *line1, char *line2, u32 size);
++// After a challenge battle: the first clear pays its programs; a repeat clear pays a * copy of a foe's move. The best
++// clear time is kept (time attack).
++void PkbnChallenge_AfterWin(u8 i, u32 frames, char *line1, char *line2, u32 size);
+ void PkbnChallengeMenu_Open(MainCallback exitCallback);   // the NET CHALLENGE list (gSpecialVar_Result: pick or 0xFF)
+ 
+ #endif // GUARD_PKBN_CHALLENGE_H
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index 9583733..1793024 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -49,6 +49,8 @@ void PkbnLeader_Record(u8 leader, u16 *frames, u8 *level);
+ void PkbnLeader_SetRecord(u8 leader, u16 frames, u8 level);
+ bool8 PkbnChallenge_Cleared(u8 n);
+ void PkbnChallenge_SetCleared(u8 n);
++u16 PkbnChallenge_Best(u8 n);               // best clear time in fight frames (0 = none)
++void PkbnChallenge_SetBest(u8 n, u16 frames);
+ void PkbnProgram_Grant(u8 prog, u8 n);
+ bool8 PkbnProgram_Economy(void);
+ s32 PkbnProgram_ByName(const char *name);
+diff --git a/src/pkbn/challenge.c b/src/pkbn/challenge.c
+index 3782125..6830639 100644
+--- a/src/pkbn/challenge.c
++++ b/src/pkbn/challenge.c
+@@ -59,16 +59,24 @@ void PkbnChallenge_BuildParty(u8 i)
+     printf("[pkbn] net challenge %u: %s, %u Pokemon, tier %u, %u at once\n", i, c->name, c->monCount, c->tier, c->together);
+ }
+ 
+-void PkbnChallenge_AfterWin(u8 i, char *line1, char *line2, u32 size)
++void PkbnChallenge_AfterWin(u8 i, u32 frames, char *line1, char *line2, u32 size)
+ {
+     const struct PkbnChallenge *c = &gPkbnChallenges[i];
++    u16 best = PkbnChallenge_Best(i);
++    u32 s10 = frames * 10 / 60;
++    bool8 record = best == 0 || frames < best;
+     line1[0] = line2[0] = '\0';
++    if (frames > 0xFFFF)
++        frames = 0xFFFF;
++    if (record)
++        PkbnChallenge_SetBest(i, frames);
+     if (!PkbnChallenge_Cleared(i))
+     {
+         PkbnChallenge_SetCleared(i);
+         PkbnProgram_GrantByName(c->rewards[0], 1);
+         PkbnProgram_GrantByName(c->rewards[1], 1);
+-        snprintf(line1, size, "%s CLEARED!", c->name);
++        snprintf(line1, size, "%s CLEARED IN %u:%02u.%u!", c->name, (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60),
++                 (unsigned)(s10 % 10));
+         snprintf(line2, size, "GOT PROGRAMS %s AND %s!", c->rewards[0], c->rewards[1]);
+     }
+     else
+@@ -79,7 +87,10 @@ void PkbnChallenge_AfterWin(u8 i, char *line1, char *line2, u32 size)
+         char nm[16];
+         PkbnPack_Add(mv, LETTER_WILD, 1);
+         Pkbn_GameStringToAscii(nm, gMoveNames[mv], sizeof(nm));
+-        snprintf(line1, size, "%s CLEARED AGAIN!", c->name);
++        if (record)
++            snprintf(line1, size, "NEW RECORD %u:%02u.%u!", (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60), (unsigned)(s10 % 10));
++        else
++            snprintf(line1, size, "%s CLEARED AGAIN!", c->name);
+         snprintf(line2, size, "GOT %s * CHIP DATA!", nm);
+     }
+     printf("[pkbn] net challenge %u cleared: %s / %s\n", i, line1, line2);
+diff --git a/src/pkbn/challenge_ui.c b/src/pkbn/challenge_ui.c
+index 10dc44c..506cc44 100644
+--- a/src/pkbn/challenge_ui.c
++++ b/src/pkbn/challenge_ui.c
+@@ -10,6 +10,7 @@
+ #include "constants/songs.h"
+ #include "pkbn/challenge.h"
+ #include "pkbn/replay.h"
++#include "pkbn/leader.h"
+ #include "pkbn/chip_pack.h"
+ #include "pkbn/render.h"
+ #include "pkbn/gfx.h"
+@@ -32,6 +33,7 @@ static struct
+     u8 cursor;
+     u8 iconsFor;
+     bool8 replay;   // a recorded battle to watch (pkbn_replay.bin)
++    u8 page;        // 0: challenges; 1: TIME ATTACK records (Gym Leader rematches)
+     u16 icons[PARTY_SIZE][32 * 32];
+     u32 t;
+ } sC;
+@@ -113,6 +115,53 @@ static void DrawList(u16 *fb)
+     }
+ }
+ 
++static void TimeText(char *dst, u32 size, u16 frames)
++{
++    u32 s10 = (u32)frames * 10 / 60;
++    if (frames == 0)
++        snprintf(dst, size, "--:--.-");
++    else
++        snprintf(dst, size, "%u:%02u.%u", (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60), (unsigned)(s10 % 10));
++}
++
++// TIME ATTACK (POC-14): each Gym Leader's best win - fight time, Busting Level - and their Leader chip. Rematches are
++// where the records get beaten: a new record pays a * chip, an S on a rematch makes the chip V3 (src/pkbn/leader.c).
++static void DrawRecords(u16 *fb)
++{
++    u8 l;
++    char line[40], t[16];
++    Pkbn_DrawEmText(fb, 6, 0, "TIME ATTACK", PKBN_FONT_NORMAL, RGB(31, 26, 6), RGB(2, 2, 5));
++    Text(fb, CW - 4 - Pkbn_EmTextWidth("GYM LEADERS", PKBN_FONT_SMALL), 4, "GYM LEADERS", RGB(31, 31, 31));
++    Text(fb, 12, LIST_Y, "LEADER", RGB(16, 18, 24));
++    Text(fb, 110, LIST_Y, "BEST TIME", RGB(16, 18, 24));
++    Text(fb, 170, LIST_Y, "BUSTING", RGB(16, 18, 24));
++    Text(fb, 220, LIST_Y, "CHIP", RGB(16, 18, 24));
++    for (l = 0; l < PKBN_LEADERS; l++)
++    {
++        u16 frames;
++        u8 level, chip = PkbnLeader_Chip(l);
++        s32 y = LIST_Y + 14 + l * 14;
++        PkbnLeader_Record(l, &frames, &level);
++        Pkbn_FillRect(fb, 6, y - 1, CW - 12, 13, l & 1 ? RGB(2, 3, 9) : RGB(3, 5, 12));
++        Text(fb, 12, y, Leader_Name(l), frames ? RGB(31, 31, 31) : RGB(12, 13, 16));
++        TimeText(t, sizeof(t), frames);
++        Text(fb, 110, y, t, frames ? RGB(8, 28, 31) : RGB(12, 13, 16));
++        if (level)
++        {
++            if (level >= 11)
++                snprintf(line, sizeof(line), "S");
++            else
++                snprintf(line, sizeof(line), "%u", level);
++            Text(fb, 186, y, line, level >= 11 ? RGB(31, 26, 6) : RGB(31, 31, 31));
++        }
++        if (chip)
++        {
++            snprintf(line, sizeof(line), "V%u", chip);
++            Text(fb, 224, y, line, RGB(10, 31, 12));
++        }
++    }
++}
++
+ static void DrawPanel(u16 *fb)
+ {
+     static const char *const sWeather[] = { NULL, "SUN", "RAIN", "SANDSTORM", "HAIL" };
+@@ -155,6 +204,13 @@ static void DrawPanel(u16 *fb)
+     }
+     snprintf(line, sizeof(line), "FOE STRENGTH %u/5", c->tier);
+     Text(fb, PANEL_X + 4, y, line, RGB(16, 18, 24));
++    if (PkbnChallenge_Best(sC.cursor))
++    {
++        char t[16];
++        TimeText(t, sizeof(t), PkbnChallenge_Best(sC.cursor));
++        snprintf(line, sizeof(line), "BEST %s", t);
++        Text(fb, CW - 10 - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), y, line, RGB(8, 28, 31));
++    }
+     y += 11;
+     if (done)
+         Text(fb, PANEL_X + 4, y, "CLEARED: PAYS * CHIP DATA", RGB(31, 26, 6));
+@@ -173,10 +229,16 @@ static void Draw(u16 *fb)
+         fb[i] = RGB(1, 2, 6);
+     for (i = 0; i < CH; i += 16)
+         Gfx_FillBlend(fb, 0, (i + (s32)(sC.t / 4)) % CH, CW, 1, RGB(4, 18, 22), 4);
++    Pkbn_FillRect(fb, 0, CH - 13, CW, 13, RGB(1, 2, 5));
++    if (sC.page == 1)
++    {
++        DrawRecords(fb);
++        Text(fb, 4, CH - 13, "L/R:CHALLENGES  B:BACK", RGB(16, 18, 24));
++        return;
++    }
+     DrawList(fb);
+     DrawPanel(fb);
+-    Pkbn_FillRect(fb, 0, CH - 13, CW, 13, RGB(1, 2, 5));
+-    Text(fb, 4, CH - 13, PkbnChallenge_Unlocked(sC.cursor) ? "A:JACK IN  B:BACK" : "LOCKED: EARN BADGES  B:BACK", RGB(16, 18, 24));
++    Text(fb, 4, CH - 13, PkbnChallenge_Unlocked(sC.cursor) ? "A:JACK IN  L/R:RECORDS" : "LOCKED  L/R:RECORDS", RGB(16, 18, 24));
+     if (sC.replay)
+         Text(fb, CW - 4 - Pkbn_EmTextWidth("SELECT:REPLAY LAST BATTLE", PKBN_FONT_SMALL), CH - 13, "SELECT:REPLAY LAST BATTLE",
+              RGB(31, 20, 10));
+@@ -191,6 +253,18 @@ static void Leave(u16 result)
+ 
+ static void HandleInput(u16 keys)
+ {
++    if (keys & (L_BUTTON | R_BUTTON))
++    {
++        sC.page ^= 1;
++        PlaySE(SE_SELECT);
++        return;
++    }
++    if (sC.page == 1)
++    {
++        if (keys & B_BUTTON)
++            sC.page = 0, PlaySE(SE_SELECT);
++        return;
++    }
+     if (keys & DPAD_UP)
+         sC.cursor = sC.cursor ? sC.cursor - 1 : PKBN_CHALLENGE_COUNT - 1, PlaySE(SE_SELECT);
+     else if (keys & DPAD_DOWN)
+@@ -233,6 +307,8 @@ static void CB2_ChallengeMenu(void)
+             case 'A': keys = A_BUTTON; break;
+             case 'B': keys = B_BUTTON; break;
+             case 'E': keys = SELECT_BUTTON; break;
++            case '<': keys = L_BUTTON; break;
++            case '>': keys = R_BUTTON; break;
+             }
+             if (*sKeys)
+                 sKeys++;
+@@ -249,6 +325,13 @@ void PkbnChallengeMenu_Open(MainCallback exitCallback)
+     sC.exit = exitCallback;
+     sC.iconsFor = 0xFF;
+     sC.replay = PkbnReplay_Available();
++    if (getenv("PKBN_TEST_RECORDS") != NULL)   // owtests: some records to show
++    {
++        u8 l;
++        for (l = 0; l < 5; l++)
++            PkbnLeader_SetRecord(l, 1500 + 977 * l, l == 2 ? 11 : 6 + l), PkbnLeader_SetChip(l, l == 2 ? 3 : 1 + (l & 1));
++        PkbnChallenge_SetCleared(0), PkbnChallenge_SetBest(0, 1342);
++    }
+     sKeys = getenv("PKBN_TEST_CHALLENGE_KEYS");
+     sKeyClock = 0;
+     gPkbnCanvasOverlay = Draw;
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index 5ea7256..234fe51 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -61,6 +61,8 @@ struct PkbnSaveFile
+     u8 leaderBestLevel[PKBN_LEADERS];         // ... and best Busting Level
+     u32 challengeCleared;                     // challenge battles won (bits)
+     u8 programEconomy;                        // 1: programs are earned (new games); 0: everything owned (older saves)
++    u8 pad5[3];
++    u16 challengeBestFrames[32];              // NET CHALLENGE time attack: best clear time (0 = none)
+ };
+ 
+ #define V4_SIZE offsetof(struct PkbnSaveFile, library)
+@@ -489,6 +491,8 @@ void PkbnLeader_SetRecord(u8 leader, u16 frames, u8 level)
+ 
+ bool8 PkbnChallenge_Cleared(u8 n) { return n < 32 && (sSave.challengeCleared & (1u << n)); }
+ void PkbnChallenge_SetCleared(u8 n) { if (n < 32) sSave.challengeCleared |= 1u << n; }
++u16 PkbnChallenge_Best(u8 n) { return n < 32 ? sSave.challengeBestFrames[n] : 0; }
++void PkbnChallenge_SetBest(u8 n, u16 frames) { if (n < 32) sSave.challengeBestFrames[n] = frames; }
+ 
+ // NaviCust programs owned (POC-14: earned in new games)
+ void PkbnProgram_Grant(u8 prog, u8 n)
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index 14b9777..85445fa 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -677,7 +677,7 @@ static void CB2_PkbnPostBattle(void)
+                 Busting_ScaleExp(level);
+                 Busting_Reward(level, sMsg, sizeof(sMsg));
+                 if (sB.challenge)
+-                    PkbnChallenge_AfterWin(sB.challenge - 1, sLeaderMsg[0], sLeaderMsg[1], sizeof(sLeaderMsg[0]));
++                    PkbnChallenge_AfterWin(sB.challenge - 1, sB.bust.fightFrames, sLeaderMsg[0], sLeaderMsg[1], sizeof(sLeaderMsg[0]));
+                 else if (sB.trainer)
+                     Leader_AfterWin(gTrainerBattleOpponent_A, level, sB.bust.fightFrames, sLeaderMsg[0], sLeaderMsg[1],
+                                     sizeof(sLeaderMsg[0]));
+-- 
+2.43.0
+

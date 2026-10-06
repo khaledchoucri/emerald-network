@@ -1,0 +1,118 @@
+From 0860b0fc54537dd7a5ca061480ec4f01ea75cbe1 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 02:28:37 +0300
+Subject: [PATCH 34/44] POC-14b: Full Synchro (BN6) - a counter hit stuns the
+ foe and doubles the next chip
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |  2 ++
+ src/pkbn/grid_draw.c         |  8 +++++++-
+ src/pkbn/grid_moves.c        | 23 +++++++++++++++++++++++
+ 3 files changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index cefb051..01c71ba 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -178,6 +178,7 @@ struct Attack
+     u8 pa;                   // Program Advance index + 1 (0 = a normal move)
+     bool8 combo;             // follow-up of an Emerald contest combo (chain payoff)
+     u16 powerPct;            // partner chip power (100 = normal), POC-11
++    bool8 synchro;           // POC-14: used in Full Synchro - x2
+     u8 foe;                  // POC-11: the foe this attack belongs to (enemy side) or is aimed at (player side)
+     bool8 paLanded;          // PAF_HITONCE: already hit
+     u16 powerOverride;
+@@ -197,6 +198,7 @@ struct GridBattle
+     u8 active;
+     bool8 folderEmptyLogged;
+     bool8 struggleLogged;
++    bool8 fullSynchro;         // POC-14: BN6 Full Synchro after a counter hit (next chip x2)
+     struct PkbnBustStats bust;
+     u32 counterReady;           // next frame a counter hit can count  // Busting Level / Capture Grade counters (POC-10b)
+     struct Folder folder;
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 5869ad1..f94ab5b 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -436,6 +436,10 @@ static void DrawFighter(u16 *fb, u8 side)
+     {
+         flags |= GFX_TINT; color = COL_STATUS; amt = 8;
+     }
++    else if (side == SIDE_ENEMY && sB.fullSynchro && (f->lockout || f->charging) && (sTick & 4))
++    {
++        flags |= GFX_TINT; color = COL_WHITE; amt = 10;   // BN6: in Full Synchro the enemy flashes when you can counter
++    }
+ 
+     if (f->bm.hp == 0)
+     {
+@@ -531,7 +535,9 @@ static void DrawPlayerHud(u16 *fb)
+     const char *tag = StatusTag(f, &col);
+     s32 x;
+     // BN's HP box, top left: the number is what you watch
+-    Draw_Box(fb, 2, 2, 48, 17, RGB(4, 8, 20), COL_BOX_EDGE, 13);
++    // Full Synchro (POC-14): the HP box glows gold, BN's emotion window in short
++    Draw_Box(fb, 2, 2, 48, 17, sB.fullSynchro ? RGB(14, 10, 2) : RGB(4, 8, 20),
++             sB.fullSynchro ? ((sTick & 8) ? COL_GAUGE_FULL : RGB(31, 31, 20)) : COL_BOX_EDGE, 13);
+     snprintf(line, sizeof(line), "%u", f->bm.hp);
+     TextBig(fb, 46 - Pkbn_EmTextWidth(line, PKBN_FONT_NORMAL), 2, line,
+             (f->bm.hp * 5 <= f->bm.maxHP) ? RGB(31, 14, 10) : (f->bm.hp * 2 <= f->bm.maxHP) ? RGB(31, 28, 10) : COL_WHITE);
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 8c15d2c..cfcd05d 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -650,6 +650,8 @@ static s32 CalcHitDamage(struct Attack *a, u8 defSide, u16 *eff, bool8 *crit)
+     if (a->combo && (sB.comboMask & COMBO_DMG))
+         dmg = dmg * 15 / 10;
+     // partner chips V2 / V3 (POC-11): x1.3 / x1.6
++    if (a->synchro)
++        dmg *= 2;   // Full Synchro (POC-14)
+     if (a->powerPct && a->powerPct != 100)
+         dmg = dmg * a->powerPct / 100;
+     // type programs (Charcoal & co.): +10% each, like Gen 3's type items (src/pokemon.c:3173)
+@@ -856,6 +858,16 @@ static void ApplyHit(struct Attack *a, bool8 last)
+         Busting_NoteCounter();
+         SetMsg("COUNTER HIT!", 50);
+         PKBN_LOG("counter hit on %s", def->name);
++        // POC-14: BN6 Full Synchro (TextScriptBattleTutFullSynchro): a counter catches the enemy off guard - it can't
++        // move for a bit - and the Navi goes Full Synchro: the next chip's Attack power is x2, and further counters
++        // keep it going. Stun length TUNE.
++        if (!(def->navi.flags & NCPF_SUPER_ARMOR) && def->stun < 40)
++            def->stun = 40;
++        if (!sB.fullSynchro)
++            PKBN_LOG("FULL SYNCHRO");
++        sB.fullSynchro = TRUE;
++        strncpy(sB.flashText, "FULL SYNCHRO!", sizeof(sB.flashText) - 1);
++        sB.flashTimer = 60;
+     }
+     // Gust / Twister x2 on a flyer, Earthquake / Magnitude x2 on a digger, Surf / Whirlpool on a diver (Gen 3)
+     if (def->invuln && CanHitInvulnerable(a->move, def->invulnKind))
+@@ -2504,6 +2516,12 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+     a->kind = kind;
+     a->combo = combo;
+     a->powerPct = powerPct;
++    if (side == SIDE_PLAYER && sB.fullSynchro && info->kind != GK_NONE && gBattleMoves[move].power > 0)
++    {
++        a->synchro = TRUE;          // spent by the next damaging chip
++        sB.fullSynchro = FALSE;
++        PKBN_LOG("full synchro: %s x2", userName);
++    }
+     a->user = *user;
+     a->userSlot = userSlot;
+     strncpy(a->userName, userName, sizeof(a->userName) - 1);
+@@ -2607,6 +2625,11 @@ void Moves_UsePA(u8 side, u8 paIndex, const struct BattlePokemon *user, const ch
+     a->kind = pa->kind;
+     a->pa = paIndex + 1;
+     a->powerOverride = pa->power;
++    if (side == SIDE_PLAYER && sB.fullSynchro)
++    {
++        a->synchro = TRUE;   // a Program Advance spends Full Synchro too (POC-14)
++        sB.fullSynchro = FALSE;
++    }
+     a->typeOverride = pa->type + 1;
+     a->user = *user;
+     a->userSlot = userSlot;
+-- 
+2.43.0
+

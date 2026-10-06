@@ -1,0 +1,465 @@
+From 2c2233e4cc1607bb06d2367a5d4b506bb1cc80f2 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 03:22:15 +0300
+Subject: [PATCH 42/44] POC-14j: battle replay - every grid battle is recorded
+ (start state, RNG, keys); NET CHALLENGE screen SELECT replays the last one
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ .gitignore              |   1 +
+ data/scripts/pc.inc     |   7 ++
+ data/specials.inc       |   1 +
+ include/pkbn/replay.h   |  18 +++++
+ src/field_specials.c    |  15 ++++
+ src/pkbn/challenge_ui.c |  15 +++-
+ src/pkbn/grid_battle.c  |  24 ++++++
+ src/pkbn/grid_draw.c    |   7 ++
+ src/pkbn/replay.c       | 171 ++++++++++++++++++++++++++++++++++++++++
+ src/pkbn/selftest.c     |   4 +
+ 10 files changed, 261 insertions(+), 2 deletions(-)
+ create mode 100644 include/pkbn/replay.h
+ create mode 100644 src/pkbn/replay.c
+
+diff --git a/.gitignore b/.gitignore
+index 7946f66..43ef2cc 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -46,3 +46,4 @@ prefabs.json
+ /pokeemerald-*.png
+ /pokeemerald_modern-*.png
+ include/pkbn/bn6_gfx_data.h
++pkbn_replay.bin
+diff --git a/data/scripts/pc.inc b/data/scripts/pc.inc
+index d659978..f138657 100644
+--- a/data/scripts/pc.inc
++++ b/data/scripts/pc.inc
+@@ -32,12 +32,19 @@ EventScript_PkbnNetChallenge::
+ 	special PkbnNetChallengeMenu
+ 	waitstate
+ 	goto_if_eq VAR_RESULT, 0xFF, EventScript_PCMainMenu
++	goto_if_eq VAR_RESULT, 0xFE, EventScript_PkbnReplay
+ 	special PkbnStartNetChallenge
+ 	waitstate
+ 	msgbox Text_PkbnNetChallengeOut, MSGBOX_DEFAULT
+ 	goto EventScript_PCMainMenu
+ 	end
+ 
++EventScript_PkbnReplay::
++	special PkbnStartReplay
++	waitstate
++	goto EventScript_PCMainMenu
++	end
++
+ Text_PkbnNetChallengeLogin:
+ 	.string "Connected to the NET.\n"
+ 	.string "Challenge data received!$"
+diff --git a/data/specials.inc b/data/specials.inc
+index 70a42c7..8caa065 100644
+--- a/data/specials.inc
++++ b/data/specials.inc
+@@ -544,3 +544,4 @@ gSpecials::
+ 	def_special PkbnPcMenuRemap
+ 	def_special PkbnNetChallengeMenu
+ 	def_special PkbnStartNetChallenge
++	def_special PkbnStartReplay
+diff --git a/include/pkbn/replay.h b/include/pkbn/replay.h
+new file mode 100644
+index 0000000..406caad
+--- /dev/null
++++ b/include/pkbn/replay.h
+@@ -0,0 +1,18 @@
++#ifndef GUARD_PKBN_REPLAY_H
++#define GUARD_PKBN_REPLAY_H
++
++// Battle replay (POC-14): every grid battle records its starting state (the battle state after setup, the RNG, both
++// parties) and the keys of each frame; replaying restores the state and feeds the same keys, so the same battle plays
++// out again (the grid is deterministic given those). The last battle is kept in pkbn_replay.bin.
++
++extern bool8 gPkbnReplayActive;   // the battle starting now is a replay
++
++bool8 PkbnReplay_Available(void);
++bool8 PkbnReplay_Prepare(void);          // before the battle starts: reads the file, puts the recorded foes in gEnemyParty
++void PkbnReplay_StartRecording(void);    // end of the grid's setup (not in a replay)
++void PkbnReplay_ApplyStart(void);        // end of the grid's setup in a replay: the recorded state replaces it
++void PkbnReplay_Frame(void);             // each grid frame: record gMain's keys, or (replay) set them from the file
++bool8 PkbnReplay_Finished(void);         // replay: the recorded frames are used up
++void PkbnReplay_End(void);               // battle over: save the recording, or (replay) put the real party back
++
++#endif // GUARD_PKBN_REPLAY_H
+diff --git a/src/field_specials.c b/src/field_specials.c
+index 58c4daf..fc132f2 100644
+--- a/src/field_specials.c
++++ b/src/field_specials.c
+@@ -67,6 +67,7 @@
+ #include "palette.h"
+ #include "pkbn/chip_pack.h"
+ #include "pkbn/challenge.h"
++#include "pkbn/replay.h"
+ #include "battle_setup.h"
+ 
+ #define TAG_ITEM_ICON 5500
+@@ -988,6 +989,20 @@ void PkbnNetChallengeMenu(void)
+ #endif
+ }
+ 
++// POC-14: watch the last recorded grid battle again (src/pkbn/replay.c).
++void PkbnStartReplay(void)
++{
++#ifdef PORTABLE
++    if (PkbnReplay_Prepare())
++    {
++        gPkbnReplayActive = TRUE;
++        BattleSetup_StartPkbnChallenge();
++        return;
++    }
++#endif
++    ScriptContext_Enable();
++}
++
+ // Jack in: the foes of challenge VAR_RESULT, then the battle (battle_setup.c).
+ void PkbnStartNetChallenge(void)
+ {
+diff --git a/src/pkbn/challenge_ui.c b/src/pkbn/challenge_ui.c
+index a3b7966..10dc44c 100644
+--- a/src/pkbn/challenge_ui.c
++++ b/src/pkbn/challenge_ui.c
+@@ -9,6 +9,7 @@
+ #include "event_data.h"
+ #include "constants/songs.h"
+ #include "pkbn/challenge.h"
++#include "pkbn/replay.h"
+ #include "pkbn/chip_pack.h"
+ #include "pkbn/render.h"
+ #include "pkbn/gfx.h"
+@@ -30,6 +31,7 @@ static struct
+     MainCallback exit;
+     u8 cursor;
+     u8 iconsFor;
++    bool8 replay;   // a recorded battle to watch (pkbn_replay.bin)
+     u16 icons[PARTY_SIZE][32 * 32];
+     u32 t;
+ } sC;
+@@ -174,8 +176,10 @@ static void Draw(u16 *fb)
+     DrawList(fb);
+     DrawPanel(fb);
+     Pkbn_FillRect(fb, 0, CH - 13, CW, 13, RGB(1, 2, 5));
+-    Text(fb, 4, CH - 13, PkbnChallenge_Unlocked(sC.cursor) ? "A:JACK IN  B:BACK   A SIMULATION: NOTHING IS LOST"
+-                                                           : "LOCKED: EARN MORE BADGES   B:BACK", RGB(16, 18, 24));
++    Text(fb, 4, CH - 13, PkbnChallenge_Unlocked(sC.cursor) ? "A:JACK IN  B:BACK" : "LOCKED: EARN BADGES  B:BACK", RGB(16, 18, 24));
++    if (sC.replay)
++        Text(fb, CW - 4 - Pkbn_EmTextWidth("SELECT:REPLAY LAST BATTLE", PKBN_FONT_SMALL), CH - 13, "SELECT:REPLAY LAST BATTLE",
++             RGB(31, 20, 10));
+ }
+ 
+ static void Leave(u16 result)
+@@ -206,6 +210,11 @@ static void HandleInput(u16 keys)
+         PlaySE(SE_SELECT);
+         Leave(0xFF);
+     }
++    else if ((keys & SELECT_BUTTON) && sC.replay)
++    {
++        PlaySE(SE_SELECT);
++        Leave(0xFE);   // POC-14: watch the last battle again
++    }
+ }
+ 
+ static void CB2_ChallengeMenu(void)
+@@ -223,6 +232,7 @@ static void CB2_ChallengeMenu(void)
+             case 'D': keys = DPAD_DOWN; break;
+             case 'A': keys = A_BUTTON; break;
+             case 'B': keys = B_BUTTON; break;
++            case 'E': keys = SELECT_BUTTON; break;
+             }
+             if (*sKeys)
+                 sKeys++;
+@@ -238,6 +248,7 @@ void PkbnChallengeMenu_Open(MainCallback exitCallback)
+     memset(&sC, 0, sizeof(sC));
+     sC.exit = exitCallback;
+     sC.iconsFor = 0xFF;
++    sC.replay = PkbnReplay_Available();
+     sKeys = getenv("PKBN_TEST_CHALLENGE_KEYS");
+     sKeyClock = 0;
+     gPkbnCanvasOverlay = Draw;
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index cea913a..5a7b910 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -40,6 +40,7 @@
+ #include "pkbn/rival.h"
+ #include "pkbn/leader.h"
+ #include "pkbn/challenge.h"
++#include "pkbn/replay.h"
+ #include "constants/battle_ai.h"
+ 
+ #ifdef PORTABLE
+@@ -1021,12 +1022,28 @@ static void Begin(void)
+     sB.timer = 70;
+     gPkbnCanvasOverlay = Overlay;
+     sActive = TRUE;
++    if (gPkbnReplayActive)
++        PkbnReplay_ApplyStart();       // POC-14: the recorded battle's own start replaces this one
++    else
++        PkbnReplay_StartRecording();
+ }
+ 
+ static void Finish(void)
+ {
+     s32 i, m;
+ 
++    if (gPkbnReplayActive)
++    {
++        // a replay (POC-14) changes nothing: no write-back, no rewards, straight back
++        gPkbnCanvasOverlay = NULL;
++        sActive = FALSE;
++        FreeBattleResources();
++        PkbnReplay_End();
++        PkbnContract_Exit(B_OUTCOME_RAN);
++        return;
++    }
++    PkbnReplay_End();   // saves the recording of this battle
++
+     SyncActiveToParty();
+     // Write-back required by the contract (research/02 §4): HP, PP and status for every party member.
+     // A NET CHALLENGE is a simulation (POC-14): the party comes back exactly as it went in.
+@@ -2427,6 +2444,13 @@ void CB2_PkbnGridBattle(void)
+         if (sOwAuto && PkbnOwTest_Active())
+             Pkbn_SelfTestAutopilot();
+     }
++    if (gPkbnReplayActive && sB.state != ST_END
++     && (PkbnReplay_Finished() || ((gMain.newKeys & START_BUTTON) && getenv("PKBN_SELFTEST") == NULL)))
++    {
++        EndBattle(B_OUTCOME_RAN, "END OF REPLAY");
++        sB.timer = 30;
++    }
++    PkbnReplay_Frame();   // POC-14: record this frame's keys, or play the recorded ones
+ 
+     sB.frame++;
+     if (sB.msgTimer)
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index a17f48d..b9c17f8 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -6,6 +6,7 @@
+ //   - Text: Emerald's normal / small fonts.
+ // Panels, HUD frames and the backdrop are our own pixel art in the BN style (TUNE).
+ #include "pkbn/grid_internal.h"
++#include "pkbn/replay.h"
+ #include "pkbn/leader.h"
+ #include "data.h"
+ #include "item.h"
+@@ -709,6 +710,12 @@ static void DrawBottomHud(u16 *fb)
+             Text(fb, CW - 70, y, line, COL_DIM);
+         }
+     }
++    if (gPkbnReplayActive)
++    {
++        // POC-14: watching the last battle again
++        Draw_Box(fb, CW - 112, y + 2, 54, 11, RGB(22, 4, 6), COL_WHITE, 16);
++        Text(fb, CW - 109, y, (sB.frame / 30) & 1 ? "REPLAY" : "START:STOP", COL_WHITE);
++    }
+     Text(fb, CW - 54, y, "B:BUSTER", COL_DIM);
+ }
+ 
+diff --git a/src/pkbn/replay.c b/src/pkbn/replay.c
+new file mode 100644
+index 0000000..bc83645
+--- /dev/null
++++ b/src/pkbn/replay.c
+@@ -0,0 +1,171 @@
++// Battle replay (POC-14, include/pkbn/replay.h). Our own feature: neither game records battles.
++#include "pkbn/grid_vfx.h"   // first: it pulls in <stdlib.h> before global.h's macros
++#include "global.h"
++#include "main.h"
++#include "pokemon.h"
++#include "random.h"
++#include "battle.h"
++#include "battle_setup.h"
++#include "pkbn/grid_internal.h"
++#include "pkbn/replay.h"
++
++#ifdef PORTABLE
++#include <stdio.h>
++#include <string.h>
++
++#define REPLAY_PATH       "pkbn_replay.bin"
++#define REPLAY_VERSION    1
++#define REPLAY_MAX_FRAMES (60 * 60 * 15)   // 15 minutes of battle
++
++struct ReplayHeader
++{
++    char magic[8];
++    u32 version;
++    u32 stateSize;        // sizeof(struct GridBattle): a replay only plays on the build that made it
++    u32 frames;
++    u32 rng;
++    u32 battleTypeFlags;
++    u16 opponentA, opponentB;
++    u8 environment;
++};
++
++struct ReplayKeys { u16 newKeys, heldKeys; };
++
++bool8 gPkbnReplayActive;
++
++static struct
++{
++    struct ReplayHeader h;
++    struct GridBattle state;
++    struct Pokemon player[PARTY_SIZE], enemy[PARTY_SIZE];
++    struct ReplayKeys keys[REPLAY_MAX_FRAMES];
++    u32 at;
++    bool8 recording;
++    struct Pokemon realParty[PARTY_SIZE];
++} sR;
++
++static bool8 ReadFile(void)
++{
++    FILE *f = fopen(REPLAY_PATH, "rb");
++    bool8 ok = FALSE;
++    if (f == NULL)
++        return FALSE;
++    if (fread(&sR.h, sizeof(sR.h), 1, f) == 1 && memcmp(sR.h.magic, "PKBNRPLY", 8) == 0 && sR.h.version == REPLAY_VERSION
++     && sR.h.stateSize == sizeof(struct GridBattle) && sR.h.frames <= REPLAY_MAX_FRAMES
++     && fread(&sR.state, sizeof(sR.state), 1, f) == 1 && fread(sR.player, sizeof(sR.player), 1, f) == 1
++     && fread(sR.enemy, sizeof(sR.enemy), 1, f) == 1 && fread(sR.keys, sizeof(struct ReplayKeys), sR.h.frames, f) == sR.h.frames)
++        ok = TRUE;
++    fclose(f);
++    return ok;
++}
++
++bool8 PkbnReplay_Available(void)
++{
++    FILE *f = fopen(REPLAY_PATH, "rb");
++    struct ReplayHeader h;
++    bool8 ok = FALSE;
++    if (f == NULL)
++        return FALSE;
++    if (fread(&h, sizeof(h), 1, f) == 1 && memcmp(h.magic, "PKBNRPLY", 8) == 0 && h.version == REPLAY_VERSION
++     && h.stateSize == sizeof(struct GridBattle))
++        ok = TRUE;
++    fclose(f);
++    return ok;
++}
++
++bool8 PkbnReplay_Prepare(void)
++{
++    if (!ReadFile())
++        return FALSE;
++    memcpy(gEnemyParty, sR.enemy, sizeof(sR.enemy));
++    return TRUE;
++}
++
++void PkbnReplay_StartRecording(void)
++{
++    memset(&sR.h, 0, sizeof(sR.h));
++    memcpy(sR.h.magic, "PKBNRPLY", 8);
++    sR.h.version = REPLAY_VERSION;
++    sR.h.stateSize = sizeof(struct GridBattle);
++    sR.h.rng = gRngValue;
++    sR.h.battleTypeFlags = gBattleTypeFlags;
++    sR.h.opponentA = gTrainerBattleOpponent_A;
++    sR.h.opponentB = gTrainerBattleOpponent_B;
++    sR.h.environment = gBattleEnvironment;
++    sR.state = sB;
++    memcpy(sR.player, gPlayerParty, sizeof(sR.player));
++    memcpy(sR.enemy, gEnemyParty, sizeof(sR.enemy));
++    sR.at = 0;
++    sR.recording = TRUE;
++}
++
++void PkbnReplay_ApplyStart(void)
++{
++    memcpy(sR.realParty, gPlayerParty, sizeof(sR.realParty));
++    memcpy(gPlayerParty, sR.player, sizeof(sR.player));
++    memcpy(gEnemyParty, sR.enemy, sizeof(sR.enemy));
++    gBattleTypeFlags = sR.h.battleTypeFlags;
++    gTrainerBattleOpponent_A = sR.h.opponentA;
++    gTrainerBattleOpponent_B = sR.h.opponentB;
++    gBattleEnvironment = sR.h.environment;
++    sB = sR.state;
++    gRngValue = sR.h.rng;
++    sR.at = 0;
++    sR.recording = FALSE;
++    printf("[pkbn] replay: %u frames\n", (unsigned)sR.h.frames);
++}
++
++void PkbnReplay_Frame(void)
++{
++    if (gPkbnReplayActive)
++    {
++        if (sR.at < sR.h.frames)
++        {
++            gMain.newKeys = sR.keys[sR.at].newKeys;
++            gMain.heldKeys = sR.keys[sR.at].heldKeys;
++            sR.at++;
++        }
++        else
++            gMain.newKeys = gMain.heldKeys = 0;
++        return;
++    }
++    if (sR.recording && sR.at < REPLAY_MAX_FRAMES)
++    {
++        sR.keys[sR.at].newKeys = gMain.newKeys;
++        sR.keys[sR.at].heldKeys = gMain.heldKeys;
++        sR.at++;
++    }
++}
++
++bool8 PkbnReplay_Finished(void)
++{
++    return gPkbnReplayActive && sR.at >= sR.h.frames;
++}
++
++void PkbnReplay_End(void)
++{
++    if (gPkbnReplayActive)
++    {
++        memcpy(gPlayerParty, sR.realParty, sizeof(sR.realParty));   // a replay changes nothing
++        gBattleTypeFlags = 0;
++        gPkbnReplayActive = FALSE;
++        return;
++    }
++    if (sR.recording)
++    {
++        FILE *f = fopen(REPLAY_PATH, "wb");
++        sR.recording = FALSE;
++        sR.h.frames = sR.at;
++        if (f == NULL)
++            return;
++        fwrite(&sR.h, sizeof(sR.h), 1, f);
++        fwrite(&sR.state, sizeof(sR.state), 1, f);
++        fwrite(sR.player, sizeof(sR.player), 1, f);
++        fwrite(sR.enemy, sizeof(sR.enemy), 1, f);
++        fwrite(sR.keys, sizeof(struct ReplayKeys), sR.at, f);
++        fclose(f);
++        printf("[pkbn] replay saved: %u frames\n", (unsigned)sR.at);
++    }
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index bd7f03a..b03b966 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -20,6 +20,7 @@
+ #include "battle_setup.h"
+ #include "pkbn/grid_battle.h"
+ #include "pkbn/challenge.h"
++#include "pkbn/replay.h"
+ #include "pkbn/render.h"
+ #include "pokedex.h"
+ #include "pkbn/bot.h"
+@@ -490,6 +491,9 @@ void Pkbn_SelfTestMaybeStart(void)
+     // PKBN_TEST_LEGENDARY=1: the wild Pokémon is fought as a scripted legendary (POC-14 boss battles)
+     if (getenv("PKBN_TEST_LEGENDARY") != NULL)
+         gBattleTypeFlags = BATTLE_TYPE_LEGENDARY;
++    // PKBN_TEST_REPLAY=1: replay the last recorded battle (pkbn_replay.bin, POC-14) instead
++    if (getenv("PKBN_TEST_REPLAY") != NULL && PkbnReplay_Prepare())
++        gPkbnReplayActive = TRUE;
+     // PKBN_TEST_CHALLENGE=n: NET CHALLENGE n instead of the wild Pokémon (POC-14)
+     if (getenv("PKBN_TEST_CHALLENGE") != NULL)
+     {
+-- 
+2.43.0
+

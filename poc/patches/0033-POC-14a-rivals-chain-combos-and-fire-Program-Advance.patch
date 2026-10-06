@@ -1,0 +1,223 @@
+From f8d6008f26ec82efada3f68bdc003444d65d434c Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 02:26:29 +0300
+Subject: [PATCH 33/44] POC-14a: rivals chain combos and fire Program Advances;
+ 12 themed Program Advances and 24 extra combo pairs
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |   2 +
+ include/pkbn/move_table.h    |   2 +-
+ src/pkbn/grid_battle.c       | 117 ++++++++++++++++++++++++++++++++++-
+ src/pkbn/move_table.c        |  12 ++++
+ 4 files changed, 131 insertions(+), 2 deletions(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 8e9c795..cefb051 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -119,6 +119,8 @@ struct Fighter
+     bool8 recharge;      // review: can't pick chips at the next Custom
+     bool8 fakeOutReady;  // Fake Out only works right after coming in
+     bool8 truantLoaf;    // Truant: this turn it loafs around (POC-13)
++    u8 chainSlot;        // rivals (POC-14): move slot + 1 of a contest-combo follow-up queued next
++    u8 paUses;           // rivals: Program Advances fired this battle
+     u8 style;            // wild Pokémon's virus-style pattern (POC-13, STYLE_*); 0 = the old random pattern
+     u8 rolloutCount, furyCount;
+     u16 bideFrames;
+diff --git a/include/pkbn/move_table.h b/include/pkbn/move_table.h
+index c958965..a1ec254 100644
+--- a/include/pkbn/move_table.h
++++ b/include/pkbn/move_table.h
+@@ -73,7 +73,7 @@ struct PkbnMoveInfo
+ extern const struct PkbnMoveInfo gPkbnMoveInfo[];
+ 
+ // Program Advances (tools/lanes_curated.py PROGRAM_ADVANCES + tools/attacks_curated.py PA_EFFECTS)
+-#define PKBN_PA_COUNT 19
++#define PKBN_PA_COUNT 31
+ #define PA_CONFUSE       0xFFFFFFFF // pseudo-status: confusion
+ #define PAF_CRIT         (1 << 0)
+ #define PAF_PARTYHEAL    (1 << 1)
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index e5b6e8e..7c82ebb 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -492,6 +492,8 @@ static void LoadEnemy(struct Pokemon *mon)
+     Gfx_LoadMonPic(&f->pic, f->bm.species, f->bm.personality, f->bm.otId);
+     Field_ResetFighterConditions(f);
+     memset(&f->navi, 0, sizeof(f->navi));
++    f->chainSlot = 0;
++    f->paUses = 0;
+     f->style = (!sB.trainer && getenv("PKBN_NO_STYLES") == NULL) ? StyleOf(f->bm.species) : STYLE_NONE;
+     if (f->style)
+         PKBN_LOG("%s fights as a %s", f->name, sStyleNames[f->style]);
+@@ -1173,10 +1175,35 @@ static bool8 TryTeleportEscape(u8 side, u16 move)
+ }
+ 
+ // Use a move from this Custom's chain. A contest combo with the previous chip pays off (design 03 §4).
++// Chains (POC-14): Emerald's contest combos (AreMovesContestCombo, src/contest_effect.c:60) plus our own pairs, themed
++// on the Gym Leaders' and Elite Four's movesets (TUNE). Used by the player's chains and the rivals' follow-ups.
++static const u16 sExtraCombos[][2] =
++{
++    { MOVE_DEFENSE_CURL, MOVE_ROCK_TOMB }, { MOVE_BULK_UP, MOVE_ARM_THRUST }, { MOVE_BULK_UP, MOVE_FOCUS_PUNCH },
++    { MOVE_THUNDER_WAVE, MOVE_SHOCK_WAVE }, { MOVE_THUNDER_WAVE, MOVE_SPARK }, { MOVE_SUNNY_DAY, MOVE_HEAT_WAVE },
++    { MOVE_BELLY_DRUM, MOVE_FACADE }, { MOVE_FEATHER_DANCE, MOVE_AERIAL_ACE }, { MOVE_DRAGON_DANCE, MOVE_DRAGON_CLAW },
++    { MOVE_CALM_MIND, MOVE_PSYCHIC }, { MOVE_CALM_MIND, MOVE_EXTRASENSORY }, { MOVE_RAIN_DANCE, MOVE_WATER_PULSE },
++    { MOVE_RAIN_DANCE, MOVE_WATER_SPOUT }, { MOVE_SWORDS_DANCE, MOVE_SLASH }, { MOVE_SWORDS_DANCE, MOVE_CRUNCH },
++    { MOVE_CONFUSE_RAY, MOVE_SHADOW_BALL }, { MOVE_CONFUSE_RAY, MOVE_NIGHT_SHADE }, { MOVE_WILL_O_WISP, MOVE_SHADOW_BALL },
++    { MOVE_HAIL, MOVE_ICE_BALL }, { MOVE_HAIL, MOVE_BLIZZARD }, { MOVE_LEECH_SEED, MOVE_GIGA_DRAIN },
++    { MOVE_TOXIC, MOVE_SLUDGE_BOMB }, { MOVE_SANDSTORM, MOVE_ROCK_SLIDE }, { MOVE_AMNESIA, MOVE_SURF },
++};
++
++static bool8 ChainCombo(u16 prev, u16 next)
++{
++    u32 i;
++    if (AreMovesContestCombo(prev, next))
++        return TRUE;
++    for (i = 0; i < ARRAY_COUNT(sExtraCombos); i++)
++        if (sExtraCombos[i][0] == prev && sExtraCombos[i][1] == next)
++            return TRUE;
++    return FALSE;
++}
++
+ static void ChainUse(u16 move, u8 slot)
+ {
+     struct Fighter *p = &sB.f[SIDE_PLAYER];
+-    if (sB.chainPrev != MOVE_NONE && AreMovesContestCombo(sB.chainPrev, move))
++    if (sB.chainPrev != MOVE_NONE && ChainCombo(sB.chainPrev, move))
+     {
+         char a[16], b[16], line[40];
+         Pkbn_GameStringToAscii(a, gMoveNames[sB.chainPrev], sizeof(a));
+@@ -1536,6 +1563,72 @@ static void EnemyDodge(void)
+             }
+ }
+ 
++// ---- Rivals chain and fire Program Advances (POC-14, our design - TUNE) ---------------------------------------------
++// A BN boss Navi strings its attacks together and has a big move it saves for when it's hurt. Rivals (src/pkbn/rival.c)
++// from tier 2: after a move, a combo follow-up it knows comes right after (ChainCombo, the same pairs the player's
++// chains use) with the combo payoff. From tier 3: a Program Advance once below half HP (tier 5:
++// again below a quarter), if the Pokémon knows 2 of its 3 recipe moves, or its finisher and the PA's type.
++static s8 RivalPA(const struct Fighter *e)
++{
++    s32 k, m, i, best = -1, bestPow = 0;
++    for (k = 0; k < PKBN_PA_COUNT; k++)
++    {
++        const struct PkbnProgramAdvance *pa = &gPkbnProgramAdvances[k];
++        s32 known = 0;
++        bool8 finisher = FALSE;
++        for (i = 0; i < 3; i++)
++            for (m = 0; m < MAX_MON_MOVES; m++)
++                if (e->bm.moves[m] == pa->recipe[i])
++                {
++                    known++;
++                    if (i == 2)
++                        finisher = TRUE;
++                }
++        if (known >= 2 || (finisher && (e->bm.types[0] == pa->type || e->bm.types[1] == pa->type)))
++            if (pa->power > bestPow)
++                best = k, bestPow = pa->power;
++    }
++    return best;
++}
++
++static bool8 RivalSpecial(struct Fighter *e)
++{
++    s8 pa;
++    u8 allowed = sB.rivalTier >= 5 ? 2 : sB.rivalTier >= 3 ? 1 : 0;
++    u32 hpLine = e->paUses == 0 ? e->bm.maxHP / 2 : e->bm.maxHP / 4;
++    if (e->paUses >= allowed || e->bm.hp > hpLine || (pa = RivalPA(e)) < 0)
++        return FALSE;
++    {
++        char line[48];
++        snprintf(line, sizeof(line), "%s: %s!", e->name, gPkbnProgramAdvances[pa].name);
++        Flash(line, 90);
++        PlaySE(SE_SUCCESS);
++        PKBN_LOG("rival program advance: %s", line);
++    }
++    e->paUses++;
++    e->chainSlot = 0;   // the PA replaces a queued follow-up
++    EnemyLineUp(gPkbnProgramAdvances[pa].kind);
++    Moves_UsePA(SIDE_ENEMY, pa, &e->bm, e->name, 0);
++    return TRUE;
++}
++
++// After the rival's move `slot`, line up a contest-combo follow-up it knows (tier 2+).
++static void RivalQueueCombo(struct Fighter *e, u8 slot)
++{
++    s32 m;
++    e->chainSlot = 0;
++    if (sB.rivalTier < 2)
++        return;
++    for (m = 0; m < MAX_MON_MOVES; m++)
++        if (m != slot && e->bm.pp[m] && PkbnFolder_MoveIsChip(e->bm.moves[m])
++         && ChainCombo(e->bm.moves[slot], e->bm.moves[m]))
++        {
++            e->chainSlot = m + 1;
++            sB.aiAttackTimer = 40;   // TUNE: the follow-up comes quickly
++            return;
++        }
++}
++
+ static void UpdateOneEnemy(void)
+ {
+     struct Fighter *e = &sB.f[SIDE_ENEMY];
+@@ -1556,12 +1649,34 @@ static void UpdateOneEnemy(void)
+             SetMsg(line, 50);
+             return;
+         }
++        if (sB.rivalTier && RivalSpecial(e))
++            return;
++        if (e->chainSlot && e->bm.pp[e->chainSlot - 1])
++        {
++            // the combo follow-up (POC-14): the chain payoff applies, as for the player's chains
++            char a[16], b[16], line[48];
++            slot = e->chainSlot - 1;
++            Pkbn_GameStringToAscii(a, gMoveNames[e->lastMove], sizeof(a));
++            Pkbn_GameStringToAscii(b, gMoveNames[e->bm.moves[slot]], sizeof(b));
++            snprintf(line, sizeof(line), "FOE COMBO! %s>%s", a, b);
++            Flash(line, 70);
++            e->chainSlot = 0;
++            EnemyLineUp(Moves_KindOf(e->bm.moves[slot]));
++            e->bm.pp[slot]--;
++            sB.nextCombo = TRUE;
++            Moves_Use(SIDE_ENEMY, e->bm.moves[slot], slot, &e->bm, e->name, 0);
++            sB.nextCombo = FALSE;
++            PKBN_LOG("rival combo: %s", line);
++            return;
++        }
+         if (!PickEnemyMove(&slot))
+             return;
+         EnemyLineUp(Moves_KindOf(e->bm.moves[slot]));
+         e->bm.pp[slot]--;
+         if (!TryTeleportEscape(SIDE_ENEMY, e->bm.moves[slot]))
+             Moves_Use(SIDE_ENEMY, e->bm.moves[slot], slot, &e->bm, e->name, 0);
++        if (sB.rivalTier)
++            RivalQueueCombo(e, slot);
+         return;
+     }
+ 
+diff --git a/src/pkbn/move_table.c b/src/pkbn/move_table.c
+index 7f5ff59..1ea8c3e 100644
+--- a/src/pkbn/move_table.c
++++ b/src/pkbn/move_table.c
+@@ -425,4 +425,16 @@ const struct PkbnProgramAdvance gPkbnProgramAdvances[PKBN_PA_COUNT] =
+     { "Z-PSI", {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC}, GK_CANNON, TYPE_PSYCHIC, 240, 1, 1, 0, PA_CONFUSE, 0 }, // PSYCHIC 240 + confusion
+     { "Z-DRAIN", {MOVE_ABSORB, MOVE_MEGA_DRAIN, MOVE_GIGA_DRAIN}, GK_CANNON, TYPE_GRASS, 200, 1, 1, 0, 0, 100 }, // GRASS 200, heals 100% of damage
+     { "Z-SLUDGE", {MOVE_POISON_STING, MOVE_SLUDGE, MOVE_SLUDGE_BOMB}, GK_CANNON, TYPE_POISON, 200, 1, 1, 0, STATUS1_TOXIC_POISON, 0 }, // POISON 200 + bad poison
++    { "ROCK AVALANCHE", {MOVE_DEFENSE_CURL, MOVE_ROCK_THROW, MOVE_ROCK_TOMB}, GK_METEORS, TYPE_ROCK, 130, 1, 4, PAF_SPEEDDOWN, 0, 0 }, // ROCK 4 x 130 rocks on the enemy area + slows (Roxanne, code Q)
++    { "IRON FIST", {MOVE_BULK_UP, MOVE_ARM_THRUST, MOVE_FOCUS_PUNCH}, GK_LIFESWORD, TYPE_FIGHTING, 200, 1, 1, 0, 0, 0 }, // FIGHTING 200, two columns of fists (Brawly, code P)
++    { "THUNDER CAGE", {MOVE_THUNDER_WAVE, MOVE_SPARK, MOVE_SHOCK_WAVE}, GK_FIELD, TYPE_ELECTRIC, 120, 1, 1, PAF_NOFAINT, STATUS1_PARALYSIS, 0 }, // ELECTRIC 120 on every enemy panel + paralysis (Wattson, code C)
++    { "SOLAR FLARE", {MOVE_SUNNY_DAY, MOVE_FLAMETHROWER, MOVE_HEAT_WAVE}, GK_FIELD, TYPE_FIRE, 200, 1, 1, PAF_NOFAINT, STATUS1_BURN, 0 }, // FIRE 200 on every enemy panel + burn (Flannery, code S)
++    { "BATTERING RAM", {MOVE_DEFENSE_CURL, MOVE_HEADBUTT, MOVE_TAKE_DOWN}, GK_DASH, TYPE_NORMAL, 150, 1, 1, 0, 0, 0 }, // NORMAL 150 charge down the row, no recoil (Norman, code H)
++    { "DIVE BOMBER", {MOVE_FEATHER_DANCE, MOVE_STEEL_WING, MOVE_AERIAL_ACE}, GK_LOCKON, TYPE_FLYING, 170, 1, 1, 0, 0, 0 }, // FLYING 170, locks on and never misses (Winona, code W)
++    { "COSMIC DUET", {MOVE_LIGHT_SCREEN, MOVE_CALM_MIND, MOVE_PSYCHIC}, GK_SWEEP, TYPE_PSYCHIC, 170, 1, 1, 0, 0, 0 }, // PSYCHIC 170 beam sweeping the enemy area (Tate & Liza, code M)
++    { "RIPPLE BURST", {MOVE_RAIN_DANCE, MOVE_WATER_PULSE, MOVE_SURF}, GK_WAVE, TYPE_WATER, 160, 3, 1, 0, PA_CONFUSE, 0 }, // WATER 160 wave over all three rows + confusion (Juan, code R)
++    { "NIGHT HUNT", {MOVE_FAINT_ATTACK, MOVE_SLASH, MOVE_CRUNCH}, GK_WIDESWORD, TYPE_DARK, 180, 1, 1, PAF_CRIT, 0, 0 }, // DARK 180 wide cut, guaranteed crit (Sidney, code N)
++    { "PHANTOM PARADE", {MOVE_CONFUSE_RAY, MOVE_NIGHT_SHADE, MOVE_SHADOW_BALL}, GK_CANNON, TYPE_GHOST, 180, 1, 1, 0, PA_CONFUSE, 0 }, // GHOST 180 cannon + confusion (Phoebe, code N)
++    { "GLACIAL TOMB", {MOVE_HAIL, MOVE_ICE_BALL, MOVE_ICE_BEAM}, GK_FIELD, TYPE_ICE, 170, 1, 1, PAF_NOFAINT, STATUS1_FREEZE, 0 }, // ICE 170 on every enemy panel + freeze (Glacia, code I)
++    { "GEYSER", {MOVE_RAIN_DANCE, MOVE_SURF, MOVE_WATER_SPOUT}, GK_FIELD, TYPE_WATER, 220, 1, 1, PAF_NOFAINT, 0, 0 }, // WATER 220 erupting under every enemy panel (Wallace, code R)
+ };
+-- 
+2.43.0
+
