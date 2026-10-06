@@ -1,0 +1,29 @@
+From 77fbc5e7f7b494f86165fd9e3401da33f389901e Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 23:34:45 +0300
+Subject: [PATCH 69/69] POC-18j: foes attack 25% less often too, so the slower
+ pace stays fair
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/grid_battle.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index cd152b6..6d67252 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -1194,7 +1194,8 @@ static u16 EnemyAttackInterval(void)
+         spd = 100;
+     return (150 - spd / 2 + (Random() % 40)) * (20 - sB.rivalTier) / 20      // TUNE: faster Pokémon attack more often; rivals -5%/tier
+          * sStyleAttack[sB.f[SIDE_ENEMY].style] / 100                          // wild patterns (POC-13)
+-         * (sB.omega ? 85 : 100) / 100;                                        // POC-16d Ω: 15% sooner (TUNE)
++         * (sB.omega ? 85 : 100) / 100                                         // POC-16d Ω: 15% sooner (TUNE)
++         * 125 / 100;                                                          // POC-18: the whole battle ~25% slower
+ }
+ 
+ // ---- Per-state update -----------------------------------------------------------------
+-- 
+2.43.0
+

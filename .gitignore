@@ -10,3 +10,4 @@ pokeemerald32
 poc/bin/
 *.dll
 __pycache__/
+*.zip

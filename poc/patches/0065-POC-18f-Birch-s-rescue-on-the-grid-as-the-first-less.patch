@@ -1,0 +1,987 @@
+From 36e36e050fd3e90d86f1f68e7e1a69ce06503a28 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 23:17:58 +0300
+Subject: [PATCH 65/69] POC-18f: Birch's rescue on the grid as the first
+ lesson; lessons for catching, SW and counters; save v7
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |   1 +
+ include/pkbn/tutorial.h      |  41 ++++
+ src/battle_setup.c           |   6 +-
+ src/pkbn/battle_stub.c       |   3 +
+ src/pkbn/grid_battle.c       |  43 +++-
+ src/pkbn/grid_draw.c         | 119 +++++++++-
+ src/pkbn/grid_moves.c        |   1 +
+ src/pkbn/pkbn_save.c         |  23 +-
+ src/pkbn/selftest.c          |  35 +++
+ src/pkbn/tutorial.c          | 437 +++++++++++++++++++++++++++++++++++
+ 10 files changed, 702 insertions(+), 7 deletions(-)
+ create mode 100644 include/pkbn/tutorial.h
+ create mode 100644 src/pkbn/tutorial.c
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 894c39e..b8d7a2d 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -238,6 +238,7 @@ struct GridBattle
+     u8 cinemaT;                // POC-17b: frames the fight waits for a big move's cut-in (the pictures keep moving)
+     bool8 lowHp;               // POC-17c: the low-HP alarm is on
+     u8 runHold;                // POC-18: frames SELECT has been held (running needs RUN_HOLD_FRAMES)
++    bool8 firstBattle;         // POC-18: Birch's rescue (BATTLE_TYPE_FIRST_BATTLE), on the grid as the first lesson
+     u8 chipReadyT;             // POC-18: frames until chips and the buster work after Custom (CHIP_READY_FRAMES)
+     bool8 omega;               // POC-16d: an Ω Leader rematch (tier-6 AI, levels +5)
+     bool8 noHeal;              // POC-16e: a challenge where nothing heals
+diff --git a/include/pkbn/tutorial.h b/include/pkbn/tutorial.h
+new file mode 100644
+index 0000000..f9e5523
+--- /dev/null
++++ b/include/pkbn/tutorial.h
+@@ -0,0 +1,41 @@
++#ifndef GUARD_PKBN_TUTORIAL_H
++#define GUARD_PKBN_TUTORIAL_H
++// POC-18: lessons for players new to Battle Network (src/pkbn/tutorial.c). Khaled's picks: Birch's rescue on Route 101
++// is the first grid battle and Birch talks you through it, the way Lan and MegaMan do in BN6's first battles
++// (bn6f data/textscript/TextScriptBattleTut1.s, TextScriptBattleTutAreaGrab.s, TextScriptBattleTutFullSynchro.s);
++// later lessons come once, in the first battle where they fit.
++#include "global.h"
++
++#define TUT_BASICS    (1 << 0)   // Birch's rescue: Custom, chips, codes, OK, moving, buster, using a chip, the gauge
++#define TUT_CODES     (1 << 1)   // the * code (second Custom of the rescue, when a * chip is in hand)
++#define TUT_CATCH     (1 << 2)   // first wild battle with Poké Balls
++#define TUT_SWITCH    (1 << 3)   // first battle with two Pokémon able to fight
++#define TUT_COUNTER   (1 << 4)   // first counter chance
++#define TUT_NAVICUST  (1 << 5)   // first time in NAVICUST
++#define TUT_NAVI_OPEN (1 << 7)   // a save from before POC-18: NAVICUST stays open without the Stone Badge
++
++// What a line points at (drawn by grid_draw.c)
++enum { TT_NONE, TT_HAND, TT_INFO, TT_FOE_HP, TT_OK, TT_PLAYER, TT_GAUGE, TT_HEAD, TT_BALL, TT_SW, TT_FOE };
++
++// Events the battle reports
++enum { TEV_CUSTOM_OPEN, TEV_CUSTOM_OK, TEV_STEP, TEV_BUSTER, TEV_CHIP_USED };
++
++bool8 PkbnTutorial_Seen(u8 bits);      // pkbn_save.c
++void PkbnTutorial_SetSeen(u8 bits);
++
++bool8 Tut_Enabled(void);                // FALSE in replays and self-tests (PKBN_TEST_TUTORIAL=1 turns it on there)
++void Tut_BattleBegin(bool8 firstBattle);
++void Tut_StarterFolder(void);           // the rescue's folder: the starter's first two moves, 3 copies, one code
++bool8 Tut_Frame(void);                  // each battle frame, first: TRUE = a line is open and the battle waits
++void Tut_Event(u8 ev);
++bool8 Tut_HoldFoe(void);                // the foe waits while you learn
++bool8 Tut_Active(void);                 // a lesson is running this battle
++// For grid_draw.c: the open line (NULL = none), what it points at, whether A closes it (else it's a "do it" prompt)
++const char *Tut_Line(u8 *target, bool8 *waitsForA);
++u8 Tut_WantedCursor(void);              // self-test bots
++u16 Tut_WantedFightKey(void);
++u32 Tut_StepId(void);                   // self-test screenshots: changes with each line
++bool8 Tut_Blocking(void);               // a line waits for A (the battle is frozen)
++bool8 PkbnNaviCust_Unlocked(void);      // NAVICUST in the party menu: after Roxanne (POC-18)
++
++#endif // GUARD_PKBN_TUTORIAL_H
+diff --git a/src/battle_setup.c b/src/battle_setup.c
+index 8008ddb..3a69140 100644
+--- a/src/battle_setup.c
++++ b/src/battle_setup.c
+@@ -968,7 +968,11 @@ static void CB2_StartFirstBattle(void)
+         gBattleTypeFlags = BATTLE_TYPE_FIRST_BATTLE;
+         gMain.savedCallback = CB2_EndFirstBattle;
+         FreeAllWindowBuffers();
+-        SetMainCallback2(CB2_InitBattle);
++        // PKBN POC-18: Birch's rescue is the first grid battle and its lesson (src/pkbn/tutorial.c)
++        if (PkbnBattle_ShouldHandle())
++            SetMainCallback2(PkbnBattle_GetEntryCallback());
++        else
++            SetMainCallback2(CB2_InitBattle);
+         RestartWildEncounterImmunitySteps();
+         ClearPoisonStepCounter();
+         IncrementGameStat(GAME_STAT_TOTAL_BATTLES);
+diff --git a/src/pkbn/battle_stub.c b/src/pkbn/battle_stub.c
+index 35ce610..4ea9ee2 100644
+--- a/src/pkbn/battle_stub.c
++++ b/src/pkbn/battle_stub.c
+@@ -64,6 +64,9 @@ bool8 PkbnBattle_ShouldHandle(void)
+         return FALSE;
+     if (gBattleTypeFlags == 0)
+         return TRUE;
++    // POC-18: Birch's rescue (CB2_StartFirstBattle) - the first lesson
++    if (GetMode() == PKBN_MODE_GRID && gBattleTypeFlags == BATTLE_TYPE_FIRST_BATTLE)
++        return TRUE;
+     // POC-14: the legendaries' scripted battles (BattleSetup_StartLegendaryBattle, StartRegiBattle,
+     // StartGroudonKyogreBattle, BattleSetup_StartLatiBattle) are fought on the grid as boss battles.
+     if (GetMode() == PKBN_MODE_GRID && (gBattleTypeFlags & BATTLE_TYPE_LEGENDARY)
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 987b5fa..cd152b6 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -43,6 +43,7 @@
+ #include "pkbn/challenge.h"
+ #include "pkbn/replay.h"
+ #include "constants/battle_ai.h"
++#include "pkbn/tutorial.h"
+ #include "battle_interface.h"
+ #include "m4a.h"
+ 
+@@ -651,7 +652,14 @@ static void RefillHand(void)
+         PKBN_LOG("custom hand: %u chips (NaviCust)", sB.handSize);
+ }
+ 
++static void OpenCustomInner(void);
+ static void OpenCustom(void)
++{
++    OpenCustomInner();
++    Tut_Event(TEV_CUSTOM_OPEN);   // POC-18
++}
++
++static void OpenCustomInner(void)
+ {
+     s32 i;
+     // Chips still queued from last turn are lost (BN).
+@@ -842,6 +850,17 @@ static void Begin(void)
+     PkbnContract_Enter();
+     gPkbnNoWindup = getenv("PKBN_NO_WINDUP") != NULL;   // POC-15 A/B: the old instant attacks
+     sB.challenge = gPkbnChallengeActive;   // POC-14 NET CHALLENGE (set by PkbnStartNetChallenge)
++    // POC-18: Birch's rescue on Route 101 (CB2_StartFirstBattle, battle_setup.c) is fought on the grid, as the first
++    // lesson. Its foe is Emerald's: Zigzagoon Lv2 with no item (battle_controllers.c:67-72).
++    sB.firstBattle = (gBattleTypeFlags & BATTLE_TYPE_FIRST_BATTLE) != 0;
++    if (sB.firstBattle)
++    {
++        u16 none = ITEM_NONE;
++        ZeroEnemyPartyMons();
++        CreateMon(&gEnemyParty[0], SPECIES_ZIGZAGOON, 2, USE_RANDOM_IVS, 0, 0, OT_ID_PLAYER_ID, 0);
++        SetMonData(&gEnemyParty[0], MON_DATA_HELD_ITEM, &none);
++    }
++    Tut_BattleBegin(sB.firstBattle);
+     gPkbnChallengeActive = 0;
+     // Same resource setup as CB2_InitBattle (battle_main.c:588-592) so Emerald's damage
+     // code finds gBattleResources/gBattleStruct allocated.
+@@ -872,6 +891,7 @@ static void Begin(void)
+     }
+     for (i = 0; i < sB.partyCount; i++)
+         partyData[i] = sB.party[i].bm;
++    Tut_StarterFolder();    // POC-18: the rescue's folder
+     PkbnPack_SyncLearned(); // "learning a move gives one copy" (design 08 §11.4)
+     PkbnFolder_Build(&sB.folder, partyData, sB.partyCount);
+     if (getenv("PKBN_NO_SHUFFLE") != NULL)
+@@ -940,7 +960,7 @@ static void Begin(void)
+             PKBN_LOG("boss battle: %s", sBosses[sB.boss - 1].phaseText);
+         }
+     }
+-    else if (!sB.trainer)
++    else if (!sB.trainer && !sB.firstBattle)
+         AddWildPack();
+     PkbnWild_ClearPack();
+     for (i = 0; i < PARTY_SIZE; i++)
+@@ -1539,6 +1559,7 @@ static void UpdateCustom(void)
+         // POC-18 (Khaled: no firing the instant Custom closes): CHIP_READY_FRAMES before anything fires, for the
+         // foes too
+         sB.chipReadyT = CHIP_READY_FRAMES;
++        Tut_Event(TEV_CUSTOM_OK);
+         {
+             u8 k;
+             for (k = 0; k < sB.foeCount; k++)
+@@ -1787,7 +1808,9 @@ static bool8 TryRun(void)
+         EndBattle(B_OUTCOME_RAN, "JACKED OUT!");   // a simulation: you can always leave
+         return TRUE;
+     }
+-    if (sB.trainer)
++    if (sB.firstBattle)
++        SetMsg("PROF. BIRCH: DON'T LEAVE ME LIKE THIS!", 60);   // sText_DontLeaveBirch (battle_message.c:332)
++    else if (sB.trainer)
+         SetMsg("NO RUNNING FROM A TRAINER BATTLE!", 50);
+     else if (p->noEscape && p->bm.ability != ABILITY_RUN_AWAY)   // Run Away beats Mean Look (battle_util.c:427)
+         SetMsg("CAN'T ESCAPE!", 40);
+@@ -1876,6 +1899,7 @@ static void UpdatePlayer(void)
+             Busting_NoteStep();
+             // POC-18: Speed sets how fast it steps (Speed_StepFrames; Gen 3 paralysis quarters Speed in there)
+             p->moveCd = Speed_StepFrames(p);
++            Tut_Event(TEV_STEP);
+         }
+     }
+ 
+@@ -1885,6 +1909,7 @@ static void UpdatePlayer(void)
+     {
+         TargetForPlayer();
+         UseNextChip();
++        Tut_Event(TEV_CHIP_USED);
+     }
+     else if ((held & B_BUTTON) && sB.busterCd == 0)
+     {
+@@ -1892,6 +1917,7 @@ static void UpdatePlayer(void)
+         Moves_ApplyBuster(SIDE_PLAYER);
+         // Speed+ programs: 3 frames quicker per level (BN6 buster speed 1-5; TUNE)
+         sB.busterCd = BUSTER_COOLDOWN - 3 * ((p->navi.busterSpeed ? p->navi.busterSpeed : 1) - 1);
++        Tut_Event(TEV_BUSTER);
+     }
+ }
+ 
+@@ -2397,9 +2423,16 @@ static void UpdateOneEnemy(void)
+ 
+ static void UpdateEnemy(void)
+ {
+-    if (gPkbnGallery)
+-        return;
+     s32 k;
++    if (gPkbnGallery || Tut_HoldFoe())
++        return;   // (POC-18: the foe waits while the lesson shows you something)
++    // POC-18: Emerald's first-battle AI (AI_FirstBattle, data/battle_ai_scripts.s:3233): the Zigzagoon flees once your
++    // Pokémon is at 20% HP or less - Birch's rescue can't be lost
++    if (sB.firstBattle && sB.f[SIDE_PLAYER].bm.hp * 5 <= sB.f[SIDE_PLAYER].bm.maxHP && sB.f[SIDE_ENEMY].bm.hp)
++    {
++        EndBattle(B_OUTCOME_MON_FLED, "WILD ZIGZAGOON FLED!");
++        return;
++    }
+     if (sB.foeCount <= 1)
+     {
+         UpdateOneEnemy();
+@@ -2829,6 +2862,8 @@ void CB2_PkbnGridBattle(void)
+         EndBattle(B_OUTCOME_RAN, "END OF REPLAY");
+         sB.timer = 30;
+     }
++    if (sB.state != ST_END && Tut_Frame())
++        return;   // POC-18: a lesson's line is open - the battle waits (the keys it used aren't recorded)
+     PkbnReplay_Frame();   // POC-14: record this frame's keys, or play the recorded ones
+ 
+     sB.frame++;
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 1ba1d0b..ed28755 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -6,6 +6,8 @@
+ //   - Text: Emerald's normal / small fonts.
+ // Panels, HUD frames and the backdrop are our own pixel art in the BN style (TUNE).
+ #include "pkbn/grid_internal.h"
++#include "pkbn/tutorial.h"
++static void DrawTutorial(u16 *fb);   // POC-18 (end of file)
+ #include "pkbn/replay.h"
+ #include "pkbn/move_sounds.h"
+ #include "sound.h"
+@@ -1592,7 +1594,7 @@ static void DrawSlots(u16 *fb, u32 t)
+                 DrawCursorFrame(fb, x, y, SLOT_W - 2, SLOT_H, t);   // POC-18a: OK is a slot
+         }
+         Text(fb, CUS_W - 30, CH - 11, "START", COL_DIM);
+-        Text(fb, CUS_W - 56, CH - 11, "L:RUN", COL_DIM);   // POC-18
++        Text(fb, CUS_W - 34 - Pkbn_EmTextWidth("L:RUN", PKBN_FONT_SMALL), CH - 11, "L:RUN", COL_DIM);   // POC-18
+     }
+ }
+ 
+@@ -2203,6 +2205,121 @@ void Draw_Overlay(u16 *fb)
+         TextCentered(fb, CW / 2, 37, sB.banner, COL_WHITE, TRUE);
+     }
+     DrawCustomClosing(fb);
++    DrawTutorial(fb);   // POC-18
++}
++
++// ---- POC-18: lessons (src/pkbn/tutorial.c) ------------------------------------------------------------------------
++// Prof. Birch's line in an Emerald-style box, and a pulsing frame with a bouncing arrow on what it's about.
++static void TutTargetRect(u8 target, s32 *x, s32 *y, s32 *w, s32 *h)
++{
++    s32 extra = sB.handSize > HAND_SIZE ? sB.handSize - HAND_SIZE : 0, ballW = 3 - extra < 1 ? 1 : 3 - extra, fx, fy;
++    *w = *h = 0;
++    switch (target)
++    {
++    case TT_HAND:  *x = 4; *y = SLOTS_Y - 2; *w = HAND_SIZE * SLOT_W + 2; *h = SLOT_H + 4; break;
++    case TT_INFO:  *x = 2; *y = 12; *w = CUS_W - 4; *h = 88; break;
++    case TT_OK:    *x = 4 + (extra + 1 + ballW) * SLOT_W; *y = ROW2_Y - 2; *w = SLOT_W + 2; *h = SLOT_H + 4; break;
++    case TT_SW:    *x = 4 + extra * SLOT_W; *y = ROW2_Y - 2; *w = SLOT_W + 2; *h = SLOT_H + 4; break;
++    case TT_BALL:  *x = 4 + (extra + 1) * SLOT_W; *y = ROW2_Y - 2; *w = SLOT_W * ballW + 2; *h = SLOT_H + 4; break;
++    case TT_GAUGE: *x = 72; *y = 22; *w = 120; *h = 14; break;
++    case TT_FOE_HP:
++        if (sB.state == ST_CUSTOM)
++        {
++            char line[24];
++            s32 tw;
++            snprintf(line, sizeof(line), "%s Lv%u", sB.f[SIDE_ENEMY].name, sB.f[SIDE_ENEMY].bm.level);
++            tw = Pkbn_EmTextWidth(line, PKBN_FONT_SMALL);
++            *x = CW - 4 - tw - 6; *y = 0; *w = tw + 12; *h = 21;
++            break;
++        }
++        Draw_FeetPos(sB.f[SIDE_ENEMY].x, sB.f[SIDE_ENEMY].y, &fx, &fy);
++        *x = fx - 14; *y = fy - 1; *w = 28; *h = 14;
++        break;
++    case TT_HEAD:
++        if (sHeadValid)
++        {
++            *x = sHeadX - 14; *y = sHeadY - CHIP_ICON_H - 10; *w = 28; *h = CHIP_ICON_H + 8;
++            if (*y < 26) *y = 26;
++            break;
++        }
++        // fallthrough
++    case TT_PLAYER:
++    case TT_FOE:
++        Draw_FeetPos(sB.f[target == TT_FOE ? SIDE_ENEMY : SIDE_PLAYER].x, sB.f[target == TT_FOE ? SIDE_ENEMY : SIDE_PLAYER].y,
++                     &fx, &fy);
++        *x = fx - 20; *y = fy - 44; *w = 40; *h = 48;
++        break;
++    }
++}
++
++static void DrawTutorial(u16 *fb)
++{
++    static u32 sT;
++    u8 target = TT_NONE;
++    bool8 waitsForA = FALSE;
++    const char *text = Tut_Line(&target, &waitsForA);
++    s32 tx, ty, tw, th, bx = 6, bw = CW - 12, bh = 36, by, i, n, lines = 0;
++    char buf[96], *words[24], *line;
++    sT++;
++    if (text == NULL)
++        return;
++    TutTargetRect(target, &tx, &ty, &tw, &th);
++    by = (tw && ty + th / 2 > CH / 2) ? 2 : CH - bh - 2;
++    if (tw)
++    {
++        // the frame pulses; the arrow bobs above (or below) it
++        u16 c = Gfx_Blend(COL_GAUGE_FULL, COL_WHITE, (u8)((sT / 2) % 16 < 8 ? (sT / 2) % 8 : 8 - (sT / 2) % 8));
++        s32 ax = tx + tw / 2, bob = (s32)((sT / 6) % 4), ay;
++        Pkbn_FrameRect(fb, tx, ty, tw, th, c);
++        Pkbn_FrameRect(fb, tx - 1, ty - 1, tw + 2, th + 2, Gfx_Blend(c, COL_BLACK, 8));
++        if (ty > 14)
++        {
++            ay = ty - 9 - bob;
++            for (i = 0; i < 5; i++)
++                Pkbn_FillRect(fb, ax - 4 + i, ay + i, 9 - 2 * i, 1, c);   // a triangle pointing down
++        }
++        else
++        {
++            ay = ty + th + 3 + bob;
++            for (i = 0; i < 5; i++)
++                Pkbn_FillRect(fb, ax - i, ay + i, 1 + 2 * i, 1, c);       // pointing up
++        }
++    }
++    // Emerald's message box: white with a dark rim, the speaker on a tab
++    Draw_Box(fb, bx, by, bw, bh, RGB(29, 30, 31), RGB(6, 9, 16), 16);
++    Draw_Box(fb, bx + 4, by - 9 < 0 ? by + bh - 1 : by - 9, 62, 11, RGB(6, 9, 16), RGB(6, 9, 16), 16);
++    Text(fb, bx + 8, (by - 9 < 0 ? by + bh - 1 : by - 9) - 2, "PROF. BIRCH", COL_WHITE);
++    // word-wrap into up to 3 lines
++    snprintf(buf, sizeof(buf), "%s", text);
++    n = 0;
++    for (line = strtok(buf, " "); line != NULL && n < 24; line = strtok(NULL, " "))
++        words[n++] = line;
++    {
++        char row[96];
++        s32 k = 0;
++        row[0] = '\0';
++        for (i = 0; i <= n && lines < 3; i++)
++        {
++            char test[96];
++            if (i < n)
++                snprintf(test, sizeof(test), row[0] ? "%s %s" : "%s%s", row, words[i]);
++            if (i == n || Pkbn_EmTextWidth(test, PKBN_FONT_SMALL) > bw - 14)
++            {
++                Pkbn_DrawEmText(fb, bx + 7, by + 2 + lines * 10, row, PKBN_FONT_SMALL, RGB(6, 7, 9), RGB(22, 23, 25));
++                lines++;
++                if (i < n)
++                    snprintf(row, sizeof(row), "%s", words[i]);
++                else
++                    row[0] = '\0';
++            }
++            else
++                snprintf(row, sizeof(row), "%s", test);
++            (void)k;
++        }
++    }
++    if (waitsForA && ((sT / 16) & 1))
++        for (i = 0; i < 4; i++)
++            Pkbn_FillRect(fb, bx + bw - 12 + i, by + bh - 9 + i, 7 - 2 * i, 1, RGB(31, 8, 6));   // Emerald's red arrow
+ }
+ 
+ #endif // PORTABLE
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index c99874d..dec5a57 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -695,6 +695,7 @@ static s32 CalcHitDamage(struct Attack *a, u8 defSide, u16 *eff, bool8 *crit)
+         if (c >= ARRAY_COUNT(sCritChance))
+             c = ARRAY_COUNT(sCritChance) - 1;
+         gCritMultiplier = (def.ability != ABILITY_BATTLE_ARMOR && def.ability != ABILITY_SHELL_ARMOR
++                           && !sB.firstBattle   // no crits in Birch's rescue (battle_script_commands.c:1281)
+                            && ((a->pa && (PAOf(a)->flags & PAF_CRIT)) || !(Random() % sCritChance[c]))) ? 2 : 1;
+         *crit = gCritMultiplier == 2;
+     }
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index 6e5c252..fcc20e3 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -29,7 +29,8 @@
+ #define PKBN_SAVE_BAK     Platform_DataPath("pkbn.sav.bak")
+ #define PKBN_SAVE_BAD     Platform_DataPath("pkbn.sav.bad")
+ extern const char *Platform_DataPath(const char *file);
+-#define PKBN_SAVE_VERSION 6   // v2 (POC-10): chip pack, grants, candy, folder; v3 (POC-11): partner chips;
++#define PKBN_SAVE_VERSION 7   // v7 (POC-18): lessons seen;
++                              // v2 (POC-10): chip pack, grants, candy, folder; v3 (POC-11): partner chips;
+                               // v4 (POC-13): folders 2 and 3 and which one is equipped;
+                               // v5 (POC-14): chip library, Leader chips and rematch records, challenges, programs;
+                               // v6 (POC-16): Ω Leader rematches won and their records.
+@@ -73,8 +74,13 @@ struct PkbnSaveFile
+     u8 leaderOmega;                           // Ω rematches won (bit per Leader)
+     u8 pad6;
+     u16 leaderOmegaBest[PKBN_LEADERS];        // best Ω win time (0 = none)
++    // ---- v7 (POC-18) ----
++    u8 tutorialSeen;                          // lessons already given (TUT_* bits, include/pkbn/tutorial.h)
++    u8 pad7[3];
+ };
+ 
++#define V6_SIZE offsetof(struct PkbnSaveFile, tutorialSeen)
++
+ #define V5_SIZE offsetof(struct PkbnSaveFile, leaderOmega)
+ 
+ #define V4_SIZE offsetof(struct PkbnSaveFile, library)
+@@ -170,6 +176,10 @@ void PkbnSave_Read(void)
+         memset((u8 *)&tmp + V4_SIZE, 0, sizeof(tmp) - V4_SIZE); // v4 -> v5: library rebuilt from the pack below
+     else if (tmp.version == 5)
+         memset((u8 *)&tmp + V5_SIZE, 0, sizeof(tmp) - V5_SIZE); // v5 -> v6: no Ω wins yet
++    else if (tmp.version == 6)
++        memset((u8 *)&tmp + V6_SIZE, 0, sizeof(tmp) - V6_SIZE); // v6 -> v7
++    if (tmp.version < 7)
++        tmp.tutorialSeen = 0xFF;   // a game already under way: no lessons, and NaviCust stays open as it was
+     if (tmp.version < 5)
+     {
+         u16 mv;
+@@ -585,4 +595,15 @@ bool8 PkbnProgram_GrantByName(const char *name, u8 n)
+     return TRUE;
+ }
+ 
++// POC-18: lessons (src/pkbn/tutorial.c)
++bool8 PkbnTutorial_Seen(u8 bits)
++{
++    return (sSave.tutorialSeen & bits) == bits;
++}
++
++void PkbnTutorial_SetSeen(u8 bits)
++{
++    sSave.tutorialSeen |= bits;
++}
++
+ #endif // PORTABLE
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index f540db1..c58222f 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -19,6 +19,7 @@
+ #include "money.h"
+ #include "battle_setup.h"
+ #include "pkbn/grid_battle.h"
++#include "pkbn/tutorial.h"
+ #include "pkbn/challenge.h"
+ #include "pkbn/replay.h"
+ #include "pkbn/folder.h"
+@@ -66,9 +67,14 @@ static void WrappedOverlay(u16 *fb)
+     sInnerOverlay(fb);
+     PkbnGrid_GetDebug(&d);
+     static u8 sLastState = 0xFF;
++    static u32 sLastLesson = 0, sLessonShots;
++    u32 lesson = Tut_StepId();
+     if (sDumpDir != NULL && (d.frame % sDumpEvery == 0 || d.state != sLastState))
+         DumpFrame(fb, d.frame);
++    else if (sDumpDir != NULL && lesson != sLastLesson && lesson != 0)
++        DumpFrame(fb, 90000 + sLessonShots++);   // POC-18: each lesson line once (the battle is frozen on it)
+     sLastState = d.state;
++    sLastLesson = lesson;
+ }
+ 
+ static void CB2_SelfTestDone(void)
+@@ -107,6 +113,14 @@ static void Autopilot(void)
+ 
+     PkbnGrid_GetDebug(&d);
+     edge = (d.frame & 1) == 0; // press on even frames, release on odd ones
++    if (Tut_Blocking())
++    {
++        // POC-18: the battle is frozen on a lesson's line (d.frame doesn't move): tap A on alternate calls
++        static u8 sTap;
++        gMain.newKeys = (++sTap & 1) ? A_BUTTON : 0;
++        gMain.heldKeys = gMain.newKeys;
++        return;
++    }
+ 
+     switch (d.state)
+     {
+@@ -147,6 +161,15 @@ static void Autopilot(void)
+             if (edge) sPicksDone = FALSE;
+             break;
+         }
++        {
++            // POC-18: a lesson wants a particular slot
++            u8 want = Tut_WantedCursor();
++            if (want != 0xFF)
++            {
++                pressed = d.cursor != want ? PkbnGrid_CursorKeyToward(want) : A_BUTTON;
++                break;
++            }
++        }
+         if (SmartBot())
+         {
+             PkbnBot_Custom(&pressed);
+@@ -164,6 +187,15 @@ static void Autopilot(void)
+         pressed = A_BUTTON; // first option
+         break;
+     case PKBN_GRID_FIGHT:
++        {
++            // POC-18: a lesson's "do it" line - do it
++            u16 k = Tut_WantedFightKey();
++            if (k)
++            {
++                if (k == B_BUTTON) held = B_BUTTON; else pressed = k;
++                break;
++            }
++        }
+         // PKBN_TEST_LEFTB=f1,f2,...: at those fight frames, hold B and press LEFT (POC-16d Shield / Reflect / AntiDmg)
+         if (getenv("PKBN_TEST_LEFTB") != NULL)
+         {
+@@ -602,6 +634,9 @@ void Pkbn_SelfTestMaybeStart(void)
+     // PKBN_TEST_LEGENDARY=1: the wild Pokémon is fought as a scripted legendary (POC-14 boss battles)
+     if (getenv("PKBN_TEST_LEGENDARY") != NULL)
+         gBattleTypeFlags = BATTLE_TYPE_LEGENDARY;
++    // PKBN_TEST_FIRST_BATTLE=1: Birch's rescue (POC-18; with PKBN_TEST_TUTORIAL=1 its lesson runs)
++    if (getenv("PKBN_TEST_FIRST_BATTLE") != NULL)
++        gBattleTypeFlags = BATTLE_TYPE_FIRST_BATTLE;
+     // PKBN_TEST_REPLAY=1: replay the last recorded battle (pkbn_replay.bin, POC-14) instead
+     if (getenv("PKBN_TEST_REPLAY") != NULL && PkbnReplay_Prepare())
+         gPkbnReplayActive = TRUE;
+diff --git a/src/pkbn/tutorial.c b/src/pkbn/tutorial.c
+new file mode 100644
+index 0000000..10c63bb
+--- /dev/null
++++ b/src/pkbn/tutorial.c
+@@ -0,0 +1,437 @@
++// POC-18: lessons for players new to Battle Network. include/pkbn/tutorial.h.
++//
++// Grounding: BN6 teaches its battle system in its first three battles. Lan and MegaMan talk through each part of the
++// Custom screen and the field, and the battle waits until the player does each thing (BATTLE_MODE_TUTORIAL_1-3,
++// bn6f constants/enums/battle_constants.inc:32-34; the lines are in data/textscript/TextScriptBattleTut1.s,
++// TextScriptBattleTutAreaGrab.s and TextScriptBattleTutFullSynchro.s). The order of the first lesson follows
++// TextScriptBattleTut1: the Custom Window, the chips, a chip's data and Attack, the virus's HP, picking chips that go
++// together (and B to take one back when it's wrong), OK, then moving, the buster, the chips above MegaMan's head, A,
++// once each, and the Custom Gauge with L or R. Here Prof. Birch speaks: he is the one in trouble in Emerald's first
++// battle. The words are ours (Khaled picked "Birch talks you through it"); everything else on screen stays
++// show-don't-tell.
++#include "pkbn/grid_vfx.h"   // first: it pulls in <stdlib.h> before global.h's macros
++#include "global.h"
++#include "main.h"
++#include "sound.h"
++#include "event_data.h"
++#include "constants/songs.h"
++#include "constants/flags.h"
++#include "pkbn/grid_internal.h"
++#include "pkbn/tutorial.h"
++#include "pkbn/replay.h"
++#include "pkbn/chip_pack.h"
++#include "pkbn/move_table.h"
++#include "pkbn/folder.h"
++#include <stdio.h>
++#include <string.h>
++#include <stdint.h>
++
++#ifdef PORTABLE
++
++enum { W_A, W_PICK2, W_PICK1, W_OK, W_MOVE, W_BUSTER, W_CHIP };
++
++struct TutLine { const char *text; u8 target; u8 wait; };
++
++// The rescue (BN6 TextScriptBattleTut1's order). "%c" is the letter of the pair in hand.
++static const struct TutLine sBasics[] = {
++    { "Quick! Your POKEMON fights with its moves. Here, they're CHIPS!", TT_HAND, W_A },
++    { "These are the chips you can send this turn.", TT_HAND, W_A },
++    { "Up here: what the chip does, and how many are left.", TT_INFO, W_A },
++    { "And that's the ZIGZAGOON. Knock its HP down to 0!", TT_FOE_HP, W_A },
++    { "Chips with the same letter go together. Pick both %c chips with A!", TT_HAND, W_PICK2 },
++    { "Now send them! Pick OK.", TT_OK, W_OK },
++    { "Move with the +Control Pad. Your panels are the red ones.", TT_PLAYER, W_MOVE },
++    { "B fires your BUSTER. Hold it to keep firing!", TT_PLAYER, W_BUSTER },
++    { "Your chips ride above your POKEMON. A uses the front one!", TT_HEAD, W_CHIP },
++    { "Each chip works once. When the CUSTOM gauge up here fills...", TT_GAUGE, W_A },
++    { "...press L or R for more chips. Now, help me!", TT_GAUGE, W_A },
++};
++#define BASICS_FOE_FREE 9   // the foe waits until the lines from here on
++
++static const struct TutLine sBasicsOneChip[] = {   // a hand with no pair (shouldn't happen with the rescue's folder)
++    { "Pick a chip with A!", TT_HAND, W_PICK1 },
++};
++
++static const struct TutLine sWild[] = {   // BN6 TextScriptBattleTutAreaGrab: the * code
++    { "A chip with a * goes with any letter!", TT_HAND, W_A },
++};
++
++static const struct TutLine sCatch[] = {
++    { "Want to catch it? Weaken it first...", TT_FOE_HP, W_A },
++    { "...then pick a POKE BALL here and press A. L and R change the ball.", TT_BALL, W_A },
++};
++
++static const struct TutLine sSwitch[] = {
++    { "SW sends in another of your POKEMON.", TT_SW, W_A },
++    { "Pick it like a chip. Nothing can follow it.", TT_SW, W_A },
++};
++
++static const struct TutLine sCounter[] = {   // BN6 TextScriptBattleTutFullSynchro: Counter
++    { "Now! It's about to strike. Hit it while it's busy!", TT_FOE, W_A },
++    { "That's a COUNTER: it's stunned, and your next chip hits twice as hard.", TT_FOE, W_A },
++};
++
++static struct
++{
++    const struct TutLine *lines;
++    u8 count, at;
++    u8 bits;          // set as seen when the lesson ends
++    bool8 firstBattle;
++    bool8 basicsDone;
++    u8 pairLetter;    // the pair to pick in the rescue
++    char text[96];    // the line, filled in
++    const char *nag;  // a short refusal shown instead for a moment
++    u16 nagT;
++    u8 waitT;         // a lesson starting in Custom waits for the window to slide in (grid_draw.c SLIDE_IN)
++    const struct TutLine *pending;
++    u8 pendingCount, pendingBits;
++    u8 did;           // what the player has already done (a "do it" line is skipped if it's done)
++} sT;
++
++bool8 Tut_Enabled(void)
++{
++    if (gPkbnReplayActive)
++        return FALSE;
++    if ((getenv("PKBN_SELFTEST") != NULL || getenv("PKBN_OWTEST") != NULL) && getenv("PKBN_TEST_TUTORIAL") == NULL)
++        return FALSE;
++    return TRUE;
++}
++
++static void StartNow(const struct TutLine *lines, u8 count, u8 bits);
++static void Start(const struct TutLine *lines, u8 count, u8 bits)
++{
++    if (sB.state == ST_CUSTOM)
++    {
++        sT.pending = lines, sT.pendingCount = count, sT.pendingBits = bits;
++        sT.waitT = 16;
++        return;
++    }
++    StartNow(lines, count, bits);
++}
++
++static void StartNow(const struct TutLine *lines, u8 count, u8 bits)
++{
++    sT.lines = lines;
++    sT.count = count;
++    sT.at = 0;
++    sT.bits = bits;
++    sT.nag = NULL;
++    PKBN_LOG("lesson %x: %u lines", bits, count);
++}
++
++static void Finish(void)
++{
++    PkbnTutorial_SetSeen(sT.bits);
++    PKBN_LOG("lesson %x done", sT.bits);
++    sT.lines = NULL;
++}
++
++static void Next(void)
++{
++    if (sT.lines == NULL)
++        return;
++    sT.nag = NULL;
++    if (++sT.at >= sT.count)
++        Finish();
++}
++
++static const struct TutLine *Cur(void)
++{
++    return sT.lines != NULL ? &sT.lines[sT.at] : NULL;
++}
++
++void Tut_BattleBegin(bool8 firstBattle)
++{
++    memset(&sT, 0, sizeof(sT));
++    sT.firstBattle = firstBattle && Tut_Enabled() && !PkbnTutorial_Seen(TUT_BASICS);
++}
++
++bool8 Tut_Active(void)
++{
++    return sT.lines != NULL || sT.firstBattle;
++}
++
++// The rescue's folder (Khaled's pick: "the starter's first moves share one code, 3 copies each"; BN6 hands Lan two
++// Cannons for the first battle, TextScriptBattleTut1). The first move's first code; the second move takes the same
++// code if it has it, else its * (every starter move here has one, src/pkbn/move_table.c).
++void Tut_StarterFolder(void)
++{
++    u16 m0 = MOVE_NONE, m1 = MOVE_NONE;
++    u8 c0, c1, k;
++    s32 m;
++    if (!sT.firstBattle)
++        return;
++    for (m = 0; m < MAX_MON_MOVES; m++)
++    {
++        u16 mv = GetMonData(&gPlayerParty[0], MON_DATA_MOVE1 + m);
++        if (mv == MOVE_NONE || !PkbnFolder_MoveIsChip(mv) || gPkbnMoveInfo[mv].laneCount == 0)
++            continue;
++        if (m0 == MOVE_NONE)
++            m0 = mv;
++        else if (m1 == MOVE_NONE)
++            m1 = mv;
++    }
++    if (m0 == MOVE_NONE)
++        return;
++    c0 = gPkbnMoveInfo[m0].lanes[0];
++    PkbnPack_SetGranted(m0);
++    PkbnPack_Add(m0, c0, 3 - PkbnPack_Get(m0, c0));
++    if (m1 != MOVE_NONE)
++    {
++        c1 = gPkbnMoveInfo[m1].lanes[0];
++        for (k = 0; k < gPkbnMoveInfo[m1].laneCount; k++)
++            if (gPkbnMoveInfo[m1].lanes[k] == c0)
++                c1 = c0;
++        if (c1 != c0)
++            for (k = 0; k < gPkbnMoveInfo[m1].laneCount; k++)
++                if (gPkbnMoveInfo[m1].lanes[k] == LANE_WILD)
++                    c1 = LANE_WILD;
++        PkbnPack_SetGranted(m1);
++        PkbnPack_Add(m1, c1, 3 - PkbnPack_Get(m1, c1));
++    }
++    PKBN_LOG("rescue folder: move %u code %u x3, move %u x3", m0, c0, m1);
++}
++
++static u8 HandLetter(u8 pos)
++{
++    return sB.folder.chips[sB.hand[pos]].letter;
++}
++
++// The letter with the most chips in hand (a * counts toward every letter).
++static u8 PairLetter(void)
++{
++    u8 best = 0xFF, bestN = 1, i, j;
++    for (i = 0; i < sB.handCount; i++)
++    {
++        u8 l = HandLetter(i), n = 0;
++        if (l == LANE_WILD)
++            continue;
++        for (j = 0; j < sB.handCount; j++)
++            if (HandLetter(j) == l || HandLetter(j) == LANE_WILD)
++                n++;
++        if (n > bestN)
++            best = l, bestN = n;
++    }
++    if (best == 0xFF)
++    {
++        u8 wild = 0;
++        for (i = 0; i < sB.handCount; i++)
++            wild += HandLetter(i) == LANE_WILD;
++        if (wild >= 2)
++            best = LANE_WILD;
++    }
++    return best;
++}
++
++static bool8 HandHasWild(void)
++{
++    u8 i;
++    for (i = 0; i < sB.handCount; i++)
++        if (HandLetter(i) == LANE_WILD)
++            return TRUE;
++    return FALSE;
++}
++
++static bool8 CanSwitch(void)
++{
++    u8 i, n = 0;
++    for (i = 0; i < sB.partyCount; i++)
++        if (sB.party[i].bm.hp && sB.party[i].bm.species)
++            n++;
++    return n >= 2;
++}
++
++void Tut_Event(u8 ev)
++{
++    const struct TutLine *l = Cur();
++    if (!Tut_Enabled())
++        return;
++    if (ev == TEV_CUSTOM_OPEN && l == NULL && sT.pending == NULL)
++    {
++        if (sT.firstBattle && !sT.basicsDone)
++        {
++            sT.basicsDone = TRUE;
++            sT.pairLetter = PairLetter();
++            if (sT.pairLetter == 0xFF)
++                Start(sBasicsOneChip, ARRAY_COUNT(sBasicsOneChip), 0);
++            else
++                Start(sBasics, ARRAY_COUNT(sBasics), TUT_BASICS);
++            return;
++        }
++        if (sT.firstBattle && !PkbnTutorial_Seen(TUT_CODES))
++        {
++            if (HandHasWild())
++                Start(sWild, ARRAY_COUNT(sWild), TUT_CODES);
++            return;
++        }
++        if (sT.firstBattle)
++            return;
++        if (!PkbnTutorial_Seen(TUT_CATCH) && !sB.trainer && !sB.challenge && sB.ballItem && Foe_LiveCount() == 1)
++            Start(sCatch, ARRAY_COUNT(sCatch), TUT_CATCH);
++        else if (!PkbnTutorial_Seen(TUT_SWITCH) && CanSwitch())
++            Start(sSwitch, ARRAY_COUNT(sSwitch), TUT_SWITCH);
++        return;
++    }
++    if (ev == TEV_STEP) sT.did |= 1 << W_MOVE;
++    if (ev == TEV_BUSTER) sT.did |= 1 << W_BUSTER;
++    if (ev == TEV_CHIP_USED) sT.did |= 1 << W_CHIP;
++    if (l == NULL)
++        return;
++    if ((ev == TEV_CUSTOM_OK && l->wait == W_OK) || (ev == TEV_STEP && l->wait == W_MOVE)
++     || (ev == TEV_BUSTER && l->wait == W_BUSTER) || (ev == TEV_CHIP_USED && l->wait == W_CHIP))
++        Next();
++    if (ev == TEV_CUSTOM_OK && sT.lines == sBasicsOneChip)
++        Finish();
++}
++
++bool8 Tut_HoldFoe(void)
++{
++    return sT.lines == sBasics && sT.at < BASICS_FOE_FREE;
++}
++
++static void Nag(const char *s)
++{
++    sT.nag = s;
++    sT.nagT = 120;
++    PlaySE(SE_FAILURE);
++}
++
++// The Custom screen while a "pick" or "OK" line waits: wrong keys are refused (BN6: "Come on,Lan! Let's select a
++// Cannon! Cancel with the B Button and reselect!").
++static void FilterCustom(const struct TutLine *l)
++{
++    u16 *keys = &gMain.newKeys;
++    bool8 onChip = sB.cursor < sB.handCount;
++    if (*keys & L_BUTTON)
++        *keys &= ~L_BUTTON;   // (the rescue can't be run from anyway)
++    if (l->wait == W_PICK2 || l->wait == W_PICK1)
++    {
++        u8 need = l->wait == W_PICK2 ? 2 : 1;
++        if (*keys & A_BUTTON)
++        {
++            bool8 ok = onChip && !sB.picked[sB.cursor]
++                    && (l->wait == W_PICK1 || HandLetter(sB.cursor) == sT.pairLetter || HandLetter(sB.cursor) == LANE_WILD);
++            if (!ok)
++            {
++                *keys &= ~A_BUTTON;
++                Nag(sB.cursor == sB.handCount + 2 ? "Pick the chips first!" : "Not that one! B takes a chip back.");
++            }
++        }
++        if (*keys & START_BUTTON)
++        {
++            *keys &= ~START_BUTTON;
++            Nag("Pick the chips first!");
++        }
++        if (sB.queueCount >= need)
++            Next();
++    }
++}
++
++bool8 Tut_Frame(void)
++{
++    const struct TutLine *l;
++    if (sT.nagT && --sT.nagT == 0)
++        sT.nag = NULL;
++    if (!Tut_Enabled())
++        return FALSE;
++    if (sT.pending != NULL && sB.state == ST_CUSTOM && --sT.waitT == 0)
++    {
++        StartNow(sT.pending, sT.pendingCount, sT.pendingBits);
++        sT.pending = NULL;
++    }
++    if (sT.pending != NULL)
++    {
++        gMain.newKeys = 0;   // (nothing is picked before Birch speaks)
++        return FALSE;
++    }
++    // the first counter chance in a fight (BN6 TextScriptBattleTutFullSynchro)
++    if (sT.lines == NULL && !sT.firstBattle && sB.state == ST_FIGHT && !PkbnTutorial_Seen(TUT_COUNTER)
++     && sB.f[SIDE_ENEMY].bm.hp && (sB.f[SIDE_ENEMY].lockout || sB.f[SIDE_ENEMY].charging) && sB.queueCount > 0
++     && !sB.hitStop && !sB.cinemaT)
++        Start(sCounter, ARRAY_COUNT(sCounter), TUT_COUNTER);
++    l = Cur();
++    if (l == NULL)
++        return FALSE;
++    // a "do it" line for something already done is skipped (a player who used their chips before being told to)
++    if ((l->wait == W_MOVE || l->wait == W_BUSTER || l->wait == W_CHIP) && sB.state == ST_FIGHT
++     && ((sT.did & (1 << l->wait)) || (l->wait == W_CHIP && sB.queueCount == 0)))
++    {
++        Next();
++        return FALSE;
++    }
++    if (l->wait == W_A)
++    {
++        if (gMain.newKeys & A_BUTTON)
++        {
++            PlaySE(SE_SELECT);
++            Next();
++        }
++        gMain.newKeys = 0;
++        gMain.heldKeys = 0;
++        return TRUE;   // the battle waits for the line
++    }
++    if (sB.state == ST_CUSTOM)
++        FilterCustom(l);
++    return FALSE;
++}
++
++// For the self-test bots: the Custom cursor value the open line wants picked next (0xFF = nothing in particular).
++u8 Tut_WantedCursor(void)
++{
++    const struct TutLine *l = Cur();
++    u8 i;
++    if (l == NULL)
++        return 0xFF;
++    if (l->wait == W_OK)
++        return sB.handCount + 2;
++    if (l->wait == W_PICK1 || l->wait == W_PICK2)
++        for (i = 0; i < sB.handCount; i++)
++            if (!sB.picked[i] && (l->wait == W_PICK1 || HandLetter(i) == sT.pairLetter || HandLetter(i) == LANE_WILD))
++                return i;
++    return 0xFF;
++}
++
++u32 Tut_StepId(void)
++{
++    return sT.lines != NULL ? ((u32)(uintptr_t)sT.lines & 0xFFFFFF) * 64 + sT.at + 1 + (sT.nag != NULL ? 32 : 0) : 0;
++}
++
++bool8 Tut_Blocking(void)
++{
++    const struct TutLine *l = Cur();
++    return l != NULL && l->wait == W_A;
++}
++
++u16 Tut_WantedFightKey(void)
++{
++    const struct TutLine *l = Cur();
++    if (l == NULL || (sB.chipReadyT && l->wait != W_A))
++        return 0;
++    return l->wait == W_MOVE ? DPAD_UP : l->wait == W_BUSTER ? B_BUTTON : (l->wait == W_CHIP || l->wait == W_A) ? A_BUTTON : 0;
++}
++
++const char *Tut_Line(u8 *target, bool8 *waitsForA)
++{
++    const struct TutLine *l = Cur();
++    if (l == NULL)
++        return NULL;
++    *target = l->target;
++    *waitsForA = l->wait == W_A;
++    if (sT.nag != NULL)
++        return sT.nag;
++    if (strstr(l->text, "%c") != NULL)
++        snprintf(sT.text, sizeof(sT.text), l->text, sT.pairLetter == LANE_WILD ? '*' : 'A' + sT.pairLetter);
++    else
++        snprintf(sT.text, sizeof(sT.text), "%s", l->text);
++    return sT.text;
++}
++
++// POC-18 (Khaled: "the navicust get unlocked after winning first gym battle (against Roxanne)"): the Stone Badge.
++bool8 PkbnNaviCust_Unlocked(void)
++{
++    return FlagGet(FLAG_BADGE01_GET) || PkbnTutorial_Seen(TUT_NAVI_OPEN);
++}
++
++#else
++bool8 PkbnNaviCust_Unlocked(void) { return TRUE; }
++#endif // PORTABLE
+-- 
+2.43.0
+

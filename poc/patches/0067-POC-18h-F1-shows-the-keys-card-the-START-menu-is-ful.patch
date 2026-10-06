@@ -1,0 +1,88 @@
+From 6e6dffca095fd95bc88f0bd800d157e9ba58dfb6 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 23:21:00 +0300
+Subject: [PATCH 67/69] POC-18h: F1 shows the keys card (the START menu is
+ full)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/platform/sdl2.c | 34 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 34 insertions(+)
+
+diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
+index c03073c..2fbbbec 100644
+--- a/src/platform/sdl2.c
++++ b/src/platform/sdl2.c
+@@ -103,6 +103,26 @@ const char *Platform_DataPath(const char *file)
+     return out;
+ }
+ 
++// pkbn POC-18: F1 shows which key is which (keys only; the START menu already has its 9 rows). The game pauses.
++static bool sShowKeys, sKeysDirty;
++static void DrawKeysCard(uint16_t *canvas)
++{
++    static const char *const rows[][2] = {
++        { "Z", "A" }, { "X", "B" }, { "A", "L" }, { "S", "R" }, { "ENTER", "START" }, { "BACKSPACE", "SELECT" },
++        { "ARROWS", "+" }, { "SPACE", ">>" }, { "F11", "FULLSCREEN" }, { "F1", "?" },
++    };
++    int i, x0 = 52, y0 = 18;
++    Pkbn_SetTarget(PKBN_CANVAS_W, PKBN_CANVAS_H);
++    Pkbn_FillRect(canvas, x0 - 6, y0 - 8, 172, 148, PKBN_RGB(3, 5, 12));
++    Pkbn_FrameRect(canvas, x0 - 6, y0 - 8, 172, 148, PKBN_RGB(22, 26, 31));
++    for (i = 0; i < (int)(sizeof(rows) / sizeof(rows[0])); i++)
++    {
++        int y = y0 + i * 13;
++        Pkbn_DrawEmText(canvas, x0, y, rows[i][0], PKBN_FONT_NORMAL, PKBN_RGB(31, 27, 6), PKBN_RGB(6, 6, 9));
++        Pkbn_DrawEmText(canvas, x0 + 92, y, rows[i][1], PKBN_FONT_NORMAL, PKBN_RGB(31, 31, 31), PKBN_RGB(6, 6, 9));
++    }
++}
++
+ static bool sFullscreen;
+ static void ToggleFullscreen(void)
+ {
+@@ -174,6 +194,7 @@ int main(int argc, char **argv)
+     }
+ 
+     OpenPad();   // pkbn POC-18
++    sShowKeys = getenv("PKBN_TEST_KEYS_CARD") != NULL;   // (overworld self-tests: a picture of the keys card)
+ 
+     // pkbn: PKBN_SCALE=N sets the starting window size (N x 240x160). The window can still be resized.
+     if (getenv("PKBN_SCALE") != NULL && atoi(getenv("PKBN_SCALE")) > 0)
+@@ -303,6 +324,11 @@ int main(int argc, char **argv)
+             }
+         }
+ 
++        if (paused && sKeysDirty)
++        {
++            VDraw(sdlTexture);   // pkbn POC-18: draw the keys card over the paused frame
++            sKeysDirty = false;
++        }
+         lastGameTime = curGameTime;
+ 
+         SDL_RenderCopy(sdlRenderer, sdlTexture, NULL, NULL);
+@@ -477,6 +503,12 @@ void ProcessEvents(void)
+         case SDL_KEYDOWN:
+             if (event.key.keysym.scancode == SDL_SCANCODE_BACKSLASH)
+                 keys |= SELECT_BUTTON;
++            if (event.key.repeat == 0 && event.key.keysym.scancode == SDL_SCANCODE_F1)
++            {
++                sShowKeys = !sShowKeys;
++                paused = sShowKeys;
++                sKeysDirty = true;
++            }
+             if (event.key.repeat == 0 && (event.key.keysym.scancode == SDL_SCANCODE_F11
+              || (event.key.keysym.scancode == SDL_SCANCODE_RETURN && (event.key.keysym.mod & KMOD_ALT))))
+             {
+@@ -632,6 +664,8 @@ void VDraw(SDL_Texture *texture)
+                           "PKBN " PKBN_VERSION, 0xC210, 1);
+         }
+     }
++    if (sShowKeys)
++        DrawKeysCard(canvas);
+     if (PkbnOwTest_Active())
+         PkbnOwTest_Frame(canvas);
+     SDL_UpdateTexture(texture, NULL, canvas, PKBN_CANVAS_W * sizeof (Uint16));
+-- 
+2.43.0
+

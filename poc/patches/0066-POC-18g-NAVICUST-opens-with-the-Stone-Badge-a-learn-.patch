@@ -1,0 +1,186 @@
+From f6e8a81d39fc0420de32b67897d7b199c787c80c Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 23:20:03 +0300
+Subject: [PATCH 66/69] POC-18g: NAVICUST opens with the Stone Badge; a
+ learn-by-doing lesson the first time; no starter programs
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/party_menu.c       |  4 +-
+ src/pkbn/navicust_ui.c | 90 ++++++++++++++++++++++++++++++++++++++++++
+ src/pkbn/pkbn_save.c   |  6 +--
+ 3 files changed, 96 insertions(+), 4 deletions(-)
+
+diff --git a/src/party_menu.c b/src/party_menu.c
+index 787e3c6..29dac01 100644
+--- a/src/party_menu.c
++++ b/src/party_menu.c
+@@ -1,4 +1,5 @@
+ #include "global.h"
++#include "pkbn/tutorial.h"
+ #ifdef PORTABLE
+ #include "pkbn/navicust.h"
+ #endif
+@@ -2621,7 +2622,8 @@ static void SetPartyMonFieldSelectionActions(struct Pokemon *mons, u8 slotId)
+     AppendToList(sPartyMenuInternal->actions, &sPartyMenuInternal->numActions, MENU_SUMMARY);
+ #ifdef PORTABLE
+     // pkbn (POC-9): every Pokémon is a Navi with its own NaviCust
+-    if (!GetMonData(&mons[slotId], MON_DATA_IS_EGG) && !InBattlePike())
++    // POC-18 (Khaled): it opens with the Stone Badge (src/pkbn/tutorial.c PkbnNaviCust_Unlocked)
++    if (!GetMonData(&mons[slotId], MON_DATA_IS_EGG) && !InBattlePike() && PkbnNaviCust_Unlocked())
+         AppendToList(sPartyMenuInternal->actions, &sPartyMenuInternal->numActions, MENU_NAVICUST);
+ #endif
+ 
+diff --git a/src/pkbn/navicust_ui.c b/src/pkbn/navicust_ui.c
+index b3cfbd6..61e671f 100644
+--- a/src/pkbn/navicust_ui.c
++++ b/src/pkbn/navicust_ui.c
+@@ -13,6 +13,7 @@
+ #include "sound.h"
+ #include "constants/abilities.h"
+ #include "constants/songs.h"
++#include "pkbn/tutorial.h"
+ #include "pkbn/navicust.h"
+ #include "pkbn/render.h"
+ #include "pkbn/gfx.h"
+@@ -491,6 +492,79 @@ static void DrawHeader(u16 *fb)
+         Text(fb, CW - 44, 0, "PKRS", RGB(31, 12, 20));
+ }
+ 
++// ---- POC-18: the NaviCust lesson (Khaled: "Unlocking the navicust should also give you a small tutorial about how to
++// use it"; his pick: learn by doing - one short line, then a pulsing button shows each step: pick a program, place
++// it, turn it, run it). Our design.
++enum { NL_NONE, NL_LINE, NL_PICK, NL_PLACE, NL_RUN };
++static u8 sLesson;
++static u8 sLessonCount;   // parts on the board when placing began
++
++static void KeyCap(u16 *fb, s32 x, s32 y, const char *label)
++{
++    s32 w = Pkbn_EmTextWidth(label, PKBN_FONT_SMALL) + 8, bob = (s32)((sN.t / 6) % 4 == 3 ? 1 : 0);
++    u16 c = Gfx_Blend(RGB(31, 26, 6), RGB(31, 31, 31), (u8)((sN.t / 2) % 16 < 8 ? (sN.t / 2) % 8 : 8 - (sN.t / 2) % 8));
++    Draw_Box(fb, x, y - bob, w, 12, RGB(6, 5, 1), c, 16);
++    Text(fb, x + 4, y - 3 - bob, label, c);
++}
++
++static void DrawLesson(u16 *fb)
++{
++    s32 y;
++    switch (sLesson)
++    {
++    case NL_LINE:
++        Draw_Box(fb, 8, CH - 40, CW - 16, 34, RGB(29, 30, 31), RGB(6, 9, 16), 16);
++        Pkbn_DrawEmText(fb, 15, CH - 38, "Programs power up your POKEMON.", PKBN_FONT_SMALL, RGB(6, 7, 9), RGB(22, 23, 25));
++        Pkbn_DrawEmText(fb, 15, CH - 28, "Set one on the board!", PKBN_FONT_SMALL, RGB(6, 7, 9), RGB(22, 23, 25));
++        if ((sN.t / 16) & 1)
++            Pkbn_FillRect(fb, CW - 20, CH - 15, 5, 1, RGB(31, 8, 6)), Pkbn_FillRect(fb, CW - 19, CH - 14, 3, 1, RGB(31, 8, 6)),
++            Pkbn_FillRect(fb, CW - 18, CH - 13, 1, 1, RGB(31, 8, 6));
++        break;
++    case NL_PICK:
++        y = LIST_Y + (sN.listCursor - sN.listTop) * ROW_H;
++        KeyCap(fb, LIST_X - 26, y + 1, "A");
++        break;
++    case NL_PLACE:
++        KeyCap(fb, 6, BOARD_Y - 20, "L R");
++        KeyCap(fb, 40, BOARD_Y - 20, "A");
++        break;
++    case NL_RUN:
++        KeyCap(fb, LIST_X - 4, LIST_Y + LIST_ROWS * ROW_H + 6, "START");
++        break;
++    }
++}
++
++static void LessonFrame(u16 *keys)
++{
++    switch (sLesson)
++    {
++    case NL_LINE:
++        if (*keys & A_BUTTON)
++        {
++            PlaySE(SE_SELECT);
++            sLesson = NL_PICK;
++        }
++        *keys = 0;
++        break;
++    case NL_PICK:
++        *keys &= ~(B_BUTTON | START_BUTTON | DPAD_LEFT);   // (one thing at a time)
++        if (sN.mode == M_PLACE)
++            sLesson = NL_PLACE, sLessonCount = sN.navi->count;
++        break;
++    case NL_PLACE:
++        if (sN.mode != M_PLACE)
++            sLesson = sN.navi->count > sLessonCount ? NL_RUN : NL_PICK;
++        break;
++    case NL_RUN:
++        if (sN.mode == M_RESULT)
++        {
++            sLesson = NL_NONE;
++            PkbnTutorial_SetSeen(TUT_NAVICUST);
++        }
++        break;
++    }
++}
++
+ static void Draw(u16 *fb)
+ {
+     s32 i;
+@@ -511,6 +585,7 @@ static void Draw(u16 *fb)
+     DrawList(fb);
+     DrawPreview(fb);
+     DrawInfo(fb);
++    DrawLesson(fb);   // POC-18
+ }
+ 
+ // ---- input ---------------------------------------------------------------------------------------------------
+@@ -702,6 +777,8 @@ static void CB2_NaviCust(void)
+                 sKeys++;
+         }
+     }
++    if (sLesson)
++        LessonFrame(&keys);   // POC-18
+     HandleInput(keys);
+ }
+ 
+@@ -722,6 +799,19 @@ void PkbnNaviCust_Open(u8 partySlot, MainCallback exitCallback)
+     Pkbn_GameStringToAscii(sN.name, gSpeciesNames[sN.owner.species], sizeof(sN.name));
+     Recompile();
+     sN.mode = M_LIST;
++    sLesson = NL_NONE;
++    if (Tut_Enabled() && !PkbnTutorial_Seen(TUT_NAVICUST))
++    {
++        u8 i;
++        sLesson = NL_LINE;
++        for (i = 0; i < NCP_COUNT; i++)   // the cursor starts on a program you have
++            if (Available(i))
++            {
++                sN.listCursor = i;
++                sN.listTop = i >= LIST_ROWS ? i - LIST_ROWS + 1 : 0;
++                break;
++            }
++    }
+     sKeys = getenv("PKBN_TEST_NCP_KEYS");
+     sKeyClock = 0;
+     gPkbnCanvasOverlay = Draw;
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index fcc20e3..d538365 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -112,12 +112,12 @@ static const char *const sStarterPrograms[] = { "HP+50", "Attack+1", "Speed+1",
+ 
+ void PkbnSave_NewGame(void)
+ {
+-    u32 i;
+     PkbnSave_Reset();
+     memset(sSave.owned, 0, sizeof(sSave.owned));
+     sSave.programEconomy = 1;
+-    for (i = 0; i < ARRAY_COUNT(sStarterPrograms); i++)
+-        PkbnProgram_GrantByName(sStarterPrograms[i], 1);
++    // POC-18 (Khaled's pick): no starter programs - NAVICUST opens after Roxanne, whose first defeat pays Iron and
++    // UnderSht (src/pkbn/leader.c sFirstWinPrograms)
++    (void)sStarterPrograms;
+ }
+ 
+ // POC-18: read one file into `tmp`. FALSE if it's missing or not a save we can read.
+-- 
+2.43.0
+

@@ -1,0 +1,117 @@
+From 2dc76fa1eda0dedc027902c15660f56f65e5f7e2 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 23:00:13 +0300
+Subject: [PATCH 63/69] POC-18d: run from the Custom screen with L, as in BN6
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/grid_battle.c | 57 ++++++++++++++++++++++++++++--------------
+ src/pkbn/grid_draw.c   |  1 +
+ 2 files changed, 39 insertions(+), 19 deletions(-)
+
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index cd22f21..7e1ea09 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -1302,6 +1302,8 @@ static void FormProgramAdvances(void)
+     }
+ }
+ 
++static bool8 TryRun(void);
++
+ // POC-18a: the Custom cursor moves the way the slots are drawn (grid_draw.c DrawSlots). Row 0: hand chips 0-4. Row 1:
+ // the Custom-program chips 5-7, the wildcard Switch, the Poké Ball (1-3 slots wide) and OK when it fits.
+ // Cursor values: a hand chip, handCount = Switch, handCount + 1 = ball, handCount + 2 = OK.
+@@ -1423,6 +1425,12 @@ static void UpdateCustom(void)
+     u16 keys = gMain.newKeys;
+     u8 itemRow = sB.handCount + 1;
+ 
++    if ((keys & L_BUTTON) && sB.cursor != itemRow)
++    {
++        // POC-18 (Khaled: run from the Custom menu): L escapes, as in BN6's Custom screen
++        if (TryRun())
++            return;
++    }
+     if (sB.cursor == itemRow && (keys & (L_BUTTON | R_BUTTON)) && sB.ballItem)
+     {
+         // POC-18a (Khaled): L/R change the ball; the D-pad moves the cursor
+@@ -1758,6 +1766,35 @@ static bool8 BusyOrDisabled(u8 side)
+         || (f->invuln && f->invulnKind != INVULN_NONE);
+ }
+ 
++// Running (Emerald's rules); TRUE if the battle ended. From the fight (SELECT held) or the Custom screen (L, as in
++// BN6: "And the L Button is for escaping.", bn6f data/textscript/TextScriptBattleTut1.s).
++static bool8 TryRun(void)
++{
++    struct Fighter *p = &sB.f[SIDE_PLAYER];
++    if (sB.challenge)
++    {
++        EndBattle(B_OUTCOME_RAN, "JACKED OUT!");   // a simulation: you can always leave
++        return TRUE;
++    }
++    if (sB.trainer)
++        SetMsg("NO RUNNING FROM A TRAINER BATTLE!", 50);
++    else if (p->noEscape && p->bm.ability != ABILITY_RUN_AWAY)   // Run Away beats Mean Look (battle_util.c:427)
++        SetMsg("CAN'T ESCAPE!", 40);
++    else if (Field_EscapeBlocker() != NULL)
++    {
++        char line[40];
++        snprintf(line, sizeof(line), "THE FOE'S %s PREVENTS ESCAPE!", Field_EscapeBlocker());
++        SetMsg(line, 50);
++    }
++    else
++    {
++        EndBattle(B_OUTCOME_RAN, "GOT AWAY SAFELY!");
++        return TRUE;
++    }
++    PlaySE(SE_FAILURE);
++    return FALSE;
++}
++
+ static void UpdatePlayer(void)
+ {
+     struct Fighter *p = &sB.f[SIDE_PLAYER];
+@@ -1776,26 +1813,8 @@ static void UpdatePlayer(void)
+     if (sB.runHold == RUN_HOLD_FRAMES)
+     {
+         sB.runHold = RUN_HOLD_FRAMES + 1;   // once per hold
+-        if (sB.challenge)
+-        {
+-            EndBattle(B_OUTCOME_RAN, "JACKED OUT!");   // a simulation: you can always leave
+-            return;
+-        }
+-        if (sB.trainer)
+-            SetMsg("NO RUNNING FROM A TRAINER BATTLE!", 50);
+-        else if (p->noEscape && p->bm.ability != ABILITY_RUN_AWAY)   // Run Away beats Mean Look (battle_util.c:427)
+-            SetMsg("CAN'T ESCAPE!", 40);
+-        else if (Field_EscapeBlocker() != NULL)
+-        {
+-            char line[40];
+-            snprintf(line, sizeof(line), "THE FOE'S %s PREVENTS ESCAPE!", Field_EscapeBlocker());
+-            SetMsg(line, 50);
+-        }
+-        else
+-        {
+-            EndBattle(B_OUTCOME_RAN, "GOT AWAY SAFELY!");
++        if (TryRun())
+             return;
+-        }
+     }
+     if ((keys & (L_BUTTON | R_BUTTON)) && sB.gauge >= CUSTOM_FRAMES)
+     {
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 5b32cb7..5ec7618 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -1592,6 +1592,7 @@ static void DrawSlots(u16 *fb, u32 t)
+                 DrawCursorFrame(fb, x, y, SLOT_W - 2, SLOT_H, t);   // POC-18a: OK is a slot
+         }
+         Text(fb, CUS_W - 30, CH - 11, "START", COL_DIM);
++        Text(fb, CUS_W - 56, CH - 11, "L:RUN", COL_DIM);   // POC-18
+     }
+ }
+ 
+-- 
+2.43.0
+

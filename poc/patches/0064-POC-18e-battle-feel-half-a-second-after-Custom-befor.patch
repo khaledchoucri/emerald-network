@@ -1,0 +1,204 @@
+From d01098867c8656bc8d069ccae409501d72948d8f Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 23:01:19 +0300
+Subject: [PATCH 64/69] POC-18e: battle feel - half a second after Custom
+ before anything fires; about 25% slower; Speed sets step pace and move timing
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h | 14 +++++++++-----
+ src/pkbn/grid_battle.c       | 26 +++++++++++++++++++++-----
+ src/pkbn/grid_draw.c         | 19 +++++++++++++++++--
+ src/pkbn/grid_moves.c        | 24 +++++++++++++++++++++++-
+ 4 files changed, 70 insertions(+), 13 deletions(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 4d5eb18..894c39e 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -41,15 +41,16 @@
+ 
+ // ---- Tuning ---------------------------------------------------------------------------------
+ #define CUSTOM_FRAMES        480  // TUNE: Custom gauge fill time = one "turn" for Gen 3 end-of-turn effects
+-#define MOVE_COOLDOWN        6    // TUNE: frames between panel steps
+-#define BUSTER_COOLDOWN      20   // TUNE
++#define MOVE_COOLDOWN        9    // TUNE: frames between panel steps at Speed 60 (POC-18: was 6; Speed_StepFrames)
++#define BUSTER_COOLDOWN      24   // TUNE (POC-18: was 20)
+ #define BUSTER_DAMAGE        1    // BN6 MegaBuster attack_power (ChipDataArr index 0)
+-#define CHIP_LOCKOUT         24   // TUNE: frames the attacker is busy after using a move
++#define CHIP_LOCKOUT         30   // TUNE: frames the attacker is busy after using a move at Speed 60 (POC-18: was 24)
+ #define THROW_LOCKOUT        21   // BN6 bomb routine ends the thrower's attack at frame 0x15 (asm31.s, sub_80EB644)
+ #define HIT_IFRAMES          45   // TUNE: invincibility after taking a move hit
+ #define SWITCH_IFRAMES       30   // TUNE
+-#define ENEMY_STEP_MIN       40   // TUNE
+-#define ENEMY_STEP_RAND      50   // TUNE
++#define ENEMY_STEP_MIN       50   // TUNE (POC-18: was 40)
++#define ENEMY_STEP_RAND      62   // TUNE (POC-18: was 50)
++#define CHIP_READY_FRAMES    30   // TUNE (POC-18): after Custom closes, nothing fires for this long
+ #define ENEMY_TELEGRAPH      36   // TUNE: warning before an enemy's direct attack lands
+ #define GRENADE_RANGE        3    // BN6 MiniBomb "Throws a MiniBomb 3sq ahead"
+ #define GRENADE_FLIGHT       30   // TUNE
+@@ -237,6 +238,7 @@ struct GridBattle
+     u8 cinemaT;                // POC-17b: frames the fight waits for a big move's cut-in (the pictures keep moving)
+     bool8 lowHp;               // POC-17c: the low-HP alarm is on
+     u8 runHold;                // POC-18: frames SELECT has been held (running needs RUN_HOLD_FRAMES)
++    u8 chipReadyT;             // POC-18: frames until chips and the buster work after Custom (CHIP_READY_FRAMES)
+     bool8 omega;               // POC-16d: an Ω Leader rematch (tier-6 AI, levels +5)
+     bool8 noHeal;              // POC-16e: a challenge where nothing heals
+     bool8 fastPhases;          // POC-16e: boss phases at the fast rhythm from the start
+@@ -381,6 +383,8 @@ void Vis_GeneralAnim(u8 side, u8 anim, bool8 self);     // POC-15e: B_ANIM_* fro
+ void Vis_Shake(u8 level, u8 frames);                    // POC-16a: BN6 camera shake (camera_initShakeEffect)
+ void Vis_Cinema(u8 side, u8 level);                     // POC-17b: 1 MegaChip flash, 2 PA / GigaChip cut-in
+ u8 Moves_Windup(u8 side, u8 kind, bool8 fast);
++u16 Speed_StepFrames(const struct Fighter *f);    // POC-18: Speed sets how fast a Pokémon steps
++u16 Speed_Scale(const struct Fighter *f, u16 frames);   // POC-18: ...and how long its moves take
+ extern bool8 gPkbnNoWindup;                           // POC-15: BN wind-up frames before an attack
+ void Moves_Update(void);
+ void Moves_Clear(void);
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 7e1ea09..987b5fa 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -1536,6 +1536,17 @@ static void UpdateCustom(void)
+         sB.f[SIDE_PLAYER].recharge = FALSE; // recharged
+         sB.gauge = 0;
+         sB.state = ST_FIGHT;
++        // POC-18 (Khaled: no firing the instant Custom closes): CHIP_READY_FRAMES before anything fires, for the
++        // foes too
++        sB.chipReadyT = CHIP_READY_FRAMES;
++        {
++            u8 k;
++            for (k = 0; k < sB.foeCount; k++)
++                if (sB.foeAi[k][1] < CHIP_READY_FRAMES)
++                    sB.foeAi[k][1] = CHIP_READY_FRAMES;
++            if (sB.aiAttackTimer < CHIP_READY_FRAMES)
++                sB.aiAttackTimer = CHIP_READY_FRAMES;
++        }
+         PlaySE(SE_PIN);
+     }
+ }
+@@ -1863,11 +1874,13 @@ static void UpdatePlayer(void)
+                 sB.playerStepDy = dy, sB.playerStepFrame = sB.frame;   // POC-16d: the Ω AI reads it
+             Field_Step(SIDE_PLAYER, p->x + dx, p->y + dy);
+             Busting_NoteStep();
+-            // Gen 3 paralysis quarters Speed -> four times slower steps
+-            p->moveCd = (p->bm.status1 & STATUS1_PARALYSIS) ? MOVE_COOLDOWN * 4 : MOVE_COOLDOWN;
++            // POC-18: Speed sets how fast it steps (Speed_StepFrames; Gen 3 paralysis quarters Speed in there)
++            p->moveCd = Speed_StepFrames(p);
+         }
+     }
+ 
++    if (sB.chipReadyT)
++        return;   // POC-18: just out of Custom - the chips are still arriving (chips and buster both wait)
+     if ((keys & A_BUTTON) && sB.queueCount > 0)
+     {
+         TargetForPlayer();
+@@ -2302,7 +2315,7 @@ static void UpdateOneEnemy(void)
+         return;
+     if (sB.omega && OmegaGuard(e))
+         return;
+-    if (sB.omega && sB.f[SIDE_PLAYER].lockout && sB.aiAttackTimer > 8 && sB.frame - sB.omegaPunishFrame > 60)
++    if (sB.omega && sB.chipReadyT == 0 && sB.f[SIDE_PLAYER].lockout && sB.aiAttackTimer > 8 && sB.frame - sB.omegaPunishFrame > 60)
+     {
+         sB.aiAttackTimer = 8;   // POC-16d Ω: fire while the player is stuck after its attack (TUNE)
+         sB.omegaPunishFrame = sB.frame;
+@@ -2377,8 +2390,8 @@ static void UpdateOneEnemy(void)
+             }
+             sB.aiStepTimer = ENEMY_STEP_MIN + (Random() % ENEMY_STEP_RAND);
+         }
+-        if (e->bm.status1 & STATUS1_PARALYSIS)
+-            sB.aiStepTimer *= 4; // Gen 3 paralysis quarters Speed
++        // POC-18: Speed sets the pace of its steps (Speed_StepFrames; Gen 3 paralysis quarters Speed in there)
++        sB.aiStepTimer = sB.aiStepTimer * Speed_StepFrames(e) / MOVE_COOLDOWN;
+     }
+ }
+ 
+@@ -2713,6 +2726,9 @@ static void UpdateFight(void)
+ {
+     s32 r, c;
+ 
++    if (sB.chipReadyT)
++        sB.chipReadyT--;   // POC-18: the gap after Custom
++
+     // Custom gauge fills faster/slower with the player's Speed stage (stage 6 = 1x).
+     {
+         u8 st = sB.f[SIDE_PLAYER].bm.statStages[STAT_SPEED];
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 5ec7618..1ba1d0b 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -1862,8 +1862,23 @@ static void DrawChipStack(u16 *fb)
+     base = sHeadY - CHIP_ICON_H - 6;
+     if (base < 28)
+         base = 28;
+-    for (i = n - 1; i >= 0; i--)   // the back of the stack first; the next chip last, in front
+-        DrawStackChip(fb, sHeadX - (CHIP_ICON_W + 2) / 2 + i * 2, base - i * 4, sB.queue[i]);
++    // POC-18: just out of Custom the chips drop onto the head and light up when they can be used (CHIP_READY_FRAMES)
++    {
++        static u8 sReadyFlash = 6;
++        s32 drop = sB.chipReadyT * 24 / CHIP_READY_FRAMES;
++        if (sB.chipReadyT == 1)
++            sReadyFlash = 0;
++        else if (sB.chipReadyT == 0 && sReadyFlash < 6)
++            sReadyFlash++;
++        for (i = n - 1; i >= 0; i--)   // the back of the stack first; the next chip last, in front
++            DrawStackChip(fb, sHeadX - (CHIP_ICON_W + 2) / 2 + i * 2, base - i * 4 - drop, sB.queue[i]);
++        if (sB.chipReadyT)
++            Gfx_Darken(fb, sHeadX - (CHIP_ICON_W + 2) / 2, base - (n - 1) * 4 - drop, CHIP_ICON_W + 2 + (n - 1) * 2,
++                       CHIP_ICON_H + 2 + (n - 1) * 4, 6);
++        else if (sReadyFlash < 6)
++            Gfx_FillBlend(fb, sHeadX - (CHIP_ICON_W + 2) / 2, base, CHIP_ICON_W + 2, CHIP_ICON_H + 2, COL_WHITE,
++                          (u8)(12 - sReadyFlash * 2));
++    }
+ }
+ 
+ static u16 sPAAnimMoves[3];
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 0f51690..c99874d 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -140,10 +140,31 @@ static const struct PkbnNaviStats *AttackNavi(const struct Attack *a)
+     return (a->userSlot < PKBN_PARTY_MAX) ? &sB.party[a->userSlot].navi : NULL;
+ }
+ 
++// POC-18 (Khaled: "the speed stat of pokemon affect how fast it can move on the grid and the delay of moves"; he
++// picked the real Speed stat, so levels matter). Our curves (TUNE), from Moves_EffectiveSpeed (stages, paralysis,
++// Swift Swim and Chlorophyll included):
++//   steps:  5 + 8 * 60 / (Speed + 60) frames apart - Speed 10: 11.9, 60: 9, 200: 6.8, 400: 6
++//   moves:  wind-up and the busy time after x (0.8 + 0.4 * 60 / (Speed + 60)) - Speed 10: x1.14, 60: x1, 400: x0.85
++u16 Speed_StepFrames(const struct Fighter *f)
++{
++    s32 spd = Moves_EffectiveSpeed(f);
++    if (spd < 0)
++        spd = 0;
++    return (u16)(5 + (8 * 60 + (spd + 60) / 2) / (spd + 60));
++}
++
++u16 Speed_Scale(const struct Fighter *f, u16 frames)
++{
++    s32 spd = Moves_EffectiveSpeed(f);
++    if (spd < 0)
++        spd = 0;
++    return (u16)((u32)frames * (80 * (spd + 60) + 40 * 60) / (100 * (spd + 60)));
++}
++
+ // QuickClw program: recover faster after a chip.
+ static u16 ChipLockout(const struct Fighter *me)
+ {
+-    return CHIP_LOCKOUT * (100 - me->navi.quickClaw) / 100;
++    return Speed_Scale(me, CHIP_LOCKOUT) * (100 - me->navi.quickClaw) / 100;
+ }
+ 
+ s32 Moves_EffectiveSpeed(const struct Fighter *f)
+@@ -355,6 +376,7 @@ u8 Moves_Windup(u8 side, u8 kind, bool8 fast)
+     }
+     if (side == SIDE_ENEMY && kind <= GK_TORNADO)
+         return 0;        // the enemy's direct attacks: ENEMY_TELEGRAPH is their wind-up
++    w = (u8)Speed_Scale(&sB.f[side], w);   // POC-18: Speed
+     return fast ? w / 2 : w;
+ }
+ 
+-- 
+2.43.0
+

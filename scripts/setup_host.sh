@@ -60,19 +60,17 @@ if [ "$TARGET" = linux ]; then
   echo "Run:  cd $HOST_DIR && ./pokeemerald64      (PKBN_STUB=0 ./pokeemerald64 for vanilla battles)"
 else
   if [ ! -d SDL2 ]; then
-    echo "==> Downloading SDL2 2.0.16 mingw dev libs (per INSTALL_PC.md)"
-    curl -L -o /tmp/sdl2-mingw.tar.gz https://archive.org/download/sdl-2-2.0.16/SDL2-devel-2.0.16-mingw.tar.gz
-    tar -xzf /tmp/sdl2-mingw.tar.gz && mv SDL2-2.0.16 SDL2
+    # POC-18: SDL 2.0.22 from SDL's own GitHub releases (archive.org's 2.0.16 copy isn't always reachable). Same API.
+    echo "==> Downloading SDL2 2.0.22 mingw dev libs"
+    curl -fL -o /tmp/sdl2-mingw.tar.gz https://github.com/libsdl-org/SDL/releases/download/release-2.0.22/SDL2-devel-2.0.22-mingw.tar.gz
+    tar -xzf /tmp/sdl2-mingw.tar.gz && mv SDL2-2.0.22 SDL2
   fi
   echo "==> Building Windows .exe (-j$JOBS)"
   make winwsl -j"$JOBS"
   OUT="$PROJECT_DIR/poc/bin"
   mkdir -p "$OUT"
   cp pokeemerald64.exe "$OUT/"
-  if [ ! -f "$OUT/SDL2.dll" ]; then
-    curl -L -o /tmp/sdl2-dll.zip https://archive.org/download/sdl-2-2.0.16/SDL2-2.0.16-win32-x64.zip
-    unzip -o -q /tmp/sdl2-dll.zip SDL2.dll -d "$OUT"
-  fi
+  cp SDL2/x86_64-w64-mingw32/bin/SDL2.dll "$OUT/"
   echo
-  echo "Done: $OUT/pokeemerald64.exe (save file is written next to it)"
+  echo "Done: $OUT/pokeemerald64.exe (saves and pkbn_log.txt are written next to it)"
 fi

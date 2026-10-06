@@ -1,0 +1,68 @@
+From b7d8d3d01359b5e54e9c8459aab14472d725907d Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 22:53:41 +0300
+Subject: [PATCH 61/69] POC-18b: NaviCust - take a program off the board
+ (SELECT on it, or B while holding it)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/navicust_ui.c | 21 +++++++++++++--------
+ 1 file changed, 13 insertions(+), 8 deletions(-)
+
+diff --git a/src/pkbn/navicust_ui.c b/src/pkbn/navicust_ui.c
+index e915fb6..b3cfbd6 100644
+--- a/src/pkbn/navicust_ui.c
++++ b/src/pkbn/navicust_ui.c
+@@ -410,7 +410,7 @@ static void DrawInfo(u16 *fb)
+     {
+         const struct PkbnNcp *p = &gPkbnNcps[sN.mode == M_PLACE ? sN.ghost.prog : sN.listCursor];
+         Text(fb, 6, y + 1, p->name, RGB(31, 31, 31));
+-        Hint(fb, y + 1, sN.mode == M_PLACE ? "L/R:TURN A:PUT" : "A:PICK START:RUN");
++        Hint(fb, y + 1, sN.mode != M_PLACE ? "A:PICK START:RUN" : sN.moving ? "A:PUT B:OFF" : "L/R:TURN A:PUT");
+         TextWrap(fb, 6, y + 11, LIST_X - 16, 2, p->desc, RGB(22, 26, 31));
+         return;
+     }
+@@ -438,7 +438,7 @@ static void DrawInfo(u16 *fb)
+         else
+             Text(fb, 6, y + 1, "(EMPTY)", RGB(22, 26, 31));
+         if (c != NCELL_ABILITY)
+-            Hint(fb, y + 1, "A:MOVE  B:LIST");
++            Hint(fb, y + 1, c == NCELL_PART ? "A:MOVE SEL:OFF" : "B:LIST");
+         return;
+     }
+     // M_RESULT: BN6's RUN
+@@ -626,11 +626,10 @@ static void HandleInput(u16 keys)
+         }
+         if (keys & B_BUTTON)
+         {
+-            if (sN.moving) // put it back where it was
+-            {
+-                sN.navi->parts[sN.navi->count++] = sN.movedFrom;
+-                Recompile();
+-            }
++            // POC-18b (Khaled: no way to remove a program): B takes the part off the board. A part picked up from
++            // the board was already taken off (RemovePart); it goes back to the list.
++            if (sN.moving)
++                PlaySE(SE_RG_BAG_CURSOR);
+             sN.mode = sN.moving ? M_BOARD : M_LIST;
+         }
+         break;
+@@ -647,7 +646,13 @@ static void HandleInput(u16 keys)
+         }
+         if (keys & B_BUTTON)
+             sN.mode = M_LIST;
+-        if ((keys & A_BUTTON) && sN.board.cell[sN.by + 1][sN.bx + 1] == NCELL_PART)
++        if ((keys & SELECT_BUTTON) && sN.board.cell[sN.by + 1][sN.bx + 1] == NCELL_PART)
++        {
++            RemovePart(sN.board.part[sN.by + 1][sN.bx + 1]);   // POC-18b: SELECT takes it straight off
++            Recompile();
++            PlaySE(SE_RG_BAG_CURSOR);
++        }
++        else if ((keys & A_BUTTON) && sN.board.cell[sN.by + 1][sN.bx + 1] == NCELL_PART)
+         {
+             u8 p = sN.board.part[sN.by + 1][sN.bx + 1];
+             sN.movedFrom = sN.navi->parts[p];
+-- 
+2.43.0
+

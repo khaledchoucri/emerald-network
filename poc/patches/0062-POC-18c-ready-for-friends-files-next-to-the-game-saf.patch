@@ -1,0 +1,801 @@
+From 2e937752dc611595df9234ae5cea962f8b3b6754 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 22:58:33 +0300
+Subject: [PATCH 62/69] POC-18c: ready for friends - files next to the game,
+ safe saves, no console, pads, keys by position, fullscreen, hold SELECT to
+ run, side-effect-free replays, version on the title
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ Makefile                     |   2 +-
+ include/pkbn/grid_internal.h |   2 +
+ include/pkbn/version.h       |   5 +
+ src/battle_setup.c           |   6 +
+ src/pkbn/grid_battle.c       |  20 ++-
+ src/pkbn/grid_draw.c         |  12 ++
+ src/pkbn/pkbn_save.c         |  75 +++++++--
+ src/pkbn/playlog.c           |   3 +-
+ src/pkbn/replay.c            |  16 +-
+ src/platform/sdl2.c          | 292 +++++++++++++++++++++++------------
+ src/save.c                   |   4 +-
+ src/title_screen.c           |   6 +
+ 12 files changed, 325 insertions(+), 118 deletions(-)
+ create mode 100644 include/pkbn/version.h
+
+diff --git a/Makefile b/Makefile
+index 85e4e43..c879b31 100644
+--- a/Makefile
++++ b/Makefile
+@@ -124,7 +124,7 @@ ifeq ($(PORTABLE),1)
+ 
+   ifeq ($(TARGET_OS),WINDOWS)
+     OS_CFLAGS :=
+-    OS_LFLAGS := -lwinmm -lxinput
++    OS_LFLAGS := -lwinmm -mwindows   # pkbn POC-18: SDL GameController instead of XInput 1.3; no console window
+     BUILD_FEXTENSION := .exe
+   else
+     OS_CFLAGS :=
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 8541be0..4d5eb18 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -55,6 +55,7 @@
+ #define GRENADE_FLIGHT       30   // TUNE
+ #define LOCKON_FRAMES        40   // TUNE
+ #define TIMESTOP_FRAMES      48   // TUNE
++#define RUN_HOLD_FRAMES      30   // TUNE (POC-18): hold SELECT this long to run
+ #define POISON_PANEL_PERIOD  7    // BN6: poison panel timer reloads 6 and fires below 0 (asm00_2.s sub_801A186)
+ #define BROKEN_PANEL_FRAMES  600  // TUNE: a broken panel comes back after this long
+ #define PANEL_EFFECT_FRAMES  900  // TUNE: poison / holy / grass panels fade after this long
+@@ -235,6 +236,7 @@ struct GridBattle
+     u8 hitStop;                // POC-16a: frames the fight stays frozen after a big hit
+     u8 cinemaT;                // POC-17b: frames the fight waits for a big move's cut-in (the pictures keep moving)
+     bool8 lowHp;               // POC-17c: the low-HP alarm is on
++    u8 runHold;                // POC-18: frames SELECT has been held (running needs RUN_HOLD_FRAMES)
+     bool8 omega;               // POC-16d: an Ω Leader rematch (tier-6 AI, levels +5)
+     bool8 noHeal;              // POC-16e: a challenge where nothing heals
+     bool8 fastPhases;          // POC-16e: boss phases at the fast rhythm from the start
+diff --git a/include/pkbn/version.h b/include/pkbn/version.h
+new file mode 100644
+index 0000000..fe1a624
+--- /dev/null
++++ b/include/pkbn/version.h
+@@ -0,0 +1,5 @@
++#ifndef GUARD_PKBN_VERSION_H
++#define GUARD_PKBN_VERSION_H
++// POC-18: the build friends are playing, shown on the title screen and in the window title, so bug reports say which.
++#define PKBN_VERSION "0.18"
++#endif
+diff --git a/src/battle_setup.c b/src/battle_setup.c
+index 2dcba22..8008ddb 100644
+--- a/src/battle_setup.c
++++ b/src/battle_setup.c
+@@ -39,6 +39,7 @@
+ #include "data.h"
+ #include "pkbn/battle_stub.h"
+ #include "pkbn/challenge.h"
++#include "wild_encounter.h"
+ #include "constants/battle_frontier.h"
+ #include "constants/battle_setup.h"
+ #include "constants/event_objects.h"
+@@ -380,7 +381,12 @@ static void Task_BattleStart(u8 taskId)
+                 && PkbnBattle_ShouldHandle())
+                 SetMainCallback2(PkbnBattle_GetEntryCallback());
+             else
++            {
++#ifdef PORTABLE
++                PkbnWild_ClearPack();   // POC-18: Emerald's own battle (Safari, Pyramid...) - a pack roll mustn't linger
++#endif
+                 SetMainCallback2(CB2_InitBattle);
++            }
+             RestartWildEncounterImmunitySteps();
+             ClearPoisonStepCounter();
+             DestroyTask(taskId);
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 4cb7f70..cd22f21 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -490,8 +490,9 @@ static void StyleStep(struct Fighter *e)
+ static void LoadEnemy(struct Pokemon *mon)
+ {
+     struct Fighter *f = &sB.f[SIDE_ENEMY];
+-    HandleSetPokedexFlag(SpeciesToNationalPokedexNum(GetMonData(mon, MON_DATA_SPECIES)), FLAG_SET_SEEN,
+-                         GetMonData(mon, MON_DATA_PERSONALITY)); // seen when it comes out (battle_script_commands.c:4707)
++    if (!gPkbnReplayActive)   // POC-18: a replay doesn't fill the Pokédex
++        HandleSetPokedexFlag(SpeciesToNationalPokedexNum(GetMonData(mon, MON_DATA_SPECIES)), FLAG_SET_SEEN,
++                             GetMonData(mon, MON_DATA_PERSONALITY)); // seen when it comes out (battle_script_commands.c:4707)
+     MonToBattleMon(mon, &f->bm);
+     Pkbn_GameStringToAscii(f->name, gSpeciesNames[f->bm.species], sizeof(f->name));
+     Pkbn_DecodeMonIcon(f->icon[0], f->bm.species, f->bm.personality, 0);
+@@ -1448,7 +1449,8 @@ static void UpdateCustom(void)
+             for (i = 0; i < sB.foeCount; i++)
+                 if (Foe_Get(i)->bm.hp)
+                     Foe_Select(i);   // the one left standing
+-            RemoveBagItem(sB.ballItem, 1);
++            if (!gPkbnReplayActive)
++                RemoveBagItem(sB.ballItem, 1);   // POC-18: a replay never touches the real bag
+             sB.throwShakes = Catch_Throw(sB.ballItem);
+             Busting_NoteThrow();
+             PKBN_LOG("threw ball %u: %u shakes%s", sB.ballItem, sB.throwShakes > 3 ? 3 : sB.throwShakes,
+@@ -1762,8 +1764,18 @@ static void UpdatePlayer(void)
+     u16 held = gMain.heldKeys;
+     u16 keys = gMain.newKeys;
+ 
+-    if (keys & SELECT_BUTTON)
++    // POC-18: running takes SELECT held for half a second (RUN_HOLD_FRAMES, TUNE), so a stray press doesn't end the
++    // battle. The hold shows as a ring filling around the player (grid_draw.c).
++    if (held & SELECT_BUTTON)
+     {
++        if (sB.runHold < RUN_HOLD_FRAMES)
++            sB.runHold++;
++    }
++    else
++        sB.runHold = 0;
++    if (sB.runHold == RUN_HOLD_FRAMES)
++    {
++        sB.runHold = RUN_HOLD_FRAMES + 1;   // once per hold
+         if (sB.challenge)
+         {
+             EndBattle(B_OUTCOME_RAN, "JACKED OUT!");   // a simulation: you can always leave
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index b0c2a44..5b32cb7 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -2108,6 +2108,18 @@ void Draw_Overlay(u16 *fb)
+             ForEachVis(VisDrawRow);
+         }
+     }
++    if (sB.runHold && sB.runHold <= RUN_HOLD_FRAMES && sB.state == ST_FIGHT)
++    {
++        // POC-18: holding SELECT to run - a ring closing around the player's feet (no words)
++        s32 cx, cy, i, n = sB.runHold * 32 / RUN_HOLD_FRAMES;
++        Draw_FeetPos(sB.f[SIDE_PLAYER].x, sB.f[SIDE_PLAYER].y, &cx, &cy);
++        cy -= 14;
++        for (i = 0; i < n; i++)
++        {
++            u8 ang = (u8)(192 + i * 8);   // from the top, clockwise (Emerald's 256-step angles)
++            Pkbn_FillRect(fb, cx + Cos(ang, 22) - 1, cy + Sin(ang, 22) * 2 / 3 - 1, 2, 2, COL_WHITE);
++        }
++    }
+     Foe_Select(keepFoe);
+     Vfx_DrawAttacks(fb);
+     Vfx_DrawLayer(fb, VFX_LAYER_AIR);
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index 7406d45..6e5c252 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -4,6 +4,7 @@
+ // the 64-bit PC port SaveBlock1 is already 408 bytes larger than the 4 sectors that save it (docs/design/06 §0),
+ // so nothing of ours goes into the vanilla save. Written whenever the game saves (TrySavingData), read whenever it
+ // loads (LoadGameSave), reset on a new game (NewGameInitData).
++#include <stdlib.h>
+ #include "global.h"
+ #include "pokemon.h"
+ #include "pokemon_storage_system.h"
+@@ -23,7 +24,11 @@
+ #include <string.h>
+ #include <stddef.h>
+ 
+-#define PKBN_SAVE_PATH    "pkbn.sav"
++#define PKBN_SAVE_PATH    Platform_DataPath("pkbn.sav")   // POC-18: next to the game
++#define PKBN_SAVE_TMP     Platform_DataPath("pkbn.sav.tmp")
++#define PKBN_SAVE_BAK     Platform_DataPath("pkbn.sav.bak")
++#define PKBN_SAVE_BAD     Platform_DataPath("pkbn.sav.bad")
++extern const char *Platform_DataPath(const char *file);
+ #define PKBN_SAVE_VERSION 6   // v2 (POC-10): chip pack, grants, candy, folder; v3 (POC-11): partner chips;
+                               // v4 (POC-13): folders 2 and 3 and which one is equipped;
+                               // v5 (POC-14): chip library, Leader chips and rematch records, challenges, programs;
+@@ -109,21 +114,51 @@ void PkbnSave_NewGame(void)
+         PkbnProgram_GrantByName(sStarterPrograms[i], 1);
+ }
+ 
++// POC-18: read one file into `tmp`. FALSE if it's missing or not a save we can read.
++static bool8 ReadFile(const char *path, struct PkbnSaveFile *tmp)
++{
++    FILE *f = fopen(path, "rb");
++    size_t got;
++    memset(tmp, 0, sizeof(*tmp));
++    if (f == NULL)
++        return FALSE;
++    got = fread(tmp, 1, sizeof(*tmp), f);
++    fclose(f);
++    if (got < V1_SIZE || memcmp(tmp->magic, "PKBNSAVE", 8) != 0 || tmp->version == 0 || tmp->version > PKBN_SAVE_VERSION)
++        return FALSE;
++    if (tmp->version == PKBN_SAVE_VERSION && got < sizeof(*tmp))
++        memset((u8 *)tmp + got, 0, sizeof(*tmp) - got);   // fields appended without a version bump start empty
++    return TRUE;
++}
++
+ void PkbnSave_Read(void)
+ {
+-    FILE *f = fopen(PKBN_SAVE_PATH, "rb");
+     struct PkbnSaveFile tmp;
+     s32 i;
+-    size_t got;
+-    memset(&tmp, 0, sizeof(tmp));
+-    got = (f != NULL) ? fread(&tmp, 1, sizeof(tmp), f) : 0;
+-    if (f != NULL)
+-        fclose(f);
+-    if (got < V1_SIZE || memcmp(tmp.magic, "PKBNSAVE", 8) != 0 || tmp.version == 0 || tmp.version > PKBN_SAVE_VERSION
+-     || (tmp.version == PKBN_SAVE_VERSION && got != sizeof(tmp)))
++    if (!ReadFile(PKBN_SAVE_PATH, &tmp))
+     {
+-        PkbnSave_Reset();
+-        return;
++        // POC-18: never silently lose a friend's data. The last good copy (written before every save) is tried; a
++        // file we can't read is kept as pkbn.sav.bad rather than overwritten at the next save.
++        FILE *f = fopen(PKBN_SAVE_PATH, "rb");
++        if (f != NULL)
++        {
++            fclose(f);
++            remove(PKBN_SAVE_BAD);
++            rename(PKBN_SAVE_PATH, PKBN_SAVE_BAD);
++            printf("[pkbn] pkbn.sav couldn't be read; kept as pkbn.sav.bad\n");
++        }
++        if (!ReadFile(PKBN_SAVE_BAK, &tmp))
++        {
++            // nothing to read: start like a new game's economy (programs are earned), not "everything unlocked"
++            PkbnSave_Reset();
++            if (getenv("PKBN_SELFTEST") == NULL)   // (self-tests keep every program, as before)
++            {
++                memset(sSave.owned, 0, sizeof(sSave.owned));
++                sSave.programEconomy = 1;
++            }
++            return;
++        }
++        printf("[pkbn] read pkbn.sav.bak instead\n");
+     }
+     if (tmp.version == 1)
+         memset((u8 *)&tmp + V1_SIZE, 0, sizeof(tmp) - V1_SIZE); // v1 -> v3: an empty pack (filled by SyncLearned)
+@@ -151,13 +186,25 @@ void PkbnSave_Read(void)
+     sSave.ncpCount = NCP_COUNT;
+ }
+ 
++// POC-18: written whole to pkbn.sav.tmp first, then swapped in; the previous file is kept as pkbn.sav.bak. A crash or
++// a full disk mid-write can't leave a half-written pkbn.sav.
+ void PkbnSave_Write(void)
+ {
+-    FILE *f = fopen(PKBN_SAVE_PATH, "wb");
++    FILE *f = fopen(PKBN_SAVE_TMP, "wb");
++    bool8 ok;
+     if (f == NULL)
+         return;
+-    fwrite(&sSave, 1, sizeof(sSave), f);
+-    fclose(f);
++    ok = fwrite(&sSave, 1, sizeof(sSave), f) == sizeof(sSave);
++    ok = (fclose(f) == 0) && ok;
++    if (!ok)
++    {
++        remove(PKBN_SAVE_TMP);
++        return;
++    }
++    remove(PKBN_SAVE_BAK);
++    rename(PKBN_SAVE_PATH, PKBN_SAVE_BAK);   // (fails harmlessly when there's no pkbn.sav yet)
++    if (rename(PKBN_SAVE_TMP, PKBN_SAVE_PATH) != 0)
++        rename(PKBN_SAVE_BAK, PKBN_SAVE_PATH);
+ }
+ 
+ struct PkbnNavi *PkbnSave_FindNavi(u16 id)
+diff --git a/src/pkbn/playlog.c b/src/pkbn/playlog.c
+index 5cc5229..2bc9967 100644
+--- a/src/pkbn/playlog.c
++++ b/src/pkbn/playlog.c
+@@ -14,7 +14,8 @@
+ #include <string.h>
+ #include <time.h>
+ 
+-#define PLAYLOG_PATH "pkbn_playlog.jsonl"
++#define PLAYLOG_PATH Platform_DataPath("pkbn_playlog.jsonl")   // POC-18: next to the game
++extern const char *Platform_DataPath(const char *file);
+ 
+ static struct
+ {
+diff --git a/src/pkbn/replay.c b/src/pkbn/replay.c
+index bc83645..85650d9 100644
+--- a/src/pkbn/replay.c
++++ b/src/pkbn/replay.c
+@@ -13,7 +13,8 @@
+ #include <stdio.h>
+ #include <string.h>
+ 
+-#define REPLAY_PATH       "pkbn_replay.bin"
++#define REPLAY_PATH       Platform_DataPath("pkbn_replay.bin")   // POC-18: next to the game
++extern const char *Platform_DataPath(const char *file);
+ #define REPLAY_VERSION    1
+ #define REPLAY_MAX_FRAMES (60 * 60 * 15)   // 15 minutes of battle
+ 
+@@ -99,8 +100,17 @@ void PkbnReplay_StartRecording(void)
+     sR.recording = TRUE;
+ }
+ 
++// POC-18: what a replay borrows and gives back (it changes nothing)
++static u16 sRealOpponentA, sRealOpponentB;
++static u8 sRealEnvironment;
++static u32 sRealRng;
++
+ void PkbnReplay_ApplyStart(void)
+ {
++    sRealOpponentA = gTrainerBattleOpponent_A;
++    sRealOpponentB = gTrainerBattleOpponent_B;
++    sRealEnvironment = gBattleEnvironment;
++    sRealRng = gRngValue;
+     memcpy(sR.realParty, gPlayerParty, sizeof(sR.realParty));
+     memcpy(gPlayerParty, sR.player, sizeof(sR.player));
+     memcpy(gEnemyParty, sR.enemy, sizeof(sR.enemy));
+@@ -148,6 +158,10 @@ void PkbnReplay_End(void)
+     {
+         memcpy(gPlayerParty, sR.realParty, sizeof(sR.realParty));   // a replay changes nothing
+         gBattleTypeFlags = 0;
++        gTrainerBattleOpponent_A = sRealOpponentA;
++        gTrainerBattleOpponent_B = sRealOpponentB;
++        gBattleEnvironment = sRealEnvironment;
++        gRngValue = sRealRng;
+         gPkbnReplayActive = FALSE;
+         return;
+     }
+diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
+index e3e7193..c03073c 100644
+--- a/src/platform/sdl2.c
++++ b/src/platform/sdl2.c
+@@ -3,11 +3,11 @@
+ #include <assert.h>
+ #include <stdbool.h>
+ #include <stdio.h>
++#include <string.h>
+ #include <time.h>
+ 
+ #ifdef _WIN32
+ #include <windows.h>
+-#include <xinput.h>
+ #endif
+ 
+ #include <SDL2/SDL.h>
+@@ -22,6 +22,8 @@
+ #include "platform/dma.h"
+ #include "platform/framedraw.h"
+ #include "platform/system.h"
++#include "pkbn/version.h"
++#include "pkbn/render.h"
+ 
+ extern void (*const gIntrTable[])(void);
+ 
+@@ -44,6 +46,80 @@ double timeScale = 1.0;
+ struct SiiRtcInfo internalClock;
+ 
+ static FILE *sSaveFile = NULL;
++
++// ---- pkbn POC-18: where files live, the log, the window ------------------------------------------------------------
++// Saves, logs, the play log and the replay go next to the game (SDL_GetBasePath), not wherever it was launched from.
++// If that folder can't be written (an install folder), they go to the user's app-data folder (SDL_GetPrefPath).
++// PKBN_DATA_DIR overrides both (the test scripts keep using the folder they run in).
++#define PKBN_GAME_TITLE "Pokemon x Battle Network " PKBN_VERSION
++static char sDataDir[1024];
++
++static bool DirWritable(const char *dir)
++{
++    char probe[1100];
++    FILE *f;
++    snprintf(probe, sizeof(probe), "%s.pkbn_write_test", dir);
++    f = fopen(probe, "ab");
++    if (f == NULL)
++        return false;
++    fclose(f);
++    remove(probe);
++    return true;
++}
++
++static void InitDataDir(void)
++{
++    const char *env = getenv("PKBN_DATA_DIR");
++    char *base;
++    if (env != NULL)
++    {
++        snprintf(sDataDir, sizeof(sDataDir), "%s%s", env, (env[0] && env[strlen(env) - 1] != '/' && env[strlen(env) - 1] != '\\') ? "/" : "");
++        return;
++    }
++    base = SDL_GetBasePath();
++    if (base != NULL && DirWritable(base))
++    {
++        snprintf(sDataDir, sizeof(sDataDir), "%s", base);
++        SDL_free(base);
++        return;
++    }
++    if (base != NULL)
++        SDL_free(base);
++    base = SDL_GetPrefPath("pkbn", "PokemonBattleNetwork");
++    snprintf(sDataDir, sizeof(sDataDir), "%s", base != NULL ? base : "");
++    if (base != NULL)
++        SDL_free(base);
++}
++
++// The full path of one of our files (a few rotating buffers, so two can be in use at once).
++const char *Platform_DataPath(const char *file)
++{
++    static char sBuf[4][1100];
++    static int sNext;
++    char *out = sBuf[sNext++ & 3];
++    if (sDataDir[0] == '\0' && getenv("PKBN_DATA_DIR") == NULL)
++        InitDataDir();
++    snprintf(out, 1100, "%s%s", sDataDir, file);
++    return out;
++}
++
++static bool sFullscreen;
++static void ToggleFullscreen(void)
++{
++    sFullscreen = !sFullscreen;
++    SDL_SetWindowFullscreen(sdlWindow, sFullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
++}
++
++static SDL_GameController *sPad;
++static void OpenPad(void)
++{
++    int i;
++    if (sPad != NULL)
++        return;
++    for (i = 0; i < SDL_NumJoysticks(); i++)
++        if (SDL_IsGameController(i) && (sPad = SDL_GameControllerOpen(i)) != NULL)
++            return;
++}
+ // pkbn POC-15: PKBN_DUMP_AUDIO=file - headless recordings: one game tick per loop iteration, drawn every tick, and that
+ // tick's audio (float32 stereo, 42048 Hz) written to the file when the recording tool wants it (gPkbnAudioWanted).
+ static FILE *sAudioDump = NULL;
+@@ -75,26 +151,35 @@ static void UpdateInternalClock(void);
+ 
+ int main(int argc, char **argv)
+ {
+-    // Open an output console on Windows
++    InitDataDir();
+ #ifdef _WIN32
+-    AllocConsole() ;
+-    AttachConsole( GetCurrentProcessId() ) ;
+-    freopen( "CON", "w", stdout ) ;
++    // pkbn POC-18: no console window (the .exe is a GUI program); the log goes to pkbn_log.txt next to the game.
++    // PKBN_CONSOLE=1 opens a console instead, as before.
++    if (getenv("PKBN_CONSOLE") != NULL)
++    {
++        AllocConsole();
++        AttachConsole(GetCurrentProcessId());
++        freopen("CON", "w", stdout);
++    }
++    else
++        freopen(Platform_DataPath("pkbn_log.txt"), "w", stdout);
+ #endif
+ 
+-    ReadSaveFile("pokeemerald.sav");
++    ReadSaveFile((char *)Platform_DataPath("pokeemerald.sav"));
+ 
+-    if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0)
++    if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) < 0)
+     {
+         DBGPRINTF("SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
+         return 1;
+     }
+ 
++    OpenPad();   // pkbn POC-18
++
+     // pkbn: PKBN_SCALE=N sets the starting window size (N x 240x160). The window can still be resized.
+     if (getenv("PKBN_SCALE") != NULL && atoi(getenv("PKBN_SCALE")) > 0)
+         videoScale = (unsigned int)atoi(getenv("PKBN_SCALE"));
+ 
+-    sdlWindow = SDL_CreateWindow("pokeemerald", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, PKBN_CANVAS_W * videoScale, PKBN_CANVAS_H * videoScale, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
++    sdlWindow = SDL_CreateWindow(PKBN_GAME_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, PKBN_CANVAS_W * videoScale, PKBN_CANVAS_H * videoScale, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+     if (sdlWindow == NULL)
+     {
+         DBGPRINTF("Window could not be created! SDL_Error: %s\n", SDL_GetError());
+@@ -239,6 +324,13 @@ static void ReadSaveFile(char *path)
+     {
+         sSaveFile = fopen(path, "w+b");
+     }
++    if (sSaveFile == NULL)
++    {
++        // pkbn POC-18: the folder can't be written - play on without saving instead of crashing
++        printf("[pkbn] can't open or create %s: the game won't save\n", path);
++        memset(FLASH_BASE, 0xFF, sizeof(FLASH_BASE));
++        return;
++    }
+ 
+     fseek(sSaveFile, 0, SEEK_END);
+     int fileSize = ftell(sSaveFile);
+@@ -263,6 +355,7 @@ static void StoreSaveFile()
+     {
+         fseek(sSaveFile, 0, SEEK_SET);
+         fwrite(FLASH_BASE, 1, sizeof(FLASH_BASE), sSaveFile);
++        fflush(sSaveFile);
+     }
+ }
+ 
+@@ -274,7 +367,7 @@ void Platform_StoreSaveFile(void)
+ void Platform_ReadFlash(u16 sectorNum, u32 offset, u8 *dest, u32 size)
+ {
+     DBGPRINTF("ReadFlash(sectorNum=0x%04X,offset=0x%08X,size=0x%02X)\n",sectorNum,offset,size);
+-    FILE * savefile = fopen("pokeemerald.sav", "r+b");
++    FILE * savefile = fopen(Platform_DataPath("pokeemerald.sav"), "rb");
+     if (savefile == NULL)
+     {
+         puts("Error opening save file.");
+@@ -313,17 +406,17 @@ static void CloseSaveFile()
+     }
+ }
+ 
+-// Key mappings
+-#define KEY_A_BUTTON      SDLK_z
+-#define KEY_B_BUTTON      SDLK_x
+-#define KEY_START_BUTTON  SDLK_RETURN
+-#define KEY_SELECT_BUTTON SDLK_BACKSLASH
+-#define KEY_L_BUTTON      SDLK_a
+-#define KEY_R_BUTTON      SDLK_s
+-#define KEY_DPAD_UP       SDLK_UP
+-#define KEY_DPAD_DOWN     SDLK_DOWN
+-#define KEY_DPAD_LEFT     SDLK_LEFT
+-#define KEY_DPAD_RIGHT    SDLK_RIGHT
++// Key mappings (pkbn POC-18: by key position - scancodes - so they're the same keys on AZERTY or QWERTZ)
++#define KEY_A_BUTTON      SDL_SCANCODE_Z
++#define KEY_B_BUTTON      SDL_SCANCODE_X
++#define KEY_START_BUTTON  SDL_SCANCODE_RETURN
++#define KEY_SELECT_BUTTON SDL_SCANCODE_BACKSPACE
++#define KEY_L_BUTTON      SDL_SCANCODE_A
++#define KEY_R_BUTTON      SDL_SCANCODE_S
++#define KEY_DPAD_UP       SDL_SCANCODE_UP
++#define KEY_DPAD_DOWN     SDL_SCANCODE_DOWN
++#define KEY_DPAD_LEFT     SDL_SCANCODE_LEFT
++#define KEY_DPAD_RIGHT    SDL_SCANCODE_RIGHT
+ 
+ #define HANDLE_KEYUP(key) \
+ case KEY_##key:  keys &= ~key; break;
+@@ -344,8 +437,21 @@ void ProcessEvents(void)
+         case SDL_QUIT:
+             isRunning = false;
+             break;
++        case SDL_CONTROLLERDEVICEADDED:
++            OpenPad();
++            break;
++        case SDL_CONTROLLERDEVICEREMOVED:
++            if (sPad != NULL && !SDL_GameControllerGetAttached(sPad))
++            {
++                SDL_GameControllerClose(sPad);
++                sPad = NULL;
++                OpenPad();
++            }
++            break;
+         case SDL_KEYUP:
+-            switch (event.key.keysym.sym)
++            if (event.key.keysym.scancode == SDL_SCANCODE_BACKSLASH)
++                keys &= ~SELECT_BUTTON;   // the old SELECT key still works
++            switch (event.key.keysym.scancode)
+             {
+             HANDLE_KEYUP(A_BUTTON)
+             HANDLE_KEYUP(B_BUTTON)
+@@ -357,7 +463,7 @@ void ProcessEvents(void)
+             HANDLE_KEYUP(DPAD_DOWN)
+             HANDLE_KEYUP(DPAD_LEFT)
+             HANDLE_KEYUP(DPAD_RIGHT)
+-            case SDLK_SPACE:
++            case SDL_SCANCODE_SPACE:
+                 if (speedUp)
+                 {
+                     speedUp = false;
+@@ -369,7 +475,16 @@ void ProcessEvents(void)
+             }
+             break;
+         case SDL_KEYDOWN:
+-            switch (event.key.keysym.sym)
++            if (event.key.keysym.scancode == SDL_SCANCODE_BACKSLASH)
++                keys |= SELECT_BUTTON;
++            if (event.key.repeat == 0 && (event.key.keysym.scancode == SDL_SCANCODE_F11
++             || (event.key.keysym.scancode == SDL_SCANCODE_RETURN && (event.key.keysym.mod & KMOD_ALT))))
++            {
++                ToggleFullscreen();   // pkbn POC-18: F11 or Alt+Enter
++                if (event.key.keysym.scancode == SDL_SCANCODE_RETURN)
++                    break;   // Alt+Enter isn't START
++            }
++            switch (event.key.keysym.scancode)
+             {
+             HANDLE_KEYDOWN(A_BUTTON)
+             HANDLE_KEYDOWN(B_BUTTON)
+@@ -381,19 +496,14 @@ void ProcessEvents(void)
+             HANDLE_KEYDOWN(DPAD_DOWN)
+             HANDLE_KEYDOWN(DPAD_LEFT)
+             HANDLE_KEYDOWN(DPAD_RIGHT)
+-            case SDLK_r:
+-                if (event.key.keysym.mod & (KMOD_LCTRL | KMOD_RCTRL))
+-                {
+-                    DoSoftReset();
+-                }
+-                break;
+-            case SDLK_p:
++            // pkbn POC-18: Ctrl+R (a soft reset that closed the game without saving) is gone
++            case SDL_SCANCODE_P:
+                 if (event.key.keysym.mod & (KMOD_LCTRL | KMOD_RCTRL))
+                 {
+                     paused = !paused;
+                 }
+                 break;
+-            case SDLK_SPACE:
++            case SDL_SCANCODE_SPACE:
+                 if (!speedUp)
+                 {
+                     speedUp = true;
+@@ -409,86 +519,68 @@ void ProcessEvents(void)
+                 unsigned int w = event.window.data1;
+                 unsigned int h = event.window.data2;
+                 
+-                videoScale = 0;
+-                if (w / PKBN_CANVAS_W > videoScale)
++                // pkbn POC-18: the largest whole scale that fits both ways (was the larger of the two, which could
++                // make a maximized window taller than the screen). Fullscreen leaves the window alone.
++                if (!sFullscreen && !(SDL_GetWindowFlags(sdlWindow) & SDL_WINDOW_MAXIMIZED))
++                {
+                     videoScale = w / PKBN_CANVAS_W;
+-                if (h / PKBN_CANVAS_H > videoScale)
+-                    videoScale = h / PKBN_CANVAS_H;
+-                if (videoScale < 1)
+-                    videoScale = 1;
+-
+-                videoScaleChanged = true;
++                    if (h / PKBN_CANVAS_H < videoScale)
++                        videoScale = h / PKBN_CANVAS_H;
++                    if (videoScale < 1)
++                        videoScale = 1;
++                    videoScaleChanged = true;
++                }
+             }
+             break;
+         }
+     }
+ }
+ 
+-#ifdef _WIN32
+-#define STICK_THRESHOLD 0.5f
+-u16 GetXInputKeys()
++// pkbn POC-18: gamepads through SDL's GameController (any OS; XInput pads on Windows included). The pad's A is A and
++// its B is B (X is B too, as the port had it); Back is SELECT; the right trigger fast-forwards, like Space.
++#define STICK_THRESHOLD 16000
++static u16 GetPadKeys(void)
+ {
+-    XINPUT_STATE state;
+-    ZeroMemory(&state, sizeof(XINPUT_STATE));
+-
+-    DWORD dwResult = XInputGetState(0, &state);
+-    u16 xinputKeys = 0;
+-
+-    if (dwResult == ERROR_SUCCESS)
++    u16 k = 0;
++    static bool sTrigger;
++    bool trig;
++    if (sPad == NULL)
++        return 0;
++    if (SDL_GameControllerGetButton(sPad, SDL_CONTROLLER_BUTTON_A)) k |= A_BUTTON;
++    if (SDL_GameControllerGetButton(sPad, SDL_CONTROLLER_BUTTON_B)) k |= B_BUTTON;
++    if (SDL_GameControllerGetButton(sPad, SDL_CONTROLLER_BUTTON_X)) k |= B_BUTTON;
++    if (SDL_GameControllerGetButton(sPad, SDL_CONTROLLER_BUTTON_START)) k |= START_BUTTON;
++    if (SDL_GameControllerGetButton(sPad, SDL_CONTROLLER_BUTTON_BACK)) k |= SELECT_BUTTON;
++    if (SDL_GameControllerGetButton(sPad, SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) k |= L_BUTTON;
++    if (SDL_GameControllerGetButton(sPad, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) k |= R_BUTTON;
++    if (SDL_GameControllerGetButton(sPad, SDL_CONTROLLER_BUTTON_DPAD_UP)) k |= DPAD_UP;
++    if (SDL_GameControllerGetButton(sPad, SDL_CONTROLLER_BUTTON_DPAD_DOWN)) k |= DPAD_DOWN;
++    if (SDL_GameControllerGetButton(sPad, SDL_CONTROLLER_BUTTON_DPAD_LEFT)) k |= DPAD_LEFT;
++    if (SDL_GameControllerGetButton(sPad, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) k |= DPAD_RIGHT;
++    if (SDL_GameControllerGetAxis(sPad, SDL_CONTROLLER_AXIS_LEFTX) < -STICK_THRESHOLD) k |= DPAD_LEFT;
++    if (SDL_GameControllerGetAxis(sPad, SDL_CONTROLLER_AXIS_LEFTX) >  STICK_THRESHOLD) k |= DPAD_RIGHT;
++    if (SDL_GameControllerGetAxis(sPad, SDL_CONTROLLER_AXIS_LEFTY) < -STICK_THRESHOLD) k |= DPAD_UP;
++    if (SDL_GameControllerGetAxis(sPad, SDL_CONTROLLER_AXIS_LEFTY) >  STICK_THRESHOLD) k |= DPAD_DOWN;
++    trig = SDL_GameControllerGetAxis(sPad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16000;
++    if (trig != sTrigger)
+     {
+-        /* A */      xinputKeys |= (state.Gamepad.wButtons & XINPUT_GAMEPAD_A) >> 12;
+-        /* B */      xinputKeys |= (state.Gamepad.wButtons & XINPUT_GAMEPAD_X) >> 13;
+-        /* Start */  xinputKeys |= (state.Gamepad.wButtons & XINPUT_GAMEPAD_START) >> 1;
+-        /* Select */ xinputKeys |= (state.Gamepad.wButtons & XINPUT_GAMEPAD_BACK) >> 3;
+-        /* L */      xinputKeys |= (state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) << 1;
+-        /* R */      xinputKeys |= (state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) >> 1;
+-        /* Up */     xinputKeys |= (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP) << 6;
+-        /* Down */   xinputKeys |= (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) << 6;
+-        /* Left */   xinputKeys |= (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) << 3;
+-        /* Right */  xinputKeys |= (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) << 1;
+-
+-
+-        /* Control Stick */
+-        float xAxis = (float)state.Gamepad.sThumbLX / (float)SHRT_MAX;
+-        float yAxis = (float)state.Gamepad.sThumbLY / (float)SHRT_MAX;
+-
+-        if (xAxis < -STICK_THRESHOLD) xinputKeys |= DPAD_LEFT;
+-        if (xAxis >  STICK_THRESHOLD) xinputKeys |= DPAD_RIGHT;
+-        if (yAxis < -STICK_THRESHOLD) xinputKeys |= DPAD_DOWN;
+-        if (yAxis >  STICK_THRESHOLD) xinputKeys |= DPAD_UP;
+-
+-
+-        /* Speedup */
+-        // Note: 'speedup' variable is only (un)set on keyboard input
+-        double oldTimeScale = timeScale;
+-        timeScale = (state.Gamepad.bRightTrigger > 0x80 || speedUp) ? 5.0 : 1.0;
+-
+-        if (oldTimeScale != timeScale)
+-        {
+-            if (timeScale > 1.0)
+-            {
+-                SDL_PauseAudio(1);
+-            }
+-            else
+-            {
+-                SDL_ClearQueuedAudio(1);
+-                SDL_PauseAudio(0);
+-            }
+-        }
++        sTrigger = trig;
++        speedUp = trig;
++        timeScale = trig ? 5.0 : 1.0;
+     }
+-
+-    return xinputKeys;
++    return k;
+ }
+-#endif // _WIN32
+ 
+ u16 Platform_GetKeyInput(void)
+ {
+     if (PkbnOwTest_Active())
+         return PkbnOwTest_Keys(); // PKBN: scripted overworld self-test (src/pkbn/owtest.c)
+-#ifdef _WIN32
+-    u16 gamepadKeys = GetXInputKeys();
+-    return (gamepadKeys != 0) ? gamepadKeys : keys;
+-#endif
++    {
++        // pkbn POC-18: the pad and the keyboard together (the port ignored the keyboard while a pad button was held)
++        u16 padKeys = GetPadKeys();
++        if (padKeys)
++            return keys | padKeys;
++    }
+     // pkbn self-tests: PKBN_AUTO_PRESS=1 taps A every 16 frames (for vanilla screens such as the
+     // evolution scene that wait for a button).
+     {
+@@ -530,6 +622,16 @@ void VDraw(SDL_Texture *texture)
+         for (y = 0; y < DISPLAY_HEIGHT; y++)
+             memcpy(&canvas[(y + oy) * PKBN_CANVAS_W + ox], &image[y * DISPLAY_WIDTH], DISPLAY_WIDTH * sizeof(uint16_t));
+     }
++    {
++        extern bool8 Pkbn_IsTitleScreen(void);
++        if (gPkbnCanvasOverlay == NULL && Pkbn_IsTitleScreen())
++        {
++            // pkbn POC-18: the version, small, in the bottom border of the title screen
++            Pkbn_SetTarget(PKBN_CANVAS_W, PKBN_CANVAS_H);
++            Pkbn_DrawText(canvas, PKBN_CANVAS_W - 4 - Pkbn_TextWidth("PKBN " PKBN_VERSION, 1), PKBN_CANVAS_H - 7,
++                          "PKBN " PKBN_VERSION, 0xC210, 1);
++        }
++    }
+     if (PkbnOwTest_Active())
+         PkbnOwTest_Frame(canvas);
+     SDL_UpdateTexture(texture, NULL, canvas, PKBN_CANVAS_W * sizeof (Uint16));
+diff --git a/src/save.c b/src/save.c
+index 1c1265b..04027e6 100644
+--- a/src/save.c
++++ b/src/save.c
+@@ -784,8 +784,8 @@ u8 TrySavingData(u8 saveType)
+     {
+ #ifdef PORTABLE
+ 		Platform_StoreSaveFile();
+-        if (saveType != SAVE_HALL_OF_FAME && saveType != SAVE_HALL_OF_FAME_ERASE_BEFORE)
+-            PkbnSave_Write();   // pkbn: our sidecar save (NaviCusts) goes with every game save
++        PkbnSave_Write();   // pkbn: our sidecar save goes with every game save (POC-18: the Hall of Fame one too - it
++                            // writes the full game slot, battle_setup/save.c SAVE_HALL_OF_FAME)
+ #endif
+         gSaveAttemptStatus = SAVE_STATUS_OK;
+         return SAVE_STATUS_OK;
+diff --git a/src/title_screen.c b/src/title_screen.c
+index f377139..0dd05bb 100644
+--- a/src/title_screen.c
++++ b/src/title_screen.c
+@@ -869,3 +869,9 @@ static void UpdateLegendaryMarkingColor(u8 frameNum)
+         LoadPalette(&color, BG_PLTT_ID(14) + 15, sizeof(color));
+    }
+ }
++
++// pkbn POC-18: the PC build draws its version in the title screen's border (src/platform/sdl2.c VDraw)
++bool8 Pkbn_IsTitleScreen(void)
++{
++    return gMain.callback2 == MainCB2;
++}
+-- 
+2.43.0
+

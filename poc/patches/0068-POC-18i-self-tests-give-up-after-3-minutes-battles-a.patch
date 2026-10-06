@@ -1,0 +1,28 @@
+From 86b00ff2e0ced8e2895f89620d7b6d4478a2da57 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 23:30:54 +0300
+Subject: [PATCH 68/69] POC-18i: self-tests give up after 3 minutes (battles
+ are slower)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/selftest.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index c58222f..b0b099c 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -347,7 +347,7 @@ static void CB2_SelfTestBattle(void)
+     {
+         struct PkbnGridDebug d;
+         PkbnGrid_GetDebug(&d);
+-        if (d.frame > 60 * 120) // 2 minutes: give up
++        if (d.frame > 60 * 180) // 3 minutes: give up (POC-18: battles are about 25% slower)
+         {
+             printf("[pkbn-selftest] TIMEOUT\n");
+             exit(2);
+-- 
+2.43.0
+

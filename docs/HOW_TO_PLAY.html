@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>How to Play</title>
+<style>
+:root {
+  --bg: #eef2f7; --panel: #ffffff; --ink: #0f1a2b; --muted: #55627a; --line: #d3dbe7; --accent: #0a74c9; --key: #f3f6fb;
+  --red: #c8323a; --blue: #2f5fd0;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0b1220; --panel: #121c2e; --ink: #e6edf7; --muted: #93a2bb; --line: #24324a; --accent: #3fa6ff; --key: #1a2740;
+  --red: #ff6b72; --blue: #7aa2ff; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0b1220; --panel: #121c2e; --ink: #e6edf7; --muted: #93a2bb; --line: #24324a; --accent: #3fa6ff; --key: #1a2740;
+  --red: #ff6b72; --blue: #7aa2ff; color-scheme: dark }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 "Segoe UI", system-ui, -apple-system, sans-serif; }
+.wrap { max-width: 820px; margin: 0 auto; padding: 28px 16px 64px; display: grid; gap: 22px; }
+h1 { font-size: clamp(28px, 6vw, 40px); line-height: 1.1; margin: 0; }
+h2 { font-size: 21px; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 6px 0 0; max-width: 62ch; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+p { margin: 8px 0; max-width: 68ch; }
+ul, ol { margin: 8px 0; padding-left: 22px; }
+li { margin: 4px 0; }
+kbd { font: 600 13px/1 ui-monospace, Consolas, monospace; background: var(--key); border: 1px solid var(--line);
+  border-bottom-width: 2px; border-radius: 5px; padding: 3px 6px; white-space: nowrap; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+.grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; max-width: 360px; margin: 10px 0; }
+.grid div { aspect-ratio: 5 / 3; border-radius: 4px; border: 3px solid; }
+.grid .p { border-color: var(--red); } .grid .e { border-color: var(--blue); }
+.note { color: var(--muted); font-size: 14px; }
+code { font: 14px ui-monospace, Consolas, monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Pokémon × Battle Network</h1>
+    <p class="lede">Pokémon Emerald, with Mega Man Battle Network's real-time grid battles in place of Emerald's turn-based battles. Thanks for playtesting. This page has the controls, how battles work, and what to send back.</p>
+  </header>
+
+  <section>
+    <h2>Getting started</h2>
+    <ul>
+      <li><b>Windows:</b> unzip the folder somewhere you can write to (not Program Files), then run <code>pokeemerald64.exe</code>. Keep <code>SDL2.dll</code> next to it.</li>
+      <li><b>Mac:</b> there's no Mac build yet. The Windows version runs through a Wine-based app such as CrossOver, Whisky or Porting Kit. Point it at <code>pokeemerald64.exe</code>.</li>
+      <li><b>Linux:</b> build it with <code>scripts/setup_host.sh</code> from the project.</li>
+    </ul>
+    <p>Start a <b>new game</b>. Your first battle, saving Prof. Birch on Route 101, teaches the basics as you play.</p>
+  </section>
+
+  <section>
+    <h2>Controls</h2>
+    <p>Press <kbd>F1</kbd> in the game to see the keys.</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Button</th><th>Keyboard</th><th>Gamepad</th></tr></thead>
+      <tbody>
+        <tr><td>A</td><td><kbd>Z</kbd></td><td>A</td></tr>
+        <tr><td>B</td><td><kbd>X</kbd></td><td>B (or X)</td></tr>
+        <tr><td>L / R</td><td><kbd>A</kbd> / <kbd>S</kbd></td><td>LB / RB</td></tr>
+        <tr><td>START</td><td><kbd>Enter</kbd></td><td>Start</td></tr>
+        <tr><td>SELECT</td><td><kbd>Backspace</kbd> (or <kbd>\</kbd>)</td><td>Back / View</td></tr>
+        <tr><td>+Control Pad</td><td>Arrow keys</td><td>D-pad or left stick</td></tr>
+        <tr><td>Fast-forward (hold)</td><td><kbd>Space</kbd></td><td>Right trigger</td></tr>
+        <tr><td>Fullscreen</td><td><kbd>F11</kbd> or <kbd>Alt</kbd>+<kbd>Enter</kbd></td><td></td></tr>
+        <tr><td>Pause</td><td><kbd>Ctrl</kbd>+<kbd>P</kbd></td><td></td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">Keys go by position, so they're the same physical keys on AZERTY and QWERTZ keyboards.</p>
+  </section>
+
+  <section>
+    <h2>Battles</h2>
+    <p>Battles run in real time on a 3×6 grid. Your Pokémon stands on the red panels, the foe on the blue ones.</p>
+    <div class="grid" aria-hidden="true">
+      <div class="p"></div><div class="p"></div><div class="p"></div><div class="e"></div><div class="e"></div><div class="e"></div>
+      <div class="p"></div><div class="p"></div><div class="p"></div><div class="e"></div><div class="e"></div><div class="e"></div>
+      <div class="p"></div><div class="p"></div><div class="p"></div><div class="e"></div><div class="e"></div><div class="e"></div>
+    </div>
+    <ol>
+      <li><b>Custom screen.</b> Each battle opens with it. Your Pokémon's moves are <b>chips</b>, dealt from your <b>folder</b>.
+        <ul>
+          <li>Move the cursor with the +Control Pad and pick chips with <kbd>A</kbd>; <kbd>B</kbd> takes one back.</li>
+          <li>Chips you pick together must share a <b>letter</b> (their code) or be the same chip. A <code>*</code> goes with any letter.</li>
+          <li>Pick <b>OK</b> or press <kbd>START</kbd> to send them.</li>
+        </ul>
+      </li>
+      <li><b>Fight.</b>
+        <ul>
+          <li>Move on your panels.</li>
+          <li><kbd>A</kbd> uses the chip shown above your Pokémon. Each chip works once.</li>
+          <li><kbd>B</kbd> fires your weak but quick Buster; hold it to keep firing.</li>
+          <li>Glowing panels warn where a foe's attack will land.</li>
+        </ul>
+      </li>
+      <li><b>Custom gauge.</b> The bar at the top fills over about 8 seconds. When it's full, press <kbd>L</kbd> or <kbd>R</kbd> for a new hand.</li>
+      <li><b>Speed matters.</b> Faster Pokémon step quicker and recover from their moves sooner.</li>
+      <li><b>Counter.</b> Hit a foe while it's attacking to stun it. Your next chip then hits twice as hard.</li>
+      <li><b>More slots in Custom.</b>
+        <ul>
+          <li><b>SW</b> sends in another of your Pokémon.</li>
+          <li>The <b>Poké Ball</b> slot throws a ball in wild battles. <kbd>L</kbd>/<kbd>R</kbd> change the ball.</li>
+        </ul>
+      </li>
+      <li><b>Running.</b> Hold <kbd>SELECT</kbd> for half a second during the fight, or press <kbd>L</kbd> on the Custom screen.</li>
+    </ol>
+    <p class="note">Some battles are still Emerald's own turn-based ones: Wally's catching demo, the Safari Zone, the Battle Frontier and similar facilities, and link battles.</p>
+  </section>
+
+  <section>
+    <h2>Menus</h2>
+    <ul>
+      <li><b>FOLDER</b> (START menu) is where you build your folder. <kbd>L</kbd>/<kbd>R</kbd> switch pages, and <kbd>SELECT</kbd> offers ready-made folders.</li>
+      <li><b>NAVICUST</b> (party menu) opens after your first Gym badge. Place programs on the board to power up a Pokémon:
+        <ul>
+          <li><kbd>L</kbd>/<kbd>R</kbd> turn a program, and <kbd>START</kbd> runs the board.</li>
+          <li>To take a program off, press <kbd>SELECT</kbd> on it, or <kbd>B</kbd> while holding it.</li>
+        </ul>
+      </li>
+      <li><b>NET CHALLENGE</b> is on the PC: practice battles and records.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Saves and feedback</h2>
+    <p>Save the way you do in Emerald. Everything is written to the game's folder:</p>
+    <ul>
+      <li><code>pokeemerald.sav</code> and <code>pkbn.sav</code> are your game. A backup of the second is kept as <code>pkbn.sav.bak</code>.</li>
+      <li><code>pkbn_log.txt</code> is what happened this session.</li>
+      <li><code>pkbn_playlog.jsonl</code> has one line per battle.</li>
+      <li><code>pkbn_replay.bin</code> is your last battle. Watch it from NET CHALLENGE with <kbd>SELECT</kbd>.</li>
+    </ul>
+    <p><b>When something's off,</b> send those files along with what you were doing. The version is in the corner of the title screen.</p>
+  </section>
+</div>
+</body>
+</html>
