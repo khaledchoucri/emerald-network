@@ -81,3 +81,5 @@ if diff <(grep -a '^\[pkbn f[0-9]*\]' "$OUT/replay_record/log.txt" | grep -v ' f
         <(grep -a '^\[pkbn f[0-9]*\]' "$OUT/replay_play/log.txt" | grep -v ' f0\]' | grep -v busting) > /dev/null; then
   echo "PASS replay_identical"; else echo "FAIL replay_identical (the replay played out differently)"; fi
 rm -f pkbn_replay.bin
+# POC-15: the chip gallery plays every chip on a fixed stage (PKBN_DUMP_DIR + tools/chip_gallery_sheet.py for pictures)
+bt chip_gallery "151:50,143:100" "done: 312 moves" PKBN_GALLERY=all PKBN_GALLERY_FRAMES=2

@@ -1,0 +1,1608 @@
+From 66e4c11e67134aeffa8cf9003a4aab72b205376c Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 14:03:37 +0300
+Subject: [PATCH 45/46] POC-15a: BN-paced attacks (wind-ups and poses from
+ BN6's MegaMan animations), visual events, flinch and knock-back slides,
+ readable effects for every chip kind, and a chip gallery self-test
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_battle.h   |   2 +
+ include/pkbn/grid_internal.h |  21 +
+ include/pkbn/grid_vfx.h      |   4 +-
+ src/pkbn/grid_battle.c       |  43 +++
+ src/pkbn/grid_draw.c         | 162 +++++++-
+ src/pkbn/grid_field.c        |  10 +-
+ src/pkbn/grid_moves.c        |  76 +++-
+ src/pkbn/grid_vfx.c          | 722 +++++++++++++++++++++++++++++++----
+ src/pkbn/selftest.c          |  86 +++++
+ 9 files changed, 1031 insertions(+), 95 deletions(-)
+
+diff --git a/include/pkbn/grid_battle.h b/include/pkbn/grid_battle.h
+index 49edb60..122e72f 100644
+--- a/include/pkbn/grid_battle.h
++++ b/include/pkbn/grid_battle.h
+@@ -27,6 +27,8 @@ struct PkbnGridDebug
+     bool8 playerLocked;
+ };
+ void PkbnGrid_GetDebug(struct PkbnGridDebug *d);
++extern bool8 gPkbnGallery;
++void PkbnGrid_GalleryStage(u16 move, u8 side);   // POC-15: the chip gallery
+ 
+ extern void (*gPkbnPostBattleDump)(u16 *fb); // self-tests: frame dumps of the post-battle screen
+ #endif // GUARD_PKBN_GRID_BATTLE_H
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 7ebf4d1..ca6c9a2 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -192,8 +192,24 @@ struct Attack
+     u8 typeOverride;
+     u8 cells[GRID_ROWS][GRID_COLS];  // panels threatened right now (telegraph / impact)
+     u16 serial;              // visuals: tells a new attack from a reused slot
++    bool8 windupOnly;        // POC-15: PH_CHARGE is just the user's BN wind-up (no charge-up, no "IS CHARGING UP")
+ };
+ 
++// Visual events (POC-15): the rules post what happened, the drawing code plays it. Visual only.
++enum { VEV_USE, VEV_LAUNCH, VEV_PUSH, VEV_STAT };
++struct VisEvent
++{
++    u32 serial;
++    u8 ev;
++    u8 side;
++    u8 foe;          // enemy side: which foe (sB.cur)
++    u8 kind;         // VEV_USE: GK_* ; VEV_LAUNCH: attack slot
++    u16 move;
++    s8 arg;          // VEV_USE: wind-up frames; VEV_PUSH: panels moved (signed); VEV_STAT: stages (+/-)
++    s8 x, y;         // VEV_PUSH: where it was before
++};
++#define MAX_VIS_EVENTS 16
++
+ struct GridBattle
+ {
+     u8 state;
+@@ -249,6 +265,8 @@ struct GridBattle
+     u8 fx[GRID_ROWS][GRID_COLS];
+     // visuals only (grid_draw.c reads these; nothing in the rules does): what last hit each panel
+     u8 fxSeq[GRID_ROWS][GRID_COLS];
++    struct VisEvent visEv[MAX_VIS_EVENTS];   // POC-15: ring of visual events
++    u32 visSerial;
+     u16 fxMove[GRID_ROWS][GRID_COLS];
+     u8 fxKind[GRID_ROWS][GRID_COLS];
+     u8 fxType[GRID_ROWS][GRID_COLS];
+@@ -333,6 +351,9 @@ u8 Foe_PlayerTarget(void);                // the foe the player's next move aims
+ 
+ // grid_moves.c
+ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, const char *userName, u8 userSlot);
++void Vis_Post(u8 ev, u8 side, u16 move, u8 kind, s8 arg, s8 x, s8 y);   // POC-15 visual events
++u8 Moves_Windup(u8 side, u8 kind, bool8 fast);
++extern bool8 gPkbnNoWindup;                           // POC-15: BN wind-up frames before an attack
+ void Moves_Update(void);
+ void Moves_Clear(void);
+ bool8 Moves_SideHasPending(u8 side);
+diff --git a/include/pkbn/grid_vfx.h b/include/pkbn/grid_vfx.h
+index bd5f4e1..582ede65 100644
+--- a/include/pkbn/grid_vfx.h
++++ b/include/pkbn/grid_vfx.h
+@@ -8,7 +8,9 @@
+ enum { VFX_LAYER_GROUND, VFX_LAYER_AIR, VFX_LAYER_HUD };
+ 
+ void Vfx_Reset(void);
+-void Vfx_OnLaunch(const struct Attack *a);                 // a new attack appeared
++void Vfx_OnLaunch(const struct Attack *a);                 // an attack left (after the wind-up)
++void Vfx_OnUse(const struct VisEvent *e);                  // POC-15: a move was used (wind-up / cast)
++void Vfx_OnStat(const struct VisEvent *e);                 // POC-15: a stat stage changed
+ void Vfx_OnSendOut(s32 feetX, s32 feetY);
+ void Vfx_OnHpChange(u8 side, s32 delta, s32 feetX, s32 feetY);
+ void Vfx_ScanImpacts(void);                                // panels hit since last frame (sB.fxSeq)
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 5a7b910..de36927 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -833,6 +833,7 @@ static void Begin(void)
+     PlayLog_Reset();
+ 
+     PkbnContract_Enter();
++    gPkbnNoWindup = getenv("PKBN_NO_WINDUP") != NULL;   // POC-15 A/B: the old instant attacks
+     sB.challenge = gPkbnChallengeActive;   // POC-14 NET CHALLENGE (set by PkbnStartNetChallenge)
+     gPkbnChallengeActive = 0;
+     // Same resource setup as CB2_InitBattle (battle_main.c:588-592) so Emerald's damage
+@@ -2076,6 +2077,8 @@ static void UpdateOneEnemy(void)
+ 
+ static void UpdateEnemy(void)
+ {
++    if (gPkbnGallery)
++        return;
+     s32 k;
+     if (sB.foeCount <= 1)
+     {
+@@ -2310,6 +2313,8 @@ static bool8 CheckPackFaints(void)
+ 
+ static void CheckFaints(void)
+ {
++    if (gPkbnGallery)
++        return;
+     if (sB.state != ST_FIGHT)
+         return;
+     if (sB.foeCount > 1)
+@@ -2504,6 +2509,44 @@ void CB2_PkbnGridBattle(void)
+     }
+ }
+ 
++// ---- Chip gallery (POC-15 visual review) ----------------------------------------------------------------------------
++// PKBN_GALLERY (src/pkbn/selftest.c): every chip's animation on the same stage - the user at (1,1), the foe at (4,1),
++// both at full HP, a clean field - so each move can be looked at frame by frame. The foe doesn't act and nobody faints.
++bool8 gPkbnGallery;
++
++void PkbnGrid_GalleryStage(u16 move, u8 side)
++{
++    s32 i;
++    Moves_Clear();
++    Field_Init();
++    for (i = 0; i < 2; i++)
++    {
++        struct Fighter *f = &sB.f[i];
++        s32 st;
++        Field_ResetFighterConditions(f);
++        f->x = i == SIDE_PLAYER ? 1 : 4;
++        f->y = 1;
++        f->bm.hp = f->bm.maxHP;
++        f->bm.status1 = 0;
++        f->bm.status2 = 0;
++        for (st = 0; st < NUM_BATTLE_STATS; st++)
++            f->bm.statStages[st] = DEFAULT_STAT_STAGE;
++        f->lockout = f->iframes = f->hurtFlash = f->statusFlash = f->stun = f->hold = f->invuln = 0;
++        f->charging = f->chargeMove = 0;
++        f->moveCd = 0;
++        f->barrier = f->recharge = f->safeguard = f->magicCoat = FALSE;
++        f->slideDx = f->slideDy = 0;
++        f->confTurns = f->trapTurns = 0;
++        f->bideFrames = 0;
++        f->rolloutCount = f->furyCount = 0;
++    }
++    sB.f[side].bm.pp[0] = 30;
++    sB.f[side].bm.moves[0] = move;
++    if (side == SIDE_PLAYER)
++        sB.party[sB.active].bm.hp = sB.f[SIDE_PLAYER].bm.hp;
++    Moves_Use(side, move, 0, &sB.f[side].bm, sB.f[side].name, side == SIDE_PLAYER ? sB.active : 0);
++}
++
+ // ---- Debug view for the headless self-test (src/pkbn/selftest.c) ---------------------
+ 
+ void PkbnGrid_GetDebug(struct PkbnGridDebug *d)
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index b9c17f8..5c94fe1 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -338,7 +338,16 @@ static void DrawField(u16 *fb, u32 t)
+ static u8 sFaintT[NVIS];
+ static u16 sLastHp[NVIS];
+ static u16 sLastSpecies[NVIS];
+-static u8 sPoseT[NVIS];      // frames left of the "attacking" pose
++static u8 sPoseT[NVIS];      // frames left of the "attacking" pose (after the wind-up)
++static u8 sPoseLen[NVIS];    // its length, for the lunge curve
++static u8 sWindT[NVIS];      // POC-15: frames left of the wind-up (drawing back)
++static u8 sHurtT[NVIS];      // POC-15: frames left of the flinch after a hit
++static u8 sPushT[NVIS];      // POC-15: knock-back slide
++static s8 sPushDx[NVIS];     //   panels it was pushed (signed)
++static u32 sLastVis;         // newest visual event played
++static u8 sDashT[NVIS];      // POC-15: a DASH - the user charges down the row and comes back
++static u8 sDashPanels[NVIS];
++#define DASH_FRAMES 18
+ static u8 sAppearT[NVIS];    // frames left of the send-out grow (Emerald's Poké Ball release)
+ 
+ static u8 VS(u8 side)
+@@ -353,6 +362,11 @@ static void ResetVisuals(void)
+ {
+     memset(sFaintT, 0, sizeof(sFaintT));
+     memset(sPoseT, 0, sizeof(sPoseT));
++    memset(sWindT, 0, sizeof(sWindT));
++    memset(sHurtT, 0, sizeof(sHurtT));
++    memset(sPushT, 0, sizeof(sPushT));
++    memset(sDashT, 0, sizeof(sDashT));
++    sLastVis = sB.visSerial;
+     memset(sAppearT, 0, sizeof(sAppearT));
+     sMaxSerial = sB.attackSerial;
+     memset(sLastHp, 0, sizeof(sLastHp));
+@@ -371,6 +385,21 @@ static void ResetVisuals(void)
+     Vfx_Reset();
+ }
+ 
++// How long the strike pose holds after the attack leaves (the rest of MegaMan's BN6 animation after its action frame,
++// battleSpriteMegaMan.spr: cannon 29 - 14, sword 22 - 12, throw 22 - 9 (anim 6), cast 16 - 6). POC-15.
++static u8 PoseHold(u8 kind)
++{
++    switch (kind)
++    {
++    case GK_CANNON: case GK_AIRSHOT: case GK_SPREADER: case GK_VULCAN: case GK_LOCKON:
++        return 15;
++    case GK_BOMB:
++        return 13;
++    default:
++        return 10;
++    }
++}
++
+ static bool8 FighterHidden(u8 side)
+ {
+     const struct Fighter *f = &sB.f[side];
+@@ -406,7 +435,14 @@ static void DrawFighter(u16 *fb, u8 side)
+         return;
+     }
+     if (f->invuln && f->invulnKind == INVULN_AIR)
++    {
++        s32 i;
+         lift = 48;
++        for (i = 0; i < MAX_ATTACKS; i++)   // POC-15: swooping down along a Fly / Bounce arc (drawn with the attack)
++            if (sB.attacks[i].active && sB.attacks[i].side == side && sB.attacks[i].kind == GK_BOMB
++             && (sB.attacks[i].info.flags & GF_INVULN) && sB.attacks[i].phase == PH_WAIT)
++                return;
++    }
+ 
+     // shadow on the panel
+     if (sB.panel[f->y][f->x] != PANEL_BROKEN)
+@@ -416,13 +452,44 @@ static void DrawFighter(u16 *fb, u8 side)
+         return; // BN blink while invincible
+ 
+     img = Gfx_MonImage(&f->pic, 0);
+-    if (sPoseT[VS(side)])
+     {
+-        frame = 1; // Emerald's second frame as the "attacking" pose
+-        dx = (sPoseT[VS(side)] > 6) ? 3 : 1;
++        // POC-15 poses, in "forward" pixels (toward the foe): wind-up draws back, the strike lunges and eases home
++        u8 v = VS(side);
++        if (sWindT[v])
++            dx = -2, y += 1;
++        else if (sPoseT[v])
++        {
++            s32 k = sPoseLen[v] - sPoseT[v];   // frames since the strike
++            frame = 1; // Emerald's second frame as the "attacking" pose
++            dx = k < 3 ? 6 : k < 6 ? 4 : k < 10 ? 2 : 1;
++        }
++        else if (!still && ((sTick / 40) & 1))
++            y -= 1; // breathing
++        if (sHurtT[v])
++        {
++            // the flinch (BN): knocked back a few pixels, then it straightens up
++            s32 k = 20 - sHurtT[v];
++            dx -= k < 4 ? 5 : sHurtT[v] / 4;
++            frame = 0;
++        }
++        if (sPushT[v])
++            dx -= sPushDx[v] * (side == SIDE_PLAYER ? -1 : 1) * PANEL_W * sPushT[v] / 8;   // slide from the old panel
++        if (sDashT[v])
++        {
++            // out in 6 frames, a beat at the far end, back in 8 (TUNE), with two after-images trailing
++            s32 k = DASH_FRAMES - sDashT[v], out = sDashPanels[v] * PANEL_W, d, g;
++            d = k < 6 ? out * (k + 1) / 6 : k < 10 ? out : out * (DASH_FRAMES - k) / 8;
++            for (g = 2; g >= 1; g--)
++            {
++                s32 gd = d - g * (k < 6 ? 12 : -10);
++                if (gd > 0 && gd < out)
++                    Gfx_Draw(fb, &img, x + (side == SIDE_ENEMY ? -gd : gd), y - lift, flags | GFX_HALF | GFX_TINT,
++                             RGB(31, 31, 31), (u8)(6 + g * 2));
++            }
++            dx += d;
++            frame = 1;
++        }
+     }
+-    else if (!still && ((sTick / 40) & 1))
+-        y -= 1; // breathing
+     if (frame)
+         img = Gfx_MonImage(&f->pic, 1);
+     if (side == SIDE_ENEMY)
+@@ -430,13 +497,14 @@ static void DrawFighter(u16 *fb, u8 side)
+ 
+     if (f->hurtFlash)
+     {
+-        // BN flashes the hit object white every other frame and jolts it
++        // BN flashes the hit object white and jolts it (a strong tint, so the impact stays readable)
+         if (sTick & 1)
+         {
+-            flags |= GFX_SOLID;
++            flags |= GFX_TINT;
+             color = COL_WHITE;
++            amt = 13;
+         }
+-        dx += (sTick & 2) ? 2 : -2;
++        dx += (sTick & 2) ? 1 : -1;
+     }
+     else if (f->bm.status1 & STATUS1_FREEZE)
+     {
+@@ -485,7 +553,7 @@ static void DrawFighter(u16 *fb, u8 side)
+     if (f->charging)
+         Gfx_Draw(fb, Fx_Frame(FX_CHARGE_RINGS, sTick), x, y - 18 - lift, GFX_ADD, 0, 0);
+     if (f->barrier)
+-        Gfx_Draw(fb, Fx_Frame(FX_BARRIER, sTick), x, y - 20 - lift, GFX_HALF, 0, 0);
++        Gfx_Draw(fb, Fx_Frame(FX_BARRIER, sTick), x, y - 6 - lift, GFX_HALF, 0, 0);   // POC-15: around the body
+     if ((f->bm.status1 & STATUS1_SLEEP))
+     {
+         s32 k = (s32)((sTick / 2) % 48);
+@@ -1311,14 +1379,24 @@ static void VisTrack(u8 s, u8 v)
+         Draw_FeetPos(f->x, f->y, &fx, &fy);
+         if (sB.state != ST_INTRO && sB.state != ST_SENDOUT && sB.state != ST_TIMESTOP)
+             Vfx_OnHpChange(s, (s32)f->bm.hp - (s32)sLastHp[v], fx, fy);
++        if (f->bm.hp < sLastHp[v] && (s32)sLastHp[v] - (s32)f->bm.hp >= 2)
++            sHurtT[v] = 20;   // a real hit: the flinch
+         sLastHp[v] = f->bm.hp;
+     }
+     if (f->bm.hp == 0 && sFaintT[v] < 40)
+         sFaintT[v]++;
+     if (f->bm.hp != 0)
+         sFaintT[v] = 0;
+-    if (sPoseT[v])
++    if (sWindT[v])
++        sWindT[v]--;
++    else if (sPoseT[v])
+         sPoseT[v]--;
++    if (sHurtT[v])
++        sHurtT[v]--;
++    if (sPushT[v])
++        sPushT[v]--;
++    if (sDashT[v])
++        sDashT[v]--;
+     if (sAppearT[v])
+         sAppearT[v]--;
+ }
+@@ -1358,19 +1436,63 @@ void Draw_Overlay(u16 *fb)
+         s32 i, s;
+         // new attacks in launch order; instant ones (cannons, swords) are already inactive by now,
+         // but their slot still holds them until it is reused
+-        for (;;)
++        // POC-15: every move used, every attack leaving, pushes and stat changes come as visual events
++        if (sB.visSerial - sLastVis > MAX_VIS_EVENTS)
++            sLastVis = sB.visSerial - MAX_VIS_EVENTS;
++        while (sLastVis < sB.visSerial)
+         {
+-            const struct Attack *next = NULL;
+-            for (i = 0; i < MAX_ATTACKS; i++)
+-                if (sB.attacks[i].serial > sMaxSerial && (next == NULL || sB.attacks[i].serial < next->serial))
+-                    next = &sB.attacks[i];
+-            if (next == NULL)
++            const struct VisEvent *e = &sB.visEv[sLastVis % MAX_VIS_EVENTS];
++            u8 v = e->side == SIDE_PLAYER ? 0 : 1 + (sB.foeCount > 1 ? e->foe : 0);
++            sLastVis++;
++            switch (e->ev)
++            {
++            case VEV_USE:
++                sWindT[v] = (u8)e->arg;
++                sPoseLen[v] = sPoseT[v] = PoseHold(e->kind);
++                Vfx_OnUse(e);
+                 break;
+-            sMaxSerial = next->serial;
+-            sPoseT[next->side == SIDE_PLAYER ? 0 : 1 + (sB.foeCount > 1 ? next->foe : 0)] = 14;
+-            Vfx_OnLaunch(next);
++            case VEV_LAUNCH:
++                if (sB.attacks[e->kind].side == SIDE_ENEMY && sB.attacks[e->kind].kind <= GK_TORNADO
++                 && sB.attacks[e->kind].phase == PH_WAIT && sB.attacks[e->kind].timer)
++                {
++                    // an enemy's telegraphed direct attack: it winds up while the panels flash, strikes as they're hit
++                    sWindT[v] = (u8)min(sB.attacks[e->kind].timer, 255);
++                    sPoseLen[v] = sPoseT[v] = PoseHold(sB.attacks[e->kind].kind);
++                }
++                else if (sWindT[v] == 0 && sPoseT[v] == 0)
++                    sPoseLen[v] = sPoseT[v] = PoseHold(sB.attacks[e->kind].kind);   // charge moves, called moves
++                Vfx_OnLaunch(&sB.attacks[e->kind]);
++                if (sB.attacks[e->kind].kind == GK_DASH)
++                {
++                    // how far it charges: up to the foe in its row, or to the end of the row
++                    const struct Attack *a = &sB.attacks[e->kind];
++                    s8 dir = a->side == SIDE_PLAYER ? 1 : -1, c = a->ox;
++                    u8 n = 0;
++                    while (c + dir >= 0 && c + dir < GRID_COLS && n < 5)
++                    {
++                        c += dir;
++                        n++;
++                        if (sB.f[a->side ^ 1].x == c && sB.f[a->side ^ 1].y == a->oy)
++                        {
++                            n--;   // stops in front of it
++                            break;
++                        }
++                    }
++                    sDashPanels[v] = n;
++                    sDashT[v] = DASH_FRAMES;
++                }
++                break;
++            case VEV_PUSH:
++                sPushDx[v] = e->arg;
++                sPushT[v] = 8;
++                break;
++            case VEV_STAT:
++                Vfx_OnStat(e);
++                break;
++            }
+         }
+         (void)s;
++        (void)i;
+         ForEachVis(VisTrack);
+         Vfx_ScanImpacts();
+     }
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index e4ed784..4da9177 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -361,8 +361,13 @@ void Field_PushBack(u8 side, u8 panels)
+         return;   // SuprArmr program: no knock-back
+     if (side == SIDE_PLAYER)
+         Busting_NotePush();   // BN6 counts the push state among the busting "hits" (asm/asm00_2.s:18735)
+-    while (panels-- && Field_CanStand(side, f->x + back, f->y))
+-        Field_Step(side, f->x + back, f->y);
++    {
++        s8 ox = f->x;
++        while (panels-- && Field_CanStand(side, f->x + back, f->y))
++            Field_Step(side, f->x + back, f->y);
++        if (f->x != ox)
++            Vis_Post(VEV_PUSH, side, MOVE_NONE, 0, (s8)(f->x - ox), ox, f->y);   // POC-15: the slide back
++    }
+ }
+ 
+ // ---- Statuses ---------------------------------------------------------------------------------
+@@ -530,6 +535,7 @@ u8 Field_ApplyStatStage(u8 side, u8 stat, s8 delta, bool8 fromFoe)
+     if (stage > MAX_STAT_STAGE) stage = MAX_STAT_STAGE;
+     f->bm.statStages[stat] = stage;
+     f->statusFlash = 12;
++    Vis_Post(VEV_STAT, side, MOVE_NONE, stat, delta, f->x, f->y);   // POC-15: Emerald-style stat arrows
+     snprintf(text, sizeof(text), "%s %s!", sStatNames[stat],
+              delta > 1 ? "ROSE SHARPLY" : delta > 0 ? "ROSE" : delta < -1 ? "HARSHLY FELL" : "FELL");
+     SetMsg(text, 60);
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index ddfc4b6..d4d9686 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -278,6 +278,56 @@ static struct Attack *NewAttack(void)
+     return NULL;
+ }
+ 
++// ---- Visual events and BN pacing (POC-15) --------------------------------------------------------------------------
++
++bool8 gPkbnNoWindup;   // PKBN_NO_WINDUP=1: the POC-14 timing (attacks leave at once)
++
++void Vis_Post(u8 ev, u8 side, u16 move, u8 kind, s8 arg, s8 x, s8 y)
++{
++    struct VisEvent *e = &sB.visEv[sB.visSerial % MAX_VIS_EVENTS];
++    sB.visSerial++;
++    e->serial = sB.visSerial;
++    e->ev = ev;
++    e->side = side;
++    e->foe = side == SIDE_ENEMY ? sB.cur : 0;
++    e->kind = kind;
++    e->move = move;
++    e->arg = arg;
++    e->x = x;
++    e->y = y;
++}
++
++// The user's wind-up before an attack leaves, as BN6 paces it. BN6's attack routines start one of MegaMan's battle
++// animations and act on a frame counter (frame delays read from data/sprites/battleSpriteMegaMan.spr; which animation
++// is which was identified by rendering their frames):
++//  - cannons: animation 8 (delays 1,2,2,9,1,1,1,12), the arm cannon is out by frame 5 and fires at frame 14; the one
++//    routine that plays it (asm/asm31.s sub_80EBC28) acts at counter 8 and 15.
++//  - swords: animation 5 (8,2,2,10), the swing frame starts at 12; its routines (sub_80EB862, sub_80EE1AC ...) act at
++//    counter 12.
++//  - throws: animation 6, the bomb leaves at counter 9 (sub_80EB644).
++//  - pointing / casting: animation 12 (2,2,2,10), the arm is out at frame 6.
++// Enemy direct attacks keep their own telegraph (ENEMY_TELEGRAPH) instead. Priority moves (GF_FAST) wind up in half.
++u8 Moves_Windup(u8 side, u8 kind, bool8 fast)
++{
++    u8 w;
++    switch (kind)
++    {
++    case GK_CANNON: case GK_AIRSHOT: case GK_SPREADER: case GK_VULCAN:
++        w = 14; break;
++    case GK_SWORD: case GK_LONGSWORD: case GK_WIDESWORD: case GK_LIFESWORD:
++        w = 12; break;
++    case GK_LINE3: case GK_CONE:
++        w = 8; break;    // TUNE: breath and short-range blows, between a cast and a sword
++    case GK_BOMB:
++        w = 9; break;
++    default:
++        w = 6; break;
++    }
++    if (side == SIDE_ENEMY && kind <= GK_TORNADO)
++        return 0;        // the enemy's direct attacks: ENEMY_TELEGRAPH is their wind-up
++    return fast ? w / 2 : w;
++}
++
+ void Moves_Clear(void)
+ {
+     memset(sB.attacks, 0, sizeof(sB.attacks));
+@@ -1271,6 +1321,7 @@ static void Launch(struct Attack *a)
+ 
+     a->ox = me->x;
+     a->oy = me->y;
++    Vis_Post(VEV_LAUNCH, a->side, a->move, (u8)(a - sB.attacks), 0, me->x, me->y);
+     a->hitsLeft = HitCount(a);
+     a->hitIndex = 0;
+     a->phase = PH_WAIT;
+@@ -2368,6 +2419,8 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+     me->lockout = ChipLockout(me);
+     if (kind != GK_CALL)
+         me->lastMove = move;
++    if (kind >= GK_BARRIER && kind != GK_CALL)
++        Vis_Post(VEV_USE, side, move, kind, 0, me->x, me->y);   // non-attack moves: the user's pose and cast
+ 
+     // consecutive-use counters (Gen 3 Rollout / Ice Ball 5 hits, Fury Cutter up to 5)
+     if (m->effect == EFFECT_ROLLOUT)
+@@ -2562,6 +2615,19 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+     a->timer = info->windup;
+     if (move == MOVE_SOLAR_BEAM && (sB.weather & B_WEATHER_SUN))
+         a->timer = 0;
++    if (a->timer == 0 && !gPkbnNoWindup)
++    {
++        // POC-15: BN pacing - the user winds up, then the attack leaves (Moves_Windup)
++        a->timer = Moves_Windup(side, kind, (info->flags & GF_FAST) != 0);
++        if (a->timer)
++        {
++            a->windupOnly = TRUE;
++            if (me->lockout < a->timer + ChipLockout(me))
++                me->lockout = a->timer + ChipLockout(me);
++            Vis_Post(VEV_USE, side, move, kind, (s8)a->timer, me->x, me->y);
++            return;
++        }
++    }
+     if (a->timer)
+     {
+         me->charging = a->timer;
+@@ -2641,7 +2707,15 @@ void Moves_UsePA(u8 side, u8 paIndex, const struct BattlePokemon *user, const ch
+     me->lastMove = a->move;
+     me->lastKind = a->kind;
+     a->phase = PH_CHARGE;
+-    a->timer = 0;
++    a->timer = gPkbnNoWindup ? 0 : Moves_Windup(side, a->kind, (a->info.flags & GF_FAST) != 0);   // POC-15
++    if (a->timer)
++    {
++        a->windupOnly = TRUE;
++        if (me->lockout < a->timer + ChipLockout(me))
++            me->lockout = a->timer + ChipLockout(me);
++        Vis_Post(VEV_USE, side, a->move, a->kind, (s8)a->timer, me->x, me->y);
++        return;
++    }
+     UpdateAttack(a);
+ }
+ 
+diff --git a/src/pkbn/grid_vfx.c b/src/pkbn/grid_vfx.c
+index dfe3506..08e3619 100644
+--- a/src/pkbn/grid_vfx.c
++++ b/src/pkbn/grid_vfx.c
+@@ -46,7 +46,9 @@ u16 Vfx_TypeColor(u8 type)
+ // ---- particles -----------------------------------------------------------------------------------------------
+ 
+ #define MAX_VFX 72
+-enum { P_SPRITE, P_NUMBER, P_ARROW, P_RING, P_SHOT, P_FLASH, P_BEAM, P_ORB };
++enum { P_SPRITE, P_NUMBER, P_ARROW, P_RING, P_SHOT, P_FLASH, P_BEAM, P_ORB, P_GLINT, P_NOTE, P_PUFF, P_STREAK, P_JAWS };
++
++#define PF_FADE (1u << 31)   // POC-15: drawn at 50% over the last frames of its life
+ 
+ struct Particle
+ {
+@@ -103,6 +105,11 @@ static struct Particle *Fx(u8 id, u8 layer, s32 x, s32 y, u32 flags, u16 color,
+     p->color = color;
+     p->amt = amt;
+     p->life = life ? life : (Fx_Loops(id) ? 24 : (u16)Fx_Duration(id));
++    // POC-15: effects stay on screen long enough to read - at least 16 frames, holding the last picture, with a
++    // 50% fade over the last 5 (PF_FADE)
++    if (p->life < 16)
++        p->life = 16;
++    p->flags |= PF_FADE;
+     return p;
+ }
+ 
+@@ -114,6 +121,9 @@ static void Shake(s32 frames, s32 mag)
+         sShakeMag = mag;
+ }
+ 
++static struct Particle *Glint(s32 x, s32 y, u16 color, u16 life, s32 size);
++static void DrawJaws(u16 *fb, const struct Particle *p);
++
+ static void ScreenFlash(u16 color, s32 frames)
+ {
+     sFlashColor = color;
+@@ -195,15 +205,11 @@ void Vfx_OnLaunch(const struct Attack *a)
+     switch (a->kind)
+     {
+     case GK_CANNON: case GK_AIRSHOT: case GK_VULCAN: case GK_SPREADER:
+-        // muzzle flash and a shot that flies down the row (the hit itself is instant, BN Cannon style)
+-        Fx(FX_MUZZLE, VFX_LAYER_AIR, x + dir * 22, y - 20, flip, 0, 0, 0);
+-        p = Spawn(P_SHOT, VFX_LAYER_AIR, x + dir * 22, y - 20);
+-        if (p)
+-        {
+-            p->vx = dir * 16 * 14;
+-            p->life = 18;
+-            p->color = tc;
+-        }
++        // POC-15: an enemy's telegraphed cannon gathers at the muzzle; the blast itself is drawn when it hits (OnImpact)
++        if (a->phase == PH_WAIT && a->timer)
++            Glint(x + dir * 22, y - 20, tc, a->timer, 5);
++        else
++            Fx(FX_MUZZLE, VFX_LAYER_AIR, x + dir * 22, y - 20, flip, 0, 0, 0);
+         Shake(4, 1);
+         break;
+     case GK_LINE3: case GK_CONE:
+@@ -222,59 +228,252 @@ void Vfx_OnLaunch(const struct Attack *a)
+     case GK_BALL: case GK_WAVE: case GK_SHOCKWAVE: case GK_AIRHOCKEY:
+         Fx(FX_MUZZLE, VFX_LAYER_AIR, x + dir * 20, y - 16, flip | GFX_TINT, tc, 6, 0);
+         break;
+-    case GK_SELF:
+-        if (gBattleMoves[a->move].effect == EFFECT_RESTORE_HP || gBattleMoves[a->move].effect == EFFECT_SOFTBOILED
+-         || gBattleMoves[a->move].effect == EFFECT_MORNING_SUN || gBattleMoves[a->move].effect == EFFECT_SYNTHESIS
+-         || gBattleMoves[a->move].effect == EFFECT_MOONLIGHT || gBattleMoves[a->move].effect == EFFECT_REST
+-         || gBattleMoves[a->move].effect == EFFECT_WISH || gBattleMoves[a->move].effect == EFFECT_INGRAIN)
+-            Fx(FX_HEAL, VFX_LAYER_AIR, x, y - 24, 0, 0, 0, 40);
+-        else
+-            Fx(FX_CHARGE_RINGS, VFX_LAYER_AIR, x, y - 18, GFX_TINT, tc, 6, 30);
++    case GK_FIELD:
++        Fx(FX_CHARGE, VFX_LAYER_AIR, x, y - 20, GFX_ADD, 0, 0, 0);
+         break;
+-    case GK_STATS:
++    case GK_METEORS:
++        Fx(FX_CHARGE_RINGS, VFX_LAYER_AIR, x, y - 18, GFX_TINT, tc, 6, 24);
++        break;
++    }
++}
++
++
++// ---- POC-15: a move was used (the user's wind-up, or the cast of a move that isn't an attack) --------------------
++
++static bool8 InMoves(u16 move, const u16 *list, u32 n)
++{
++    u32 i;
++    for (i = 0; i < n; i++)
++        if (list[i] == move)
++            return TRUE;
++    return FALSE;
++}
++
++// Gen 3's sound moves (sSoundMovesTable, battle_util.c) that are chips: notes and rings
++static const u16 sSoundMoves[] = { MOVE_GROWL, MOVE_ROAR, MOVE_SING, MOVE_SUPERSONIC, MOVE_SCREECH, MOVE_SNORE,
++                                   MOVE_HEAL_BELL, MOVE_METAL_SOUND, MOVE_GRASS_WHISTLE, MOVE_HYPER_VOICE, MOVE_UPROAR,
++                                   MOVE_PERISH_SONG };
++static const u16 sPowderMoves[] = { MOVE_SLEEP_POWDER, MOVE_STUN_SPORE, MOVE_POISON_POWDER, MOVE_SPORE, MOVE_COTTON_SPORE,
++                                    MOVE_SWEET_SCENT, MOVE_SAND_ATTACK, MOVE_SMOKESCREEN, MOVE_POISON_GAS };
++static const u16 sGazeMoves[] = { MOVE_GLARE, MOVE_HYPNOSIS, MOVE_MEAN_LOOK, MOVE_LEER, MOVE_SCARY_FACE, MOVE_CONFUSE_RAY,
++                                  MOVE_ATTRACT, MOVE_CHARM, MOVE_SWEET_KISS, MOVE_FLATTER, MOVE_SWAGGER, MOVE_TORMENT,
++                                  MOVE_TAUNT, MOVE_DISABLE, MOVE_ENCORE, MOVE_SPITE, MOVE_FAKE_TEARS, MOVE_TICKLE,
++                                  MOVE_KINESIS, MOVE_FLASH, MOVE_IMPRISON };
++
++// Something from the user to the foe for a status / foe-stat move: notes, powder, rings or a small orb (16 frames).
++static void Cast(u16 move, u8 type, s32 x, s32 y, s32 ex, s32 ey, s8 dir)
++{
++    struct Particle *p;
++    s32 i;
++    u16 tc = Vfx_TypeColor(type);
++    if (InMoves(move, sSoundMoves, ARRAY_COUNT(sSoundMoves)))
+     {
+-        // Emerald shows stat changes as coloured rising/falling streaks; ours: arrows on whoever it targets
+-        const struct BattleMove *bm = &gBattleMoves[a->move];
+-        bool8 onFoe = bm->target != MOVE_TARGET_USER;
+-        bool8 up = !onFoe;
+-        s32 i, tx = onFoe ? ex : x, ty = onFoe ? ey : y;
+-        for (i = 0; i < 6; i++)
+-        {
+-            p = Spawn(P_ARROW, VFX_LAYER_AIR, tx - 14 + i * 6, ty - (up ? 4 : 48) - (i & 1) * 8);
+-            if (p)
++        for (i = 0; i < 5; i++)
++            if ((p = Spawn(P_NOTE, VFX_LAYER_AIR, x + dir * 16, y - 30 + (i % 3) * 6)) != NULL)
+             {
+-                p->vy = up ? -20 : 20;
+-                p->value = up;
++                p->vx = (s16)((ex - x - dir * 16) * 16 / 24);
++                p->vy = (s16)((ey - y) * 16 / 24);
+                 p->life = 26;
++                p->delay = i * 3;
++                p->value = i;
++                p->color = i & 1 ? PKBN_RGB(31, 31, 31) : Gfx_Blend(tc, PKBN_RGB(31, 31, 31), 8);
++            }
++        for (i = 0; i < 3; i++)
++            if ((p = Spawn(P_RING, VFX_LAYER_AIR, x + dir * 14, y - 24)) != NULL)
++            {
++                p->life = 18;
++                p->delay = i * 5;
++                p->value = 22;
++                p->color = PKBN_RGB(31, 31, 31);
++            }
++        return;
++    }
++    if (InMoves(move, sPowderMoves, ARRAY_COUNT(sPowderMoves)))
++    {
++        u16 c = move == MOVE_STUN_SPORE ? PKBN_RGB(31, 28, 8) : move == MOVE_SLEEP_POWDER ? PKBN_RGB(18, 28, 14)
++              : move == MOVE_POISON_POWDER || move == MOVE_POISON_GAS ? PKBN_RGB(22, 10, 26)
++              : move == MOVE_SPORE ? PKBN_RGB(26, 24, 16) : move == MOVE_SAND_ATTACK ? PKBN_RGB(28, 23, 12)
++              : move == MOVE_SMOKESCREEN ? PKBN_RGB(10, 10, 12) : tc;
++        for (i = 0; i < 8; i++)
++            if ((p = Spawn(P_PUFF, VFX_LAYER_AIR, x + dir * 14, y - 22 + (i % 3) * 4)) != NULL)
++            {
++                p->vx = (s16)((ex - x - dir * 14) * 16 / 22 + (i % 3 - 1) * 4);
++                p->vy = (s16)((ey - 22 - (y - 22)) * 16 / 22 - (i & 1) * 6);
++                p->life = 28;
+                 p->delay = i * 2;
+-                p->color = up ? PKBN_RGB(31, 14, 8) : PKBN_RGB(8, 16, 31);
++                p->value = 9;
++                p->color = c;
++            }
++        return;
++    }
++    if (InMoves(move, sGazeMoves, ARRAY_COUNT(sGazeMoves)))
++    {
++        // rings rolling out from the user's eyes and closing in on the foe
++        for (i = 0; i < 4; i++)
++        {
++            if ((p = Spawn(P_RING, VFX_LAYER_AIR, x + dir * 10, y - 34)) != NULL)
++            {
++                p->vx = (s16)((ex - x - dir * 10) * 16 / 18);
++                p->vy = (s16)((ey - 30 - (y - 34)) * 16 / 18);
++                p->life = 18;
++                p->delay = i * 4;
++                p->value = 10;
++                p->color = Gfx_Blend(tc, PKBN_RGB(31, 31, 31), 6);
+             }
+         }
+-        break;
++        return;
+     }
++    // a small orb of the move's type
++    if ((p = Spawn(P_ORB, VFX_LAYER_AIR, x + dir * 16, y - 22)) != NULL)
++    {
++        p->vx = (s16)((ex - x - dir * 16) * 16 / 16);
++        p->vy = (s16)((ey - y) * 16 / 16);
++        p->life = 16;
++        p->value = type;
++    }
++}
++
++void Vfx_OnUse(const struct VisEvent *e)
++{
++    s32 x, y, ex, ey;
++    s8 dir = e->side == SIDE_PLAYER ? 1 : -1;
++    u8 type = gBattleMoves[e->move].type;
++    u16 tc = Vfx_TypeColor(type);
++    u16 eff = gBattleMoves[e->move].effect;
++    const struct Fighter *opp = &sB.f[e->side ^ 1];
++    struct Particle *p;
++    Draw_FeetPos(e->x, e->y, &x, &y);
++    Draw_FeetPos(opp->x, opp->y, &ex, &ey);
++
++    if (e->arg > 0)
++    {
++        // the wind-up: something gathers where the attack will come from
++        switch (e->kind)
++        {
++        case GK_CANNON: case GK_AIRSHOT: case GK_SPREADER: case GK_VULCAN:
++            Glint(x + dir * 22, y - 20, tc, (u16)e->arg, 5);
++            break;
++        case GK_SWORD: case GK_LONGSWORD: case GK_WIDESWORD: case GK_LIFESWORD:
++            Glint(x + dir * 8, y - 36, PKBN_RGB(31, 31, 31), (u16)e->arg, 2);
++            break;
++        case GK_BOMB:
++            break;
++        default:
++            Glint(x + dir * 16, y - 22, tc, (u16)e->arg, 3);
++            break;
++        }
++        return;
++    }
++    switch (e->kind)
++    {
++    case GK_STATS:
++        // the user's cast; the arrows come with each stat change (Vfx_OnStat)
++        if (gBattleMoves[e->move].target != MOVE_TARGET_USER)
++            Cast(e->move, type, x, y, ex, ey, dir);
++        else
++            Fx(FX_CHARGE_RINGS, VFX_LAYER_AIR, x, y - 18, GFX_TINT, tc, 6, 24);
++        break;
+     case GK_STATUS:
+     {
+-        u16 eff = gBattleMoves[a->move].effect;
+         u8 fx = FX_POISON;
++        Cast(e->move, type, x, y, ex, ey, dir);
+         if (eff == EFFECT_PARALYZE) fx = FX_PARALYZE;
+         else if (eff == EFFECT_CONFUSE || eff == EFFECT_SWAGGER || eff == EFFECT_FLATTER || eff == EFFECT_TEETER_DANCE) fx = FX_CONFUSE;
+         else if (eff == EFFECT_SLEEP || eff == EFFECT_YAWN) fx = FX_SMOKE;
+         else if (eff == EFFECT_WILL_O_WISP) fx = FX_FIRE_PANEL;
+-        Fx(fx, VFX_LAYER_AIR, ex, ey - 26, 0, 0, 0, 36);
++        else if (eff == EFFECT_ATTRACT) fx = FX_HEAL;
++        if (eff == EFFECT_MEAN_LOOK || eff == EFFECT_TRAP)
++        {
++            // held in place: white rings closing in on the foe
++            s32 i;
++            for (i = 0; i < 3; i++)
++                if ((p = Spawn(P_RING, VFX_LAYER_AIR, ex, ey - 22)) != NULL)
++                    p->life = 16, p->delay = 16 + i * 5, p->value = -20, p->color = PKBN_RGB(31, 31, 31);
++            break;
++        }
++        if (eff == EFFECT_PARALYZE)
++        {
++            // BN's electric sparks and a jolt of bolts on the foe
++            if ((p = Fx(FX_SPARKS, VFX_LAYER_AIR, ex, ey - 20, GFX_ADD, 0, 0, 30)) != NULL)
++                p->delay = 16;
++            if ((p = Fx(FX_BOLT_ORANGE, VFX_LAYER_AIR, ex, ey - 6, 0, 0, 0, 16)) != NULL)
++                p->delay = 16;
++            break;
++        }
++        // the status picture on the foe once the cast arrives
++        if ((p = Fx(fx, VFX_LAYER_AIR, ex, ey - 26, fx == FX_HEAL ? GFX_TINT : 0, PKBN_RGB(31, 14, 22), 8, 36)) != NULL)
++            p->delay = 16;
+         break;
+     }
++    case GK_SELF:
++        if (eff == EFFECT_RESTORE_HP || eff == EFFECT_SOFTBOILED || eff == EFFECT_MORNING_SUN || eff == EFFECT_SYNTHESIS
++         || eff == EFFECT_MOONLIGHT || eff == EFFECT_REST || eff == EFFECT_WISH || eff == EFFECT_INGRAIN)
++        {
++            // POC-15: BN's heal sparkles three times over, and green motes rising (about half a second)
++            s32 i;
++            for (i = 0; i < 3; i++)
++                if ((p = Fx(FX_HEAL, VFX_LAYER_AIR, x - 6 + i * 6, y - 20 - i * 6, 0, 0, 0, 0)) != NULL)
++                    p->delay = i * 8;
++            for (i = 0; i < 8; i++)
++                if ((p = Spawn(P_PUFF, VFX_LAYER_AIR, x - 14 + (i * 7) % 28, y - 4)) != NULL)
++                {
++                    p->vy = -16;
++                    p->life = 22;
++                    p->delay = i * 3;
++                    p->value = 2;
++                    p->color = PKBN_RGB(14, 31, 12);
++                }
++        }
++        else
++        {
++            s32 i;
++            Fx(FX_CHARGE_RINGS, VFX_LAYER_AIR, x, y - 18, GFX_TINT, tc, 6, 30);
++            for (i = 0; i < 6; i++)   // a burst of the type's colour rising off the user
++                if ((p = Spawn(P_PUFF, VFX_LAYER_AIR, x - 12 + i * 5, y - 6)) != NULL)
++                {
++                    p->vy = -18;
++                    p->life = 20;
++                    p->delay = i * 2;
++                    p->value = 3;
++                    p->color = Gfx_Blend(tc, PKBN_RGB(31, 31, 31), 6);
++                }
++        }
++        break;
+     case GK_WEATHER:
+         ScreenFlash(tc, 16);
++        Fx(FX_CHARGE_RINGS, VFX_LAYER_AIR, x, y - 18, GFX_TINT, tc, 8, 30);
+         break;
+-    case GK_FIELD:
+-        Fx(FX_CHARGE, VFX_LAYER_AIR, x, y - 20, GFX_ADD, 0, 0, 0);
++    case GK_BARRIER:
++        if ((p = Fx(FX_BARRIER, VFX_LAYER_AIR, x, y - 6, GFX_HALF, 0, 0, 12)) != NULL)
++            p->scale = 300;
+         break;
+-    case GK_METEORS:
+-        Fx(FX_CHARGE_RINGS, VFX_LAYER_AIR, x, y - 18, GFX_TINT, tc, 6, 24);
++    case GK_BATON: case GK_ASSIST:
++        Fx(FX_HIT_STAR, VFX_LAYER_AIR, x, y - 18, GFX_TINT, PKBN_RGB(31, 31, 31), 10, 0);
+         break;
+     }
+ }
+ 
++// Emerald shows a stat change as rising (raised) or falling (lowered) streaks over the Pokémon; ours are arrows.
++void Vfx_OnStat(const struct VisEvent *e)
++{
++    s32 x, y, i, n = e->arg > 1 || e->arg < -1 ? 6 : 4;
++    bool8 up = e->arg > 0;
++    struct Particle *p;
++    Draw_FeetPos(e->x, e->y, &x, &y);
++    for (i = 0; i < n; i++)
++    {
++        p = Spawn(P_ARROW, VFX_LAYER_AIR, x - 15 + i * (30 / n) + 3, y - (up ? 6 : 50) - (i & 1) * 8);
++        if (p)
++        {
++            p->vy = up ? -14 : 14;
++            p->value = up;
++            p->life = 32;
++            p->delay = i * 3;
++            p->color = up ? PKBN_RGB(31, 10, 4) : PKBN_RGB(6, 14, 31);
++        }
++    }
++}
++
+ void Vfx_OnSendOut(s32 x, s32 y)
+ {
+     // the ball opens: a white burst and sparkles where the Pokémon appears
+@@ -285,12 +484,20 @@ void Vfx_OnSendOut(s32 x, s32 y)
+ void Vfx_OnHpChange(u8 side, s32 delta, s32 fx, s32 fy)
+ {
+     // damage numbers for real hits only (the 1-damage buster and poison ticks would just be noise)
+-    struct Particle *p = (delta <= -2 || delta >= 2) ? Spawn(P_NUMBER, VFX_LAYER_HUD, fx + (side == SIDE_PLAYER ? -8 : 8), fy - 46) : NULL;
++    // POC-15: numbers of a multi-hit fan out instead of piling on one spot
++    static u32 sLastNumT[2];
++    static u8 sStack[2];
++    s32 off;
++    struct Particle *p;
++    sStack[side & 1] = (sT - sLastNumT[side & 1] < 24) ? (u8)((sStack[side & 1] + 1) % 4) : 0;
++    sLastNumT[side & 1] = sT;
++    off = sStack[side & 1] * 9 - 6;
++    p = (delta <= -2 || delta >= 2) ? Spawn(P_NUMBER, VFX_LAYER_HUD, fx + (side == SIDE_PLAYER ? -8 : 8) + off, fy - 46 + sStack[side & 1] * 4) : NULL;
+     if (p)
+     {
+         p->value = delta;
+-        p->vy = -10;
+-        p->life = 40;
++        p->vy = -6;
++        p->life = 48;
+         p->color = delta < 0 ? PKBN_RGB(31, 31, 31) : PKBN_RGB(10, 31, 12);
+     }
+     if (delta < 0)
+@@ -307,6 +514,95 @@ void Vfx_OnHpChange(u8 side, s32 delta, s32 fx, s32 fy)
+     }
+ }
+ 
++// ---- POC-15: how a close-range move strikes (our table, TUNE) ------------------------------------------------------
++// The sword kinds cover blades but also fists, feet, fangs and horns; each gets its own picture on impact.
++enum { STRIKE_SLASH, STRIKE_CLAW, STRIKE_BITE, STRIKE_BLOW, STRIKE_STAB, STRIKE_WHIP, STRIKE_BODY };
++static const u16 sStrikeClaw[] = { MOVE_SCRATCH, MOVE_FURY_SWIPES, MOVE_METAL_CLAW, MOVE_CRUSH_CLAW, MOVE_DRAGON_CLAW,
++                                   MOVE_FALSE_SWIPE, MOVE_THIEF, MOVE_COVET, MOVE_VICE_GRIP, MOVE_CLAMP, MOVE_CRABHAMMER };
++static const u16 sStrikeBite[] = { MOVE_BITE, MOVE_HYPER_FANG, MOVE_SUPER_FANG, MOVE_CRUNCH, MOVE_POISON_FANG,
++                                   MOVE_LEECH_LIFE, MOVE_LICK };
++static const u16 sStrikeBlow[] = { MOVE_POUND, MOVE_KARATE_CHOP, MOVE_DOUBLE_SLAP, MOVE_COMET_PUNCH, MOVE_FIRE_PUNCH,
++                                   MOVE_ICE_PUNCH, MOVE_THUNDER_PUNCH, MOVE_STOMP, MOVE_SUBMISSION, MOVE_COUNTER,
++                                   MOVE_SEISMIC_TOSS, MOVE_STRENGTH, MOVE_DIZZY_PUNCH, MOVE_ROCK_SMASH, MOVE_FOCUS_PUNCH,
++                                   MOVE_REVENGE, MOVE_BRICK_BREAK, MOVE_KNOCK_OFF, MOVE_ARM_THRUST, MOVE_SKY_UPPERCUT,
++                                   MOVE_LOW_KICK, MOVE_CROSS_CHOP, MOVE_DOUBLE_KICK, MOVE_MEGA_KICK, MOVE_JUMP_KICK,
++                                   MOVE_ROLLING_KICK, MOVE_HI_JUMP_KICK, MOVE_TRIPLE_KICK, MOVE_BLAZE_KICK, MOVE_SUPERPOWER,
++                                   MOVE_NEEDLE_ARM, MOVE_BONE_CLUB, MOVE_REVERSAL, MOVE_FLAIL, MOVE_ENDEAVOR, MOVE_FACADE,
++                                   MOVE_RAGE, MOVE_MACH_PUNCH, MOVE_DYNAMIC_PUNCH, MOVE_MEGA_PUNCH, MOVE_METEOR_MASH,
++                                   MOVE_SHADOW_PUNCH };
++static const u16 sStrikeStab[] = { MOVE_PECK, MOVE_HORN_ATTACK, MOVE_FURY_ATTACK, MOVE_POISON_STING, MOVE_TWINEEDLE,
++                                   MOVE_DRILL_PECK, MOVE_MEGAHORN, MOVE_HORN_DRILL };
++static const u16 sStrikeWhip[] = { MOVE_SLAM, MOVE_VINE_WHIP, MOVE_BIND, MOVE_WRAP, MOVE_CONSTRICT, MOVE_IRON_TAIL,
++                                   MOVE_POISON_TAIL };
++static const u16 sStrikeBody[] = { MOVE_TACKLE, MOVE_HEADBUTT, MOVE_BODY_SLAM, MOVE_TAKE_DOWN, MOVE_DOUBLE_EDGE,
++                                   MOVE_SKULL_BASH, MOVE_RETURN, MOVE_FRUSTRATION, MOVE_THRASH, MOVE_OUTRAGE,
++                                   MOVE_PETAL_DANCE, MOVE_ROLLOUT, MOVE_VOLT_TACKLE, MOVE_FLAME_WHEEL, MOVE_SPARK,
++                                   MOVE_PURSUIT, MOVE_WATERFALL, MOVE_SKY_ATTACK, MOVE_QUICK_ATTACK, MOVE_EXTREME_SPEED,
++                                   MOVE_STRUGGLE };
++
++static u8 StrikeOf(u16 move)
++{
++    if (InMoves(move, sStrikeClaw, ARRAY_COUNT(sStrikeClaw))) return STRIKE_CLAW;
++    if (InMoves(move, sStrikeBite, ARRAY_COUNT(sStrikeBite))) return STRIKE_BITE;
++    if (InMoves(move, sStrikeBlow, ARRAY_COUNT(sStrikeBlow))) return STRIKE_BLOW;
++    if (InMoves(move, sStrikeStab, ARRAY_COUNT(sStrikeStab))) return STRIKE_STAB;
++    if (InMoves(move, sStrikeWhip, ARRAY_COUNT(sStrikeWhip))) return STRIKE_WHIP;
++    if (InMoves(move, sStrikeBody, ARRAY_COUNT(sStrikeBody))) return STRIKE_BODY;
++    return STRIKE_SLASH;
++}
++
++// A close-range strike landing on a panel (x, y = the panel's feet point), facing `flip`.
++static void Strike(u16 move, u8 type, s32 x, s32 y, u32 flip, bool8 wide)
++{
++    u16 tc = Vfx_TypeColor(type);
++    u32 tint = type == TYPE_NORMAL ? 0 : GFX_TINT;
++    struct Particle *p;
++    switch (StrikeOf(move))
++    {
++    case STRIKE_CLAW:
++        Fx(FX_CLAW, VFX_LAYER_AIR, x, y - 18, flip | tint, tc, 7, 18);
++        break;
++    case STRIKE_BITE:
++        if ((p = Spawn(P_JAWS, VFX_LAYER_AIR, x, y - 20)) != NULL)
++        {
++            p->life = 20;
++            p->color = type == TYPE_NORMAL ? PKBN_RGB(28, 10, 10) : tc;
++        }
++        Shake(3, 1);
++        break;
++    case STRIKE_BLOW:
++        // a fist or foot: BN's hit flash, a white impact ring and the type's own burst
++        Fx(FX_HIT, VFX_LAYER_AIR, x, y - 18, tint, tc, 6, 18);
++        if ((p = Spawn(P_RING, VFX_LAYER_AIR, x, y - 18)) != NULL)
++        {
++            p->life = 12;
++            p->value = 14;
++            p->color = PKBN_RGB(31, 31, 31);
++        }
++        TypeBurst(type, x, y, FALSE);
++        Shake(4, 1);
++        return;
++    case STRIKE_STAB:
++        if ((p = Fx(FX_SPIKE, VFX_LAYER_AIR, x - (flip ? -10 : 10), y - 18, flip | tint, tc, 6, 16)) != NULL)
++            p->vx = flip ? -24 : 24;
++        break;
++    case STRIKE_WHIP:
++        Fx(FX_SLASH_ARC, VFX_LAYER_AIR, x, y - 14, flip | GFX_TINT, tc, 10, 0);
++        break;
++    case STRIKE_BODY:
++        Fx(FX_HIT_STAR, VFX_LAYER_AIR, x, y - 16, tint, tc, 6, 18);
++        Fx(FX_DUST, VFX_LAYER_GROUND, x, y - 2, 0, 0, 0, 0);
++        Shake(5, 2);
++        TypeBurst(type, x, y, FALSE);
++        return;
++    default:
++        // a blade: BN's slash, tinted strongly enough to show the type
++        Fx(wide ? FX_SLASH_ARC : FX_SLASH, VFX_LAYER_AIR, x, y - (wide ? 14 : 16), flip | tint, tc, 10, 0);
++        break;
++    }
++    TypeBurst(type, x, y, FALSE);
++}
++
+ // A panel was struck (or a wave passed over it): pick the picture by attack kind, then by type.
+ static void OnImpact(s32 c, s32 r, bool8 passing)
+ {
+@@ -357,29 +653,45 @@ static void OnImpact(s32 c, s32 r, bool8 passing)
+                 p->color = tc;
+             }
+         }
+-        // the shot flies down the row (drawn at launch); only the panel it stops on bursts
++        // only the panel it stops on bursts, with BN Cannon's blast: a streak from the muzzle at the same moment
+         if (sB.f[side ^ 1].x == c && sB.f[side ^ 1].y == r)
+         {
++            const struct Fighter *atk = &sB.f[side];
++            s32 ax, ay, mx;
++            Draw_FeetPos(atk->x, atk->y, &ax, &ay);
++            mx = ax + (side == SIDE_PLAYER ? 24 : -24);
++            if (side <= SIDE_ENEMY && atk->y == r && (p = Spawn(P_STREAK, VFX_LAYER_AIR, mx, ay - 20)) != NULL)
++            {
++                p->value = (s16)(x - mx);
++                p->life = kind == GK_VULCAN ? 8 : 12;
++                p->color = Gfx_Blend(tc, PKBN_RGB(31, 31, 31), 4);
++                if (side == SIDE_ENEMY)
++                    Fx(FX_MUZZLE, VFX_LAYER_AIR, mx, ay - 20, GFX_FLIPX, 0, 0, 0);
++            }
+             Fx(FX_HIT, VFX_LAYER_AIR, x, y - 18, type == TYPE_NORMAL ? 0 : GFX_TINT, tc, 6, 0);
+             TypeBurst(type, x, y, FALSE);
+         }
+         break;
+     case GK_LINE3: case GK_CONE:
+-        // breath / spray moves: no blade, the type's own picture on every panel
+-        TypeBurst(type, x, y, TRUE);
++        // breath / spray moves: no blade, the type's own picture on every panel; kicks along the row: blows
++        if (StrikeOf(sB.fxMove[r][c]) == STRIKE_BLOW || StrikeOf(sB.fxMove[r][c]) == STRIKE_CLAW)
++            Strike(sB.fxMove[r][c], type, x, y, flip, FALSE);
++        else
++            TypeBurst(type, x, y, TRUE);
+         break;
+     case GK_SWORD: case GK_LONGSWORD: case GK_DASH:
+-        Fx(FX_SLASH, VFX_LAYER_AIR, x, y - 16, flip | (type == TYPE_NORMAL ? 0 : GFX_TINT), tc, 7, 0);
+-        TypeBurst(type, x, y, FALSE);
++        Strike(sB.fxMove[r][c], type, x, y, flip, FALSE);
+         break;
+     case GK_WIDESWORD: case GK_LIFESWORD:
+         if (type == TYPE_WATER)
+             Fx(FX_WAVE, VFX_LAYER_AIR, x, y - 10, flip, 0, 0, 16);
+         else
+-            Fx(FX_SLASH_ARC, VFX_LAYER_AIR, x, y - 14, flip | (type == TYPE_NORMAL ? 0 : GFX_TINT), tc, 7, 0);
++            Strike(sB.fxMove[r][c], type, x, y, flip, TRUE);
+         break;
+     case GK_TORNADO:
+-        Fx(FX_TORNADO, VFX_LAYER_AIR, x, y - 6, type == TYPE_FLYING ? 0 : GFX_TINT, tc, 8, 10);
++        // POC-15: a bigger storm that stays for the whole multi-hit
++        if ((p = Fx(FX_TORNADO, VFX_LAYER_AIR, x, y - 2, type == TYPE_FLYING ? 0 : GFX_TINT, tc, 10, 14)) != NULL)
++            p->scale = 384;
+         break;
+     case GK_FIREHIT: case GK_GOLEMHIT:
+         if (type == TYPE_FIRE)
+@@ -388,9 +700,28 @@ static void OnImpact(s32 c, s32 r, bool8 passing)
+             Fx(FX_BOLT, VFX_LAYER_AIR, x, y - 6, 0, 0, 0, 16);
+         else if (type == TYPE_ICE)
+             Fx(FX_ICE, VFX_LAYER_AIR, x, y - 10, 0, 0, 0, 0);
++        else if (type == TYPE_PSYCHIC || type == TYPE_GHOST)
++        {
++            // POC-15: a psychic / ghostly burst - BN's vortex, big, and a ring
++            if ((p = Fx(FX_VORTEX, VFX_LAYER_AIR, x, y - 18, type == TYPE_GHOST ? GFX_TINT : 0, tc, 6, 22)) != NULL)
++                p->scale = 384;
++            if ((p = Spawn(P_RING, VFX_LAYER_AIR, x, y - 18)) != NULL)
++                p->life = 16, p->value = 22, p->color = Gfx_Blend(tc, PKBN_RGB(31, 31, 31), 6);
++        }
++        else if (type == TYPE_WATER)
++            Fx(FX_SPLASH, VFX_LAYER_AIR, x, y - 8, 0, 0, 0, 20);
++        else if (type == TYPE_GRASS)
++            Fx(FX_LEAF, VFX_LAYER_AIR, x, y - 16, 0, 0, 0, 22);
++        else if (type == TYPE_POISON)
++            Fx(FX_POISON2, VFX_LAYER_AIR, x, y - 14, 0, 0, 0, 22);
++        else if (type == TYPE_FLYING)
++            Fx(FX_WIND, VFX_LAYER_AIR, x, y - 16, 0, 0, 0, 20);
++        else if (type == TYPE_DARK)
++            Fx(FX_CLAW, VFX_LAYER_AIR, x, y - 18, 0, 0, 0, 20);
+         else
+         {
+-            Fx(FX_HIT_STAR, VFX_LAYER_AIR, x, y - 14, GFX_TINT, tc, 5, 0);
++            if ((p = Fx(FX_HIT_STAR, VFX_LAYER_AIR, x, y - 14, type == TYPE_NORMAL ? 0 : GFX_TINT, tc, 7, 0)) != NULL)
++                p->scale = 320;
+             Fx(FX_DUST, VFX_LAYER_GROUND, x, y - 2, 0, 0, 0, 0);
+         }
+         Shake(6, 2);
+@@ -443,7 +774,20 @@ static void OnImpact(s32 c, s32 r, bool8 passing)
+         Shake(24, 3);
+         break;
+     case GK_BOMB:
+-        Fx(FX_EXPLODE_SMALL, VFX_LAYER_AIR, x, y - 10, 0, 0, 0, 0);
++        // POC-15: the blast takes the move's type - an explosion for the physical ones, the type's burst otherwise
++        if (type == TYPE_NORMAL || type == TYPE_FIRE || type == TYPE_ROCK || type == TYPE_GROUND || type == TYPE_STEEL
++         || type == TYPE_FIGHTING)
++            Fx(FX_EXPLODE_SMALL, VFX_LAYER_AIR, x, y - 10, 0, 0, 0, 0);
++        else
++        {
++            TypeBurst(type, x, y, TRUE);
++            if ((p = Spawn(P_RING, VFX_LAYER_AIR, x, y - 10)) != NULL)
++            {
++                p->life = 14;
++                p->value = 18;
++                p->color = Gfx_Blend(tc, PKBN_RGB(31, 31, 31), 4);
++            }
++        }
+         Shake(6, 2);
+         break;
+     case GK_DIG:
+@@ -465,6 +809,18 @@ static void OnImpact(s32 c, s32 r, bool8 passing)
+         TypeBurst(type, x, y, FALSE);
+         break;
+     case GK_LOCKON:
++    {
++        // POC-15: the locked-on shot itself - a streak from the attacker to the target
++        const struct Fighter *atk = &sB.f[side <= SIDE_ENEMY ? side : 0];
++        s32 ax, ay;
++        Draw_FeetPos(atk->x, atk->y, &ax, &ay);
++        if (atk->y == r && (p = Spawn(P_STREAK, VFX_LAYER_AIR, ax + (side == SIDE_PLAYER ? 22 : -22), y - 18)) != NULL)
++        {
++            p->value = (s16)(x - (ax + (side == SIDE_PLAYER ? 22 : -22)));
++            p->life = 10;
++            p->color = Gfx_Blend(tc, PKBN_RGB(31, 31, 31), 4);
++        }
++    }
+         Fx(FX_HIT, VFX_LAYER_AIR, x, y - 16, 0, 0, 0, 0);
+         TypeBurst(type, x, y, TRUE);
+         Shake(4, 1);
+@@ -540,7 +896,7 @@ static void DrawNumber(u16 *fb, const struct Particle *p)
+     snprintf(line, sizeof(line), "%d", (int)(p->value < 0 ? -p->value : p->value));
+     w = Pkbn_EmTextWidth(line, PKBN_FONT_NORMAL);
+     x -= w / 2;
+-    if (p->t > 30 && (p->t & 2))
++    if (p->t + 10 > p->life && (p->t & 2))
+         return; // blink out
+     for (dy = -1; dy <= 1; dy++)
+         for (dx = -1; dx <= 1; dx++)
+@@ -551,14 +907,107 @@ static void DrawNumber(u16 *fb, const struct Particle *p)
+ 
+ static void DrawArrow(u16 *fb, const struct Particle *p)
+ {
+-    s32 x = p->x / 16, y = p->y / 16, i;
+-    u8 a = (u8)(p->t < 6 ? p->t * 2 : p->t > p->life - 8 ? (p->life - p->t) * 2 : 12);
+-    for (i = 0; i < 4; i++)
++    // POC-15: a bigger arrow with a dark rim so it reads over any Pokémon (head 9 px, shaft 3x7)
++    s32 x = p->x / 16, y = p->y / 16, i, pass;
++    u8 a = (u8)(p->t < 4 ? 8 + p->t * 2 : p->t > p->life - 8 ? (p->life - p->t) * 2 : 15);
++    for (pass = 0; pass < 2; pass++)
++    {
++        u16 col = pass ? p->color : PKBN_RGB(3, 3, 8);
++        s32 g = pass ? 0 : 1;   // the rim is one pixel bigger
++        for (i = 0; i < 5; i++)
++        {
++            s32 row = p->value ? y + i : y + 11 - i;   // up arrow: point on top
++            Gfx_FillBlend(fb, x - i - g, row - (p->value ? g : -g), i * 2 + 1 + g * 2, 1, col, pass ? a : a / 2);
++        }
++        Gfx_FillBlend(fb, x - 1 - g, p->value ? y + 5 : y - 1 - g, 3 + g * 2, 7 + g, col, pass ? a : a / 2);
++    }
++    Gfx_FillBlend(fb, x, p->value ? y + 1 : y + 5, 1, 5, PKBN_RGB(31, 31, 31), (u8)(a / 2));
++}
++
++// ---- POC-15 procedural pieces --------------------------------------------------------------------------------
++
++static s32 Sin256(s32 a)   // a: 0..255 = one turn; result -256..256
++{
++    static const s16 sQ[17] = { 0, 25, 50, 74, 98, 121, 142, 162, 181, 198, 213, 226, 237, 245, 251, 255, 256 };
++    a &= 255;
++    if (a < 64)  return sQ[a / 4];
++    if (a < 128) return sQ[(128 - a) / 4];
++    if (a < 192) return -sQ[(a - 128) / 4];
++    return -sQ[(256 - a) / 4];
++}
++static s32 Cos256(s32 a) { return Sin256(a + 64); }
++
++// A charging glint: a type-coloured glow that grows over its life, with a white core and a turning sparkle.
++static void DrawGlint(u16 *fb, const struct Particle *p)
++{
++    s32 x = p->x / 16, y = p->y / 16, k = p->life ? (s32)p->t * 8 / p->life : 8, s;
++    s32 r = 1 + k * p->value / 8;
++    Gfx_Ellipse(fb, x, y, r + 3, r + 3, p->color, 5);
++    Gfx_Ellipse(fb, x, y, r + 1, r + 1, p->color, 11);
++    Gfx_Ellipse(fb, x, y, r / 2 + 1, r / 2 + 1, PKBN_RGB(31, 31, 31), 14);
++    s = r + 4 + (sT & 2);
++    if (sT & 1)
+     {
+-        s32 row = p->value ? y + i : y + 6 - i; // up arrow: point on top
+-        Gfx_FillBlend(fb, x - i, row, i * 2 + 1, 1, p->color, a);
++        Gfx_FillBlend(fb, x - s, y, s * 2 + 1, 1, PKBN_RGB(31, 31, 31), 10);
++        Gfx_FillBlend(fb, x, y - s, 1, s * 2 + 1, PKBN_RGB(31, 31, 31), 10);
+     }
+-    Gfx_FillBlend(fb, x - 1, p->value ? y + 4 : y - 4, 3, 6, p->color, a);
++}
++
++// A music note (sound moves): 5x8 pixels, bobbing.
++static void DrawNote(u16 *fb, const struct Particle *p)
++{
++    static const char *const sNote[8] = { "..XXX", "..X.X", "..X..", "..X..", "..X..", "XXX..", "XXX..", ".X..." };
++    s32 x = p->x / 16, y = p->y / 16 + (Sin256((s32)p->t * 16 + p->value * 40) * 2 / 256), r, c;
++    u8 a = (u8)(p->t + 6 >= p->life ? (p->life - p->t) * 2 : 15);
++    for (r = 0; r < 8; r++)
++        for (c = 0; c < 5; c++)
++            if (sNote[r][c] == 'X')
++            {
++                Gfx_FillBlend(fb, x + c * 2 + 1, y + r * 2 + 1, 2, 2, PKBN_RGB(2, 2, 6), a / 2);
++                Gfx_FillBlend(fb, x + c * 2, y + r * 2, 2, 2, p->color, a);
++            }
++}
++
++// A shot streak: a bright line from (x,y) toward (x + value px) that shoots out and thins (BN cannon blast).
++static void DrawStreak(u16 *fb, const struct Particle *p)
++{
++    s32 x = p->x / 16, y = p->y / 16, len = p->value, dir = len < 0 ? -1 : 1, w, h;
++    s32 grow = p->t < 3 ? (p->t + 1) * 33 : 100;
++    h = p->t < 4 ? 5 : p->t < 8 ? 3 : 1;
++    w = (len < 0 ? -len : len) * grow / 100;
++    Gfx_FillBlend(fb, dir > 0 ? x : x - w, y - h / 2 - 2, w, h + 4, p->color, 6);
++    Gfx_FillBlend(fb, dir > 0 ? x : x - w, y - h / 2, w, h, p->color, 13);
++    Gfx_FillBlend(fb, dir > 0 ? x : x - w, y, w, 1, PKBN_RGB(31, 31, 31), 14);
++}
++
++// A bite: two rows of fangs that snap shut (6 frames), hold, and fade. Ours (BN6 has no jaws sprite we use).
++static void DrawJaws(u16 *fb, const struct Particle *p)
++{
++    s32 x = p->x / 16, y = p->y / 16, gap = p->t < 6 ? 12 - p->t * 2 : 0, k, j;
++    u8 a = (u8)(p->t + 6 >= p->life ? (p->life - p->t) * 2 : 15);
++    u16 rim = Gfx_Blend(p->color, PKBN_RGB(0, 0, 0), 8);
++    for (k = 0; k < 4; k++)
++        for (j = 0; j < 5; j++)
++        {
++            s32 w = 5 - j;   // each fang narrows to its point
++            // upper fang pointing down, lower fang pointing up
++            Gfx_FillBlend(fb, x - 14 + k * 7 + j / 2, y - gap - 7 + j, w, 1, j == 0 ? rim : PKBN_RGB(31, 31, 31), a);
++            Gfx_FillBlend(fb, x - 11 + k * 7 + j / 2, y + gap + 7 - j, w, 1, j == 0 ? rim : PKBN_RGB(31, 31, 31), a);
++        }
++    Gfx_FillBlend(fb, x - 15, y - gap - 9, 30, 2, p->color, a);
++    Gfx_FillBlend(fb, x - 12, y + gap + 8, 30, 2, p->color, a);
++}
++
++static struct Particle *Glint(s32 x, s32 y, u16 color, u16 life, s32 size)
++{
++    struct Particle *p = Spawn(P_GLINT, VFX_LAYER_AIR, x, y);
++    if (p)
++    {
++        p->color = color;
++        p->life = life;
++        p->value = (s16)size;
++    }
++    return p;
+ }
+ 
+ void Vfx_DrawLayer(u16 *fb, u8 layer)
+@@ -574,7 +1023,8 @@ void Vfx_DrawLayer(u16 *fb, u8 layer)
+         case P_SPRITE:
+             if (p->clipL || p->clipR)
+                 Gfx_ClipX(p->clipL, p->clipR);
+-            Gfx_DrawScaled(fb, Fx_Frame(p->id, p->t), p->x / 16, p->y / 16, p->scale, p->scale, p->flags, p->color, p->amt);
++            Gfx_DrawScaled(fb, Fx_Frame(p->id, p->t), p->x / 16, p->y / 16, p->scale, p->scale,
++                           (p->flags & ~PF_FADE) | ((p->flags & PF_FADE) && p->t + 5 >= p->life ? GFX_HALF : 0), p->color, p->amt);
+             Gfx_ClipX(-9999, 9999);
+             break;
+         case P_NUMBER:
+@@ -589,6 +1039,40 @@ void Vfx_DrawLayer(u16 *fb, u8 layer)
+         case P_ORB:
+             DrawOrb(fb, p->x / 16, p->y / 16, (u8)p->value, sT);
+             break;
++        case P_GLINT:
++            DrawGlint(fb, p);
++            break;
++        case P_NOTE:
++            DrawNote(fb, p);
++            break;
++        case P_PUFF:
++        {
++            s32 r = 3 + (s32)p->t * p->value / (p->life ? p->life : 1);
++            u8 a = (u8)(p->t + 6 >= p->life ? (p->life - p->t) * 2 : 12);
++            Gfx_Ellipse(fb, p->x / 16, p->y / 16, r, r * 3 / 4, p->color, a);
++            Gfx_Ellipse(fb, p->x / 16 - r / 3, p->y / 16 - r / 3, r / 2, r / 3, Gfx_Blend(p->color, PKBN_RGB(31, 31, 31), 8), a);
++            break;
++        }
++        case P_RING:
++        {
++            // an expanding ring (hypnosis, glare, sound waves)
++            s32 r = p->value >= 0 ? 4 + (s32)p->t * p->value / (p->life ? p->life : 1)
++                                  : 4 - p->value + (s32)p->t * p->value / (p->life ? p->life : 1), k;
++            u8 a = (u8)(p->t + 6 >= p->life ? (p->life - p->t) * 2 : 12);
++            for (k = 0; k < 32; k++)
++            {
++                s32 ang = k * 8;   // 0..255
++                s32 cx = p->x / 16 + r * Cos256(ang) / 256, cy = p->y / 16 + r * Sin256(ang) / 256 * 2 / 3;
++                Gfx_FillBlend(fb, cx, cy, 2, 2, p->color, a);
++            }
++            break;
++        }
++        case P_STREAK:
++            DrawStreak(fb, p);
++            break;
++        case P_JAWS:
++            DrawJaws(fb, p);
++            break;
+         case P_SHOT:
+         {
+             s32 x = p->x / 16, y = p->y / 16, k;
+@@ -612,9 +1096,62 @@ static void DrawOrb(u16 *fb, s32 x, s32 y, u8 type, u32 t)
+     case TYPE_ELECTRIC: Gfx_Draw(fb, Fx_Frame(FX_SPARK, t), x, y + 8, GFX_ADD, 0, 0); break;
+     case TYPE_WATER:    Gfx_Draw(fb, Fx_Frame(FX_BUBBLE, t % 12), x, y, 0, 0, 0); break;
+     }
+-    Gfx_Ellipse(fb, x, y, 7, 7, c, 8);
+-    Gfx_Ellipse(fb, x, y, 5, 5, Gfx_Blend(c, PKBN_RGB(31, 31, 31), 6), 12);
+-    Gfx_Ellipse(fb, x - 1, y - 1, 2, 2, PKBN_RGB(31, 31, 31), 14);
++    // POC-15: bigger and brighter so it reads at speed - a glow, a body and a white core, pulsing
++    {
++        s32 pulse = (t / 3) & 1;
++        Gfx_Ellipse(fb, x, y, 11 + pulse, 11 + pulse, c, 5);
++        Gfx_Ellipse(fb, x, y, 8, 8, c, 11);
++        Gfx_Ellipse(fb, x, y, 6, 6, Gfx_Blend(c, PKBN_RGB(31, 31, 31), 6), 13);
++        Gfx_Ellipse(fb, x - 2, y - 2, 2, 2, PKBN_RGB(31, 31, 31), 15);
++    }
++}
++
++// POC-15: what a BALL-kind move looks like in flight, by what the move is
++static void DrawNoteAt(u16 *fb, s32 x, s32 y, u16 color)
++{
++    static const char *const sNote[8] = { "..XXX", "..X.X", "..X..", "..X..", "..X..", "XXX..", "XXX..", ".X..." };
++    s32 r, c;
++    for (r = 0; r < 8; r++)
++        for (c = 0; c < 5; c++)
++            if (sNote[r][c] == 'X')
++            {
++                Pkbn_FillRect(fb, x + c * 2 + 1, y + r * 2 + 1, 2, 2, PKBN_RGB(2, 2, 6));
++                Pkbn_FillRect(fb, x + c * 2, y + r * 2, 2, 2, color);
++            }
++}
++
++static void DrawProjectile(u16 *fb, s32 x, s32 y, const struct Attack *a, u8 type)
++{
++    s32 dir = a->vx < 0 ? -1 : 1, k;
++    u16 c = Vfx_TypeColor(type);
++    if (InMoves(a->move, sSoundMoves, ARRAY_COUNT(sSoundMoves)))
++    {
++        for (k = 0; k < 3; k++)
++            DrawNoteAt(fb, x - 14 + k * 11 - dir * k * 3, y - 10 + Sin256((s32)sT * 12 + k * 80) * 5 / 256,
++                       k == 1 ? PKBN_RGB(31, 31, 31) : Gfx_Blend(c, PKBN_RGB(31, 31, 31), 8));
++        return;
++    }
++    if (InMoves(a->move, sPowderMoves, ARRAY_COUNT(sPowderMoves)))
++    {
++        for (k = 0; k < 5; k++)
++            Gfx_Ellipse(fb, x + Sin256((s32)sT * 9 + k * 51) * 10 / 256, y + Cos256((s32)sT * 7 + k * 51) * 7 / 256, 7, 5,
++                        Gfx_Blend(c, PKBN_RGB(31, 31, 31), (u8)(k * 2)), 11);
++        return;
++    }
++    if (InMoves(a->move, sGazeMoves, ARRAY_COUNT(sGazeMoves)))
++    {
++        for (k = 0; k < 3; k++)
++        {
++            s32 r = 5 + (((s32)sT / 2 + k * 5) % 15), j;
++            for (j = 0; j < 32; j++)
++                Gfx_FillBlend(fb, x + r * Cos256(j * 8) / 256, y + r * Sin256(j * 8) / 256 * 3 / 4, 2, 2,
++                              Gfx_Blend(c, PKBN_RGB(31, 31, 31), 6), (u8)(16 - r / 2));
++        }
++        return;
++    }
++    for (k = 3; k >= 1; k--)   // a fading trail behind it
++        Gfx_Ellipse(fb, x - dir * k * 7, y, 7 - k, 7 - k, c, (u8)(10 - k * 3));
++    DrawOrb(fb, x, y, type, sT);
+ }
+ 
+ void Vfx_DrawAttacks(u16 *fb)
+@@ -634,7 +1171,7 @@ void Vfx_DrawAttacks(u16 *fb)
+             Gfx_Draw(fb, Fx_Frame(FX_LOCKON, sT), x, y - 14, 0, 0, 0);
+             continue;
+         }
+-        if (a->phase == PH_CHARGE)
++        if (a->phase == PH_CHARGE && !a->windupOnly)
+         {
+             Draw_FeetPos(sB.f[a->side].x, sB.f[a->side].y, &x, &y);
+             Gfx_Draw(fb, Fx_Frame(FX_CHARGE, sT), x, y - 22, GFX_ADD | GFX_TINT, Vfx_TypeColor(type), 6);
+@@ -644,13 +1181,29 @@ void Vfx_DrawAttacks(u16 *fb)
+             s32 d = a->duration, t = d - a->timer, arc;
+             Draw_FeetPos(a->ox, a->oy, &x, &y);
+             Draw_FeetPos(a->tx, a->ty, &x1, &y1);
+-            arc = 4 * 40 * t * (d - t) / (d * d);
++            arc = 4 * 30 * t * (d - t) / (d * d);   // POC-15: a 30 px arc keeps it over the field
+             x = x + (x1 - x) * t / d;
+             y = y + (y1 - y) * t / d - 14 - arc;
+-            if (a->kind == GK_BOMB)
++            // its shadow on the floor, so you can see where it's going
++            Gfx_Ellipse(fb, x, y + 14 + arc - 2, 4 + (40 - arc) / 10, 2, PKBN_RGB(0, 0, 0), 7);
++            if (a->kind == GK_BOMB && (a->info.flags & GF_INVULN))
++            {
++                // Fly / Bounce (POC-15): the Pokémon itself swoops down on the target along the arc
++                struct PkbnImage img = Gfx_MonImage(&sB.f[a->side].pic, 1);
++                Gfx_Draw(fb, &img, x, y + 18, a->side == SIDE_PLAYER ? GFX_FLIPX : 0, 0, 0);
++                Gfx_Draw(fb, Fx_Frame(FX_WIND, sT), x - (a->side == SIDE_PLAYER ? 16 : -16), y - 4,
++                         (a->side == SIDE_PLAYER ? 0 : GFX_FLIPX) | GFX_HALF, 0, 0);
++            }
++            else if (a->kind != GK_BOMB)
++                DrawOrb(fb, x, y, TYPE_POISON, sT);
++            else if (type == TYPE_ROCK || type == TYPE_GROUND)
++                Gfx_Draw(fb, Fx_Frame(FX_ROCK, 0), x, y, 0, 0, 0);   // POC-15: what's thrown matches the move
++            else if (type == TYPE_FIRE)
++                Gfx_Draw(fb, Fx_Frame(FX_FIREBALL, sT), x, y, 0, 0, 0);
++            else if (type == TYPE_NORMAL || type == TYPE_STEEL)
+                 Gfx_Draw(fb, Fx_Frame(FX_BOMB, sT), x, y, 0, 0, 0);
+             else
+-                DrawOrb(fb, x, y, TYPE_POISON, sT);
++                DrawOrb(fb, x, y, type, sT);
+             continue;
+         }
+         if ((a->kind == GK_METEORS || a->kind == GK_FIREHIT || a->kind == GK_GOLEMHIT) && a->phase == PH_WAIT)
+@@ -665,6 +1218,14 @@ void Vfx_DrawAttacks(u16 *fb)
+                         Gfx_Ellipse(fb, x, y - 1, 8 + (s32)(sT & 3), 2, Vfx_TypeColor(type), 7);
+                     }
+         }
++        if (a->kind == GK_DELAYED && a->phase == PH_WAIT)
++        {
++            // POC-15: a pending Future Sight / Doom Desire hangs over the foes' side, pulsing faster as it nears
++            s32 fx, fy, pulse = a->timer > 60 ? (s32)((sT / 8) & 1) : (s32)((sT / 3) & 1);
++            Draw_FeetPos(a->side == SIDE_PLAYER ? GRID_COLS - 2 : 1, 0, &fx, &fy);
++            Gfx_Draw(fb, Fx_Frame(FX_VORTEX, sT), fx, 34 + pulse, GFX_HALF | GFX_TINT, Vfx_TypeColor(type), 6);
++            continue;
++        }
+         if (a->phase != PH_TRAVEL)
+             continue;
+         {
+@@ -678,16 +1239,23 @@ void Vfx_DrawAttacks(u16 *fb)
+         switch (a->kind)
+         {
+         case GK_BALL:
+-            DrawOrb(fb, x, y - 18, type, sT);
++            DrawProjectile(fb, x, y - 18, a, type);
+             break;
+         case GK_DELAYED:
+             Gfx_Draw(fb, Fx_Frame(FX_VORTEX, sT), x, y - 16, GFX_HALF, 0, 0);
+             break;
+         case GK_AIRHOCKEY:
+-            Gfx_Ellipse(fb, x, y - 4, 9, 4, PKBN_RGB(4, 4, 8), 14);
+-            Gfx_Ellipse(fb, x, y - 6, 8, 3, Vfx_TypeColor(type), 15);
+-            Gfx_Ellipse(fb, x + ((sT / 2) & 1 ? 2 : -2), y - 7, 2, 1, PKBN_RGB(31, 31, 31), 14);
++        {
++            // POC-15: a bigger spinning disc with a trail
++            s32 k, ang = (s32)sT * 24;
++            for (k = 3; k >= 1; k--)
++                Gfx_Ellipse(fb, x - a->vx * k * 6, y - 10 - a->vy * k * 3, 10 - k, 4, Vfx_TypeColor(type), (u8)(9 - k * 2));
++            Gfx_Ellipse(fb, x, y - 8, 12, 5, PKBN_RGB(4, 4, 8), 14);
++            Gfx_Ellipse(fb, x, y - 10, 11, 4, Vfx_TypeColor(type), 15);
++            Gfx_Ellipse(fb, x + Cos256(ang) * 7 / 256, y - 10 + Sin256(ang) * 2 / 256, 2, 1, PKBN_RGB(31, 31, 31), 15);
++            Gfx_Ellipse(fb, x - Cos256(ang) * 7 / 256, y - 10 - Sin256(ang) * 2 / 256, 2, 1, PKBN_RGB(31, 31, 31), 10);
+             break;
++        }
+         case GK_WAVE:
+         case GK_SHOCKWAVE:
+         {
+@@ -704,9 +1272,21 @@ void Vfx_DrawAttacks(u16 *fb)
+                              Vfx_TypeColor(type), 9);
+                 else
+                 {
+-                    // a ground wave: a rock riding a dust plume
++                    // a ground wave riding a dust plume; what rides it depends on the type (POC-15)
++                    u32 fl = a->vx < 0 ? GFX_FLIPX : 0;
+                     Gfx_Draw(fb, Fx_Frame(FX_DUST, sT % 6), wx, wy - 4, GFX_TINT, Vfx_TypeColor(type), 5);
+-                    Gfx_Draw(fb, Fx_Frame(FX_ROCK, 0), wx, wy - 6 - (s32)((sT / 2) & 3), 0, 0, 0);
++                    if (type == TYPE_GRASS)
++                        Gfx_Draw(fb, Fx_Frame(FX_LOGS, sT), wx, wy - 4, fl, 0, 0);
++                    else if (type == TYPE_WATER)
++                        Gfx_Draw(fb, Fx_Frame(FX_SPLASH, sT % 12), wx, wy - 4, fl, 0, 0);
++                    else if (type == TYPE_FIRE)
++                        Gfx_Draw(fb, Fx_Frame(FX_FIRE_PANEL, sT), wx, wy - 2, fl, 0, 0);
++                    else if (type == TYPE_ELECTRIC)
++                        Gfx_Draw(fb, Fx_Frame(FX_SPARK, sT), wx, wy - 8, GFX_ADD, 0, 0);
++                    else if (type == TYPE_ICE)
++                        Gfx_Draw(fb, Fx_Frame(FX_ICE_SPIKE, 4), wx, wy - 4, fl, 0, 0);
++                    else
++                        Gfx_Draw(fb, Fx_Frame(FX_ROCK, 0), wx, wy - 6 - (s32)((sT / 2) & 3), 0, 0, 0);
+                 }
+             }
+             break;
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index b03b966..3eea946 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -21,6 +21,7 @@
+ #include "pkbn/grid_battle.h"
+ #include "pkbn/challenge.h"
+ #include "pkbn/replay.h"
++#include "pkbn/folder.h"
+ #include "pkbn/render.h"
+ #include "pokedex.h"
+ #include "pkbn/bot.h"
+@@ -192,6 +193,67 @@ void Pkbn_SelfTestAutopilot(void)
+     Autopilot();
+ }
+ 
++// PKBN_GALLERY="m,m,...|all" (POC-15): each move in turn, used by the player (or the foe with PKBN_GALLERY_SIDE=enemy)
++// on a fixed stage; PKBN_GALLERY_FRAMES frames each (default 150), every PKBN_DUMP_EVERY-th dumped as g_MOVE_TTT.ppm.
++static u16 sGalMoves[MOVES_COUNT], sGalCount, sGalIdx, sGalT, sGalLen = 150;
++static u8 sGalSide;
++static void (*sGalInner)(u16 *fb);
++static void GalleryOverlay(u16 *fb)
++{
++    sGalInner(fb);
++    if (sDumpDir != NULL && sGalIdx < sGalCount && sGalT > 0 && (sGalT - 1) % sDumpEvery == 0)
++    {
++        char path[512];
++        FILE *f;
++        s32 i;
++        snprintf(path, sizeof(path), "%s/g_%03u_%03u.ppm", sDumpDir, (unsigned)sGalMoves[sGalIdx], (unsigned)(sGalT - 1));
++        f = fopen(path, "wb");
++        if (f == NULL)
++            return;
++        fprintf(f, "P6\n%d %d\n255\n", (int)gPkbnFbW, (int)gPkbnFbH);
++        for (i = 0; i < gPkbnFbW * gPkbnFbH; i++)
++        {
++            u16 c = fb[i];
++            u8 rgb[3] = { (u8)((c & 31) << 3), (u8)(((c >> 5) & 31) << 3), (u8)(((c >> 10) & 31) << 3) };
++            fwrite(rgb, 1, 3, f);
++        }
++        fclose(f);
++    }
++}
++
++static void CB2_Gallery(void)
++{
++    struct PkbnGridDebug d;
++    PkbnGrid_GetDebug(&d);
++    gMain.newKeys = gMain.heldKeys = 0;
++    if (d.state == PKBN_GRID_CUSTOM && (d.frame & 1))
++        gMain.newKeys = START_BUTTON;   // close the Custom screen
++    CB2_PkbnGridBattle();
++    if (gPkbnCanvasOverlay != NULL && gPkbnCanvasOverlay != GalleryOverlay)
++    {
++        sGalInner = gPkbnCanvasOverlay;
++        gPkbnCanvasOverlay = GalleryOverlay;
++    }
++    if (d.state != PKBN_GRID_FIGHT && sGalT == 0)
++        return;
++    if (sGalT == 0)
++    {
++        printf("[pkbn-gallery] move %u kind %u type %u\n", sGalMoves[sGalIdx], gPkbnMoveInfo[sGalMoves[sGalIdx]].kind,
++               gBattleMoves[sGalMoves[sGalIdx]].type);
++        PkbnGrid_GalleryStage(sGalMoves[sGalIdx], sGalSide);
++    }
++    if (++sGalT > sGalLen)
++    {
++        sGalT = 0;
++        if (++sGalIdx >= sGalCount)
++        {
++            printf("[pkbn-gallery] done: %u moves\n", sGalCount);
++            fflush(stdout);
++            exit(0);
++        }
++    }
++}
++
+ static void CB2_SelfTestBattle(void)
+ {
+     Autopilot();
+@@ -680,6 +742,30 @@ void Pkbn_SelfTestMaybeStart(void)
+         gPkbnCanvasOverlay = WrappedEditorOverlay;
+         return;
+     }
++    if (getenv("PKBN_GALLERY") != NULL)
++    {
++        const char *g = getenv("PKBN_GALLERY");
++        gPkbnGallery = TRUE;
++        sGalSide = (getenv("PKBN_GALLERY_SIDE") != NULL && strcmp(getenv("PKBN_GALLERY_SIDE"), "enemy") == 0) ? 1 : 0;   // SIDE_ENEMY : SIDE_PLAYER
++        if (getenv("PKBN_GALLERY_FRAMES") != NULL)
++            sGalLen = (u16)atoi(getenv("PKBN_GALLERY_FRAMES"));
++        if (strcmp(g, "all") == 0)
++        {
++            u16 m;
++            for (m = 1; m < MOVES_COUNT; m++)
++                if (PkbnFolder_MoveIsChip(m))
++                    sGalMoves[sGalCount++] = m;
++        }
++        else
++            while (*g && sGalCount < MOVES_COUNT)
++            {
++                sGalMoves[sGalCount++] = (u16)strtol(g, (char **)&g, 10);
++                while (*g == ',')
++                    g++;
++            }
++        SetMainCallback2(CB2_Gallery);
++        return;
++    }
+     SetMainCallback2(CB2_SelfTestBattle);
+ }
+ 
+-- 
+2.43.0
+

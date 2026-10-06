@@ -1,0 +1,251 @@
+From f11350431e3bcba53c93d09a0dc0396e73913a57 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 14:03:37 +0300
+Subject: [PATCH 46/46] POC-15b: NaviCust restyled - glossy joined program
+ blocks, recessed sockets, a live command line, shape icons in the list
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/navicust_ui.c | 160 +++++++++++++++++++++++++++++++++--------
+ 1 file changed, 131 insertions(+), 29 deletions(-)
+
+diff --git a/src/pkbn/navicust_ui.c b/src/pkbn/navicust_ui.c
+index d1ac3d4..e915fb6 100644
+--- a/src/pkbn/navicust_ui.c
++++ b/src/pkbn/navicust_ui.c
+@@ -122,18 +122,43 @@ static void CellRect(s32 x, s32 y, s32 *px, s32 *py)
+     *py = BOARD_Y + y * CELL;
+ }
+ 
++// POC-15 look (our art, in the BN6 style): a program cell is a glossy block. Cells of the same piece join (no edge
++// between them); `open` says which sides have a neighbour of the same piece (1 left, 2 right, 4 up, 8 down).
++static void DrawBlock(u16 *fb, s32 x, s32 y, u16 col, u8 open, bool8 plus)
++{
++    s32 px, py, x0, y0, x1, y1;
++    u16 light = Gfx_Blend(col, RGB(31, 31, 31), 8), dark = Gfx_Blend(col, RGB(0, 0, 0), 9);
++    u16 deep = Gfx_Blend(col, RGB(0, 0, 0), 13);
++    CellRect(x, y, &px, &py);
++    x0 = px + ((open & 1) ? 0 : 1);
++    y0 = py + ((open & 4) ? 0 : 1);
++    x1 = px + CELL - ((open & 2) ? 0 : 1);
++    y1 = py + CELL - ((open & 8) ? 0 : 1);
++    Pkbn_FillRect(fb, x0, y0, x1 - x0, y1 - y0, col);
++    // the piece's outline and bevel only on its outer edges
++    if (!(open & 4)) { Pkbn_FillRect(fb, x0, y0, x1 - x0, 1, deep); Pkbn_FillRect(fb, x0, y0 + 1, x1 - x0, 2, light); }
++    if (!(open & 1)) { Pkbn_FillRect(fb, x0, y0, 1, y1 - y0, deep); Pkbn_FillRect(fb, x0 + 1, y0 + 1, 2, y1 - y0 - 1, light); }
++    if (!(open & 8)) { Pkbn_FillRect(fb, x0, y1 - 1, x1 - x0, 1, deep); Pkbn_FillRect(fb, x0 + 1, y1 - 3, x1 - x0 - 1, 2, dark); }
++    if (!(open & 2)) { Pkbn_FillRect(fb, x1 - 1, y0, 1, y1 - y0, deep); Pkbn_FillRect(fb, x1 - 3, y0 + 1, 2, y1 - y0 - 1, dark); }
++    // the inner plate of every cell, and a glint
++    Pkbn_FillRect(fb, px + 5, py + 5, CELL - 10, CELL - 10, Gfx_Blend(col, RGB(31, 31, 31), 3));
++    Pkbn_FrameRect(fb, px + 5, py + 5, CELL - 10, CELL - 10, Gfx_Blend(col, RGB(0, 0, 0), 5));
++    Pkbn_FillRect(fb, px + 6, py + 6, 3, 1, RGB(31, 31, 31));
++    Pkbn_FillRect(fb, px + 6, py + 7, 1, 2, RGB(31, 31, 31));
++    if (plus)
++    {
++        // plus parts carry a "+" (they need no command line)
++        Pkbn_FillRect(fb, px + CELL / 2 - 3, py + CELL / 2, 7, 1, dark);
++        Pkbn_FillRect(fb, px + CELL / 2, py + CELL / 2 - 3, 1, 7, dark);
++    }
++}
++
+ static void DrawCellFill(u16 *fb, s32 x, s32 y, u16 col, u8 alpha16)
+ {
+     s32 px, py;
+     CellRect(x, y, &px, &py);
+     if (alpha16 >= 16)
+-    {
+-        Pkbn_FillRect(fb, px + 1, py + 1, CELL - 2, CELL - 2, col);
+-        Pkbn_FillRect(fb, px + 1, py + 1, CELL - 2, 2, Gfx_Blend(col, RGB(31, 31, 31), 7));      // bevel light
+-        Pkbn_FillRect(fb, px + 1, py + 1, 2, CELL - 2, Gfx_Blend(col, RGB(31, 31, 31), 5));
+-        Pkbn_FillRect(fb, px + 1, py + CELL - 3, CELL - 2, 2, Gfx_Blend(col, RGB(0, 0, 0), 7));  // bevel dark
+-        Pkbn_FillRect(fb, px + CELL - 3, py + 1, 2, CELL - 2, Gfx_Blend(col, RGB(0, 0, 0), 6));
+-    }
++        DrawBlock(fb, x, y, col, 0, FALSE);
+     else
+         Gfx_FillBlend(fb, px + 1, py + 1, CELL - 2, CELL - 2, col, alpha16);
+ }
+@@ -154,6 +179,13 @@ static void DrawBoard(u16 *fb)
+     Gfx_Draw(fb, &img, BOARD_X + NAVI_W * CELL / 2, BOARD_Y + NAVI_H * CELL + 6, GFX_TINT, RGB(4, 6, 14), 11);
+     Gfx_ClipNone();
+ 
++    // POC-15: a metal plate under the board
++    {
++        s32 px, py;
++        CellRect(0, 0, &px, &py);
++        Draw_Box(fb, px - 4, py - 4, NAVI_W * CELL + 8, NAVI_H * CELL + 8, RGB(2, 4, 12), RGB(16, 22, 31), 10);
++        Pkbn_FrameRect(fb, px - 2, py - 2, NAVI_W * CELL + 4, NAVI_H * CELL + 4, RGB(6, 10, 20));
++    }
+     for (y = -1; y <= NAVI_H; y++)
+         for (x = -1; x <= NAVI_W; x++)
+         {
+@@ -161,22 +193,37 @@ static void DrawBoard(u16 *fb)
+             CellRect(x, y, &px, &py);
+             if (OnFrame(x, y))
+             {
+-                // the overhang frame: usable, but a program here bugs (BN6's 3-cells)
+-                Gfx_FillBlend(fb, px, py, CELL, CELL, RGB(10, 4, 6), 8);
+-                for (i = 0; i < CELL; i += 4)
+-                    Gfx_FillBlend(fb, px + i, py, 1, CELL, RGB(20, 8, 10), 6);
++                // the overhang frame: usable, but a program here bugs (BN6's 3-cells): red hazard stripes
++                Gfx_FillBlend(fb, px + 1, py + 1, CELL - 2, CELL - 2, RGB(10, 3, 5), 9);
++                for (i = -CELL; i < CELL; i += 5)
++                {
++                    s32 k;
++                    for (k = 0; k < CELL - 2; k++)
++                        if (i + k >= 0 && i + k < CELL - 2)
++                            Gfx_FillBlend(fb, px + 1 + i + k, py + 1 + k, 2, 1, RGB(22, 6, 8), 6);
++                }
+             }
+             else if (x >= 0 && x < NAVI_W && y >= 0 && y < NAVI_H)
+             {
+-                Gfx_FillBlend(fb, px, py, CELL, CELL, RGB(3, 6, 16), 12);
+-                Pkbn_FrameRect(fb, px, py, CELL, CELL, RGB(8, 14, 26));
++                // a recessed socket: dark inside, shadow on the top-left rim, light on the bottom-right, a circuit dot
++                Gfx_FillBlend(fb, px + 1, py + 1, CELL - 2, CELL - 2, RGB(2, 5, 14), 13);
++                Pkbn_FillRect(fb, px + 1, py + 1, CELL - 2, 1, RGB(1, 2, 6));
++                Pkbn_FillRect(fb, px + 1, py + 1, 1, CELL - 2, RGB(1, 2, 6));
++                Pkbn_FillRect(fb, px + 1, py + CELL - 2, CELL - 2, 1, RGB(10, 16, 28));
++                Pkbn_FillRect(fb, px + CELL - 2, py + 1, 1, CELL - 2, RGB(10, 16, 28));
++                Pkbn_FillRect(fb, px + CELL / 2 - 1, py + CELL / 2 - 1, 2, 2, RGB(6, 12, 24));
+             }
+         }
+-    // the command line (BN6: row 3 of the 7x7 space, the 3rd row of this board)
++    // the command line (BN6: row 3 of the 7x7 space, the 3rd row of this board): a gold rail with a pulse running along
+     {
+-        s32 px, py;
++        s32 px, py, w = (NAVI_W + 2) * CELL, pulse;
+         CellRect(-1, NAVI_CMD_ROW, &px, &py);
+-        Gfx_FillBlend(fb, px, py + CELL / 2 - 2, (NAVI_W + 2) * CELL, 4, RGB(31, 26, 6), 10);
++        Gfx_FillBlend(fb, px, py + CELL / 2 - 3, w, 6, RGB(31, 24, 4), 6);
++        Gfx_FillBlend(fb, px, py + CELL / 2 - 1, w, 2, RGB(31, 28, 10), 12);
++        pulse = (s32)(sN.t * 3) % (w + 40) - 20;
++        for (i = -12; i <= 12; i++)
++            if (pulse + i >= 0 && pulse + i < w)
++                Gfx_FillBlend(fb, px + pulse + i, py + CELL / 2 - 2, 1, 4, RGB(31, 31, 31), (u8)(12 - (i < 0 ? -i : i)));
+     }
+     // ability (fixed) and placed parts
+     for (y = -1; y <= NAVI_H; y++)
+@@ -197,15 +244,21 @@ static void DrawBoard(u16 *fb)
+                 const struct PkbnNaviPart *part = &sN.navi->parts[p];
+                 u16 col = Vfx_TypeColor(part->type);
+                 s32 px, py;
+-                DrawCellFill(fb, x, y, col, 16);
++                u8 open = 0;
++                #define SAME(dx, dy) (x + (dx) >= -1 && x + (dx) <= NAVI_W && y + (dy) >= -1 && y + (dy) <= NAVI_H \
++                                      && sN.board.cell[y + 1 + (dy)][x + 1 + (dx)] == NCELL_PART \
++                                      && sN.board.part[y + 1 + (dy)][x + 1 + (dx)] == p)
++                if (SAME(-1, 0)) open |= 1;
++                if (SAME(1, 0)) open |= 2;
++                if (SAME(0, -1)) open |= 4;
++                if (SAME(0, 1)) open |= 8;
++                #undef SAME
++                if (!sN.board.partRuns[p])
++                    col = Gfx_Blend(col, RGB(8, 8, 10), 9);   // not running: greyed
++                DrawBlock(fb, x, y, col, open, gPkbnNcps[part->prog].plus);
+                 CellRect(x, y, &px, &py);
+                 if (sN.board.partBugged[p] && ((sN.t / 8) & 1))
+                     Pkbn_FrameRect(fb, px + 1, py + 1, CELL - 2, CELL - 2, RGB(31, 4, 4));
+-                // joins: no inner border between two cells of the same part
+-                if (x + 1 <= NAVI_W && sN.board.cell[y + 1][x + 2] == NCELL_PART && sN.board.part[y + 1][x + 2] == p)
+-                    Pkbn_FillRect(fb, px + CELL - 3, py + 3, 4, CELL - 6, col);
+-                if (y + 1 <= NAVI_H && sN.board.cell[y + 2][x + 1] == NCELL_PART && sN.board.part[y + 2][x + 1] == p)
+-                    Pkbn_FillRect(fb, px + 3, py + CELL - 3, CELL - 6, 4, col);
+             }
+         }
+     // a label on each part's first cell
+@@ -241,10 +294,27 @@ static void DrawGhost(u16 *fb)
+     u16 col = ok ? Vfx_TypeColor(sN.ghost.type) : RGB(31, 4, 4);
+     for (i = 0; i < n; i++)
+     {
+-        s32 px, py;
++        s32 px, py, j;
++        u8 open = 0;
++        for (j = 0; j < n; j++)
++        {
++            if (dy[j] == dy[i] && dx[j] == dx[i] - 1) open |= 1;
++            if (dy[j] == dy[i] && dx[j] == dx[i] + 1) open |= 2;
++            if (dx[j] == dx[i] && dy[j] == dy[i] - 1) open |= 4;
++            if (dx[j] == dx[i] && dy[j] == dy[i] + 1) open |= 8;
++        }
++        if (sN.ghost.x + dx[i] < -1 || sN.ghost.x + dx[i] > NAVI_W || sN.ghost.y + dy[i] < -1 || sN.ghost.y + dy[i] > NAVI_H)
++            continue;   // off the board: not drawn over the panels below
+         CellRect(sN.ghost.x + dx[i], sN.ghost.y + dy[i], &px, &py);
+-        Gfx_FillBlend(fb, px + 2, py + 2, CELL - 4, CELL - 4, col, (sN.t & 8) ? 13 : 9);
+-        Pkbn_FrameRect(fb, px + 1, py + 1, CELL - 2, CELL - 2, ok ? RGB(31, 31, 31) : RGB(31, 10, 10));
++        if ((sN.t & 8) || !ok)
++            DrawBlock(fb, sN.ghost.x + dx[i], sN.ghost.y + dy[i], col, open, gPkbnNcps[sN.ghost.prog].plus);
++        else
++            Gfx_FillBlend(fb, px + 1, py + 1, CELL - 2, CELL - 2, col, 9);
++        // the piece's outline, white (or red where it can't go)
++        if (!(open & 4)) Pkbn_FillRect(fb, px, py, CELL, 1, ok ? RGB(31, 31, 31) : RGB(31, 10, 10));
++        if (!(open & 8)) Pkbn_FillRect(fb, px, py + CELL - 1, CELL, 1, ok ? RGB(31, 31, 31) : RGB(31, 10, 10));
++        if (!(open & 1)) Pkbn_FillRect(fb, px, py, 1, CELL, ok ? RGB(31, 31, 31) : RGB(31, 10, 10));
++        if (!(open & 2)) Pkbn_FillRect(fb, px + CELL - 1, py, 1, CELL, ok ? RGB(31, 31, 31) : RGB(31, 10, 10));
+     }
+ }
+ 
+@@ -260,8 +330,28 @@ static void DrawList(u16 *fb)
+         u8 avail = Available(prog);
+         bool8 cur = prog == sN.listCursor;
+         if (cur)
+-            Gfx_FillBlend(fb, LIST_X - 2, y, CW - LIST_X - 2, ROW_H, RGB(31, 26, 6), (sN.mode == M_LIST) ? 8 : 4);
+-        Pkbn_FillRect(fb, LIST_X, y + 2, 6, 7, Vfx_TypeColor(gPkbnNcps[prog].types[0]));
++        {
++            // POC-15: a gold bar with a pointer
++            Gfx_FillBlend(fb, LIST_X - 2, y, CW - LIST_X - 2, ROW_H, RGB(31, 26, 6), (sN.mode == M_LIST) ? 7 : 3);
++            Pkbn_FillRect(fb, LIST_X - 2, y, 1, ROW_H, RGB(31, 28, 10));
++            if (sN.mode == M_LIST && ((sN.t / 8) & 1))
++                Text(fb, LIST_X - 9, y - 2, ">", RGB(31, 28, 10));
++        }
++        {
++            // the program's own shape in its colour, 2 px per cell
++            s8 sx[25], sy[25];
++            u8 k, cnt = Navi_ShapeCells(prog, Navi_IsCompressed(prog, &sN.owner), 0, sx, sy);
++            s8 minX = 0, minY = 0;
++            u16 pc = Vfx_TypeColor(gPkbnNcps[prog].types[0]);
++            for (k = 0; k < cnt; k++)
++            {
++                if (sx[k] < minX) minX = sx[k];
++                if (sy[k] < minY) minY = sy[k];
++            }
++            for (k = 0; k < cnt; k++)
++                if (sx[k] - minX < 4 && sy[k] - minY < 4)
++                    Pkbn_FillRect(fb, LIST_X + (sx[k] - minX) * 2, y + 1 + (sy[k] - minY) * 2, 2, 2, avail ? pc : Gfx_Blend(pc, RGB(8, 8, 10), 10));
++        }
+         Text(fb, LIST_X + 9, y - 2, gPkbnNcps[prog].name, avail ? RGB(31, 31, 31) : RGB(14, 14, 16));
+         snprintf(line, sizeof(line), "x%u", avail);
+         Text(fb, CW - 18, y - 2, line, avail ? RGB(31, 27, 8) : RGB(14, 14, 16));
+@@ -282,7 +372,15 @@ static void DrawPreview(u16 *fb)
+     s32 y = LIST_Y + LIST_ROWS * ROW_H + 6;
+     Draw_Box(fb, LIST_X - 4, y, CW - LIST_X + 2, CH - y - 1, RGB(3, 5, 12), RGB(20, 24, 31), 14);
+     for (i = 0; i < n; i++)
+-        Pkbn_FillRect(fb, LIST_X + 2 + dx[i] * 7, y + 4 + dy[i] * 7, 6, 6, Vfx_TypeColor(p->types[0]));
++    {
++        u16 c = Vfx_TypeColor(p->types[0]);
++        s32 bx = LIST_X + 2 + dx[i] * 7, by = y + 4 + dy[i] * 7;
++        Pkbn_FillRect(fb, bx, by, 6, 6, c);
++        Pkbn_FillRect(fb, bx, by, 6, 1, Gfx_Blend(c, RGB(31, 31, 31), 8));
++        Pkbn_FillRect(fb, bx, by, 1, 6, Gfx_Blend(c, RGB(31, 31, 31), 6));
++        Pkbn_FillRect(fb, bx, by + 5, 6, 1, Gfx_Blend(c, RGB(0, 0, 0), 9));
++        Pkbn_FillRect(fb, bx + 5, by, 1, 6, Gfx_Blend(c, RGB(0, 0, 0), 9));
++    }
+     Text(fb, LIST_X + 40, y - 1, p->plus ? "PLUS PART" : "ON THE LINE", p->plus ? RGB(16, 28, 31) : RGB(31, 26, 6));
+     {
+         static const char *const sCond[NCP_COND_COUNT] = {"COOL", "BEAUTY", "CUTE", "SMART", "TOUGH"};
+@@ -375,7 +473,11 @@ static void DrawInfo(u16 *fb)
+ static void DrawHeader(u16 *fb)
+ {
+     struct PkbnImage icon;
+-    s32 x;
++    s32 x, i;
++    // POC-15: a title bar in the PET's style - a blue gradient with a light edge
++    for (i = 0; i < 14; i++)
++        Pkbn_FillRect(fb, 0, i, CW, 1, Gfx_Blend(RGB(6, 12, 28), RGB(1, 3, 10), (u8)(i)));
++    Pkbn_FillRect(fb, 0, 14, CW, 1, RGB(14, 22, 31));
+     Pkbn_DrawEmText(fb, 4, -2, "NAVICUST", PKBN_FONT_NORMAL, RGB(31, 26, 6), RGB(2, 2, 5));
+     x = Text(fb, 74, 0, sN.name, RGB(31, 31, 31));
+     icon = Gfx_TypeIcon(sN.owner.types[0]);
+-- 
+2.43.0
+
