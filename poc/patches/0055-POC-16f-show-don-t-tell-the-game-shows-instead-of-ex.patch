@@ -1,0 +1,982 @@
+From 6abfa76e32e3aace60f6b1c28ff3805abd35649d Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 18:30:11 +0300
+Subject: [PATCH] POC-16f: show, don't tell - the game shows instead of
+ explaining
+
+- The Omega choice has no words: the Leader's lead Pokemon on a calm card and a red Omega
+  (drawn: Gfx_DrawOmega); on the Omega the screen bleeds red and the ace growls. An Omega battle's
+  banner is red with an Omega at each end.
+- NET CHALLENGE: icons, a line of flavour, a clock, the best time. No counts, rules, rewards or
+  unlock hints; locked entries are ?????; the Omega battles carry a red Omega.
+- Rewards named only when won ("TIME 0:08.2", "GOT Shield!"). Battle, Custom screen and folder
+  screens lose their explanatory lines; the new programs' texts are BN6's own.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/gfx.h           |   1 +
+ src/pkbn/busting.c           |   6 +-
+ src/pkbn/challenge.c         |   7 +--
+ src/pkbn/challenge_table.inc |  46 +++++++--------
+ src/pkbn/challenge_ui.c      | 111 ++++++++++++-----------------------
+ src/pkbn/folder_ui.c         |  35 ++++-------
+ src/pkbn/gfx.c               |  18 ++++++
+ src/pkbn/grid_battle.c       |  30 ++++------
+ src/pkbn/grid_draw.c         |  68 ++++++++++-----------
+ src/pkbn/grid_moves.c        |  12 ++--
+ src/pkbn/leader.c            |  16 ++---
+ src/pkbn/ncp_table.c         |  38 ++++++------
+ 12 files changed, 172 insertions(+), 216 deletions(-)
+
+diff --git a/include/pkbn/gfx.h b/include/pkbn/gfx.h
+index c75df3c..486bb90 100644
+--- a/include/pkbn/gfx.h
++++ b/include/pkbn/gfx.h
+@@ -60,6 +60,7 @@ struct PkbnImage Gfx_TypeIcon(u8 type);
+ u16 Gfx_Blend(u16 a, u16 b, u8 amt16);           // amt16 = 0 -> a, 16 -> b
+ void Gfx_FillBlend(u16 *fb, s32 x, s32 y, s32 w, s32 h, u16 color, u8 amt16);
+ void Gfx_Darken(u16 *fb, s32 x, s32 y, s32 w, s32 h, u8 amt16);
++void Gfx_DrawOmega(u16 *fb, s32 x, s32 y, bool8 big, s32 scale, u16 color);   // POC-16: 9 / 13 px tall x scale
+ void Gfx_Ellipse(u16 *fb, s32 cx, s32 cy, s32 rx, s32 ry, u16 color, u8 amt16);
+ 
+ void Gfx_LoadMonPic(struct PkbnMonPic *dst, u16 species, u32 personality, u32 otId);
+diff --git a/src/pkbn/busting.c b/src/pkbn/busting.c
+index a90e5bb..6a16553 100644
+--- a/src/pkbn/busting.c
++++ b/src/pkbn/busting.c
+@@ -280,7 +280,7 @@ static void GiveChip(u16 move, u8 letter, char *msg, u32 size)
+     {
+         // POC-16d: BN6's Collect ("Get more chips frm enmy") on the lead Pokémon: one more copy
+         PkbnPack_Add(move, letter, 2);
+-        snprintf(msg, size, "GOT 2 CHIPS: %s! (COLLECT)", nm);
++        snprintf(msg, size, "GOT 2 CHIPS: %s!", nm);
+         return;
+     }
+     PkbnPack_Add(move, letter, 1);
+@@ -463,14 +463,14 @@ void Capture_Reward(u8 grade, char *msg, u32 size, bool8 canPick)
+                 gCapturePick.copies[gCapturePick.count++] = 1;
+             }
+         }
+-        snprintf(msg, size, "MASTER BALL: A CHIP OF EVERY MOVE! PICK THEIR CODES.");
++        snprintf(msg, size, "CHIPS OF EVERY MOVE!");
+     }
+     else if (ball == ITEM_ULTRA_BALL && canPick && tier >= 3 && m1 != MOVE_NONE)
+     {
+         gCapturePick.move[0] = tier == 4 ? m2 : m1;
+         gCapturePick.copies[0] = 1;
+         gCapturePick.count = 1;
+-        snprintf(msg, size, "ULTRA BALL: A CHIP OF ITS MOVE! PICK ITS CODE.");
++        snprintf(msg, size, "A CHIP OF ITS MOVE!");
+     }
+     else if (ball == ITEM_MASTER_BALL)
+     {
+diff --git a/src/pkbn/challenge.c b/src/pkbn/challenge.c
+index 0240edc..34dbaa4 100644
+--- a/src/pkbn/challenge.c
++++ b/src/pkbn/challenge.c
+@@ -79,12 +79,11 @@ void PkbnChallenge_AfterWin(u8 i, u32 frames, char *line1, char *line2, u32 size
+         PkbnProgram_GrantByName(c->rewards[0], 1);
+         if (c->rewards[1] != NULL)
+             PkbnProgram_GrantByName(c->rewards[1], 1);
+-        snprintf(line1, size, "%s CLEARED IN %u:%02u.%u!", c->name, (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60),
+-                 (unsigned)(s10 % 10));
++        snprintf(line1, size, "TIME %u:%02u.%u", (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60), (unsigned)(s10 % 10));
+         if (c->rewards[1] != NULL)
+-            snprintf(line2, size, "GOT PROGRAMS %s AND %s!", c->rewards[0], c->rewards[1]);
++            snprintf(line2, size, "GOT %s AND %s!", c->rewards[0], c->rewards[1]);
+         else
+-            snprintf(line2, size, "GOT THE RARE PROGRAM %s!", c->rewards[0]);
++            snprintf(line2, size, "GOT %s!", c->rewards[0]);
+     }
+     else
+     {
+diff --git a/src/pkbn/challenge_table.inc b/src/pkbn/challenge_table.inc
+index 0a108f1..be05d47 100644
+--- a/src/pkbn/challenge_table.inc
++++ b/src/pkbn/challenge_table.inc
+@@ -1,5 +1,5 @@
+     {
+-        "PEBBLE STORM", "Three Geodude roll in at once.",
++        "PEBBLE STORM", "Something is rolling downhill.",
+         0, 1, 3, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "HardStn", "Zinc" }, 3,
+         {
+             { SPECIES_GEODUDE, 12, { MOVE_TACKLE, MOVE_ROCK_THROW, MOVE_DEFENSE_CURL, MOVE_MUD_SPORT } },
+@@ -8,7 +8,7 @@
+         },
+     },
+     {
+-        "BUG SWARM", "A swarm that won't wait: clear it in 60 seconds.",
++        "BUG SWARM", "They won't wait.",
+         1, 1, 3, CH_WEATHER_NONE, CH_PANELS_NONE, 60, { "SlvPowdr", "QuickClw" }, 4,
+         {
+             { SPECIES_VOLBEAT, 16, { MOVE_TACKLE, MOVE_CONFUSE_RAY, MOVE_QUICK_ATTACK, MOVE_SIGNAL_BEAM } },
+@@ -18,7 +18,7 @@
+         },
+     },
+     {
+-        "STATIC FIELD", "Magnets on cracked ground.",
++        "STATIC FIELD", "The ground crackles.",
+         2, 2, 2, CH_WEATHER_NONE, CH_PANELS_CRACKED, 0, { "Carbos", "BrtPowdr" }, 4,
+         {
+             { SPECIES_MAGNEMITE, 22, { MOVE_THUNDER_WAVE, MOVE_THUNDER_SHOCK, MOVE_SPARK, MOVE_SUPERSONIC } },
+@@ -28,7 +28,7 @@
+         },
+     },
+     {
+-        "HEAT WAVE", "Under a burning sun.",
++        "HEAT WAVE", "The air shimmers.",
+         3, 2, 2, CH_WEATHER_SUN, CH_PANELS_NONE, 0, { "Calcium", "MircSeed" }, 4,
+         {
+             { SPECIES_SLUGMA, 26, { MOVE_EMBER, MOVE_ROCK_THROW, MOVE_HARDEN, MOVE_AMNESIA } },
+@@ -38,7 +38,7 @@
+         },
+     },
+     {
+-        "DESERT GAUNTLET", "Six in a row in a sandstorm, three minutes.",
++        "DESERT GAUNTLET", "The sand never stops.",
+         4, 3, 1, CH_WEATHER_SAND, CH_PANELS_NONE, 180, { "SoftSand", "HP Up" }, 6,
+         {
+             { SPECIES_SANDSHREW, 28, { MOVE_SLASH, MOVE_SAND_ATTACK, MOVE_POISON_STING, MOVE_SWIFT } },
+@@ -50,7 +50,7 @@
+         },
+     },
+     {
+-        "SKY RAID", "Three flyers dive at once.",
++        "SKY RAID", "Shadows overhead.",
+         5, 3, 3, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "PoisBarb", "KingRock" }, 4,
+         {
+             { SPECIES_SWELLOW, 32, { MOVE_WING_ATTACK, MOVE_QUICK_ATTACK, MOVE_ENDEAVOR, MOVE_AERIAL_ACE } },
+@@ -60,7 +60,7 @@
+         },
+     },
+     {
+-        "DREAM MAZE", "Minds that put you to sleep.",
++        "DREAM MAZE", "Don't close your eyes.",
+         6, 4, 2, CH_WEATHER_NONE, CH_PANELS_HOLY, 0, { "ScopLens", "ShelBell" }, 4,
+         {
+             { SPECIES_KIRLIA, 36, { MOVE_HYPNOSIS, MOVE_PSYCHIC, MOVE_CALM_MIND, MOVE_DREAM_EATER } },
+@@ -70,7 +70,7 @@
+         },
+     },
+     {
+-        "DEEP CURRENT", "In the rain, on the water, three at once.",
++        "DEEP CURRENT", "The tide pulls.",
+         7, 4, 3, CH_WEATHER_RAIN, CH_PANELS_CURRENT, 0, { "NevMeltI", "Leftovrs" }, 4,
+         {
+             { SPECIES_SHARPEDO, 40, { MOVE_CRUNCH, MOVE_SURF, MOVE_AGILITY, MOVE_SLASH } },
+@@ -80,7 +80,7 @@
+         },
+     },
+     {
+-        "DRAGON'S DEN", "Four dragons, one after another.",
++        "DRAGON'S DEN", "Something sleeps below.",
+         8, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "DrgnFang", "SuprArmr" }, 4,
+         {
+             { SPECIES_SHELGON, 45, { MOVE_DRAGON_CLAW, MOVE_HEADBUTT, MOVE_PROTECT, MOVE_ROCK_TOMB } },
+@@ -90,7 +90,7 @@
+         },
+     },
+     {
+-        "PHANTOM HOUR", "Three ghosts at once, two minutes.",
++        "PHANTOM HOUR", "The clock strikes.",
+         8, 5, 3, CH_WEATHER_NONE, CH_PANELS_POISON, 120, { "SpellTag", "BlkGlass" }, 4,
+         {
+             { SPECIES_BANETTE, 45, { MOVE_SHADOW_BALL, MOVE_WILL_O_WISP, MOVE_FAINT_ATTACK, MOVE_CURSE } },
+@@ -100,7 +100,7 @@
+         },
+     },
+     {
+-        "IRON WALL", "Steel that doesn't break.",
++        "IRON WALL", "It doesn't break.",
+         8, 5, 2, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "MetlCoat", "FocsBand" }, 4,
+         {
+             { SPECIES_AGGRON, 50, { MOVE_IRON_TAIL, MOVE_DOUBLE_EDGE, MOVE_METAL_SOUND, MOVE_PROTECT } },
+@@ -110,7 +110,7 @@
+         },
+     },
+     {
+-        "MASTER NET", "The hardest challenge: six champions, three at once.",
++        "MASTER NET", "Champions only.",
+         9, 5, 3, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "HP+200", "ChoiceBd" }, 6,
+         {
+             { SPECIES_METAGROSS, 60, { MOVE_METEOR_MASH, MOVE_PSYCHIC, MOVE_EARTHQUAKE, MOVE_AGILITY } },
+@@ -125,7 +125,7 @@
+     // Moves: each species' strongest level-up moves up to its level (STAB first, different types, then its latest status
+     // move), from src/data/pokemon/level_up_learnsets.h - tools/pick_challenge_moves.py.
+     {
+-        "ROCK LADDER", "Five Rock types in a row: your HP carries over.",
++        "ROCK LADDER", "Stone upon stone.",
+         PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "HP+300", NULL }, 5,
+         {
+             { SPECIES_RELICANTH, 55, { MOVE_ANCIENT_POWER, MOVE_TAKE_DOWN, MOVE_ROCK_TOMB, MOVE_REST } },
+@@ -137,7 +137,7 @@
+         0, 0,
+     },
+     {
+-        "FIGHTING LADDER", "Five Fighting types in a row: your HP carries over.",
++        "FIGHTING LADDER", "Fists up.",
+         PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "AntiDmg", NULL }, 5,
+         {
+             { SPECIES_HARIYAMA, 55, { MOVE_VITAL_THROW, MOVE_SMELLING_SALT, MOVE_FAKE_OUT, MOVE_ENDURE } },
+@@ -149,7 +149,7 @@
+         0, 0,
+     },
+     {
+-        "ELECTRIC LADDER", "Five Electric types in a row: your HP carries over.",
++        "ELECTRIC LADDER", "Live wires.",
+         PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "Battery", NULL }, 5,
+         {
+             { SPECIES_ELECTRODE, 55, { MOVE_SPARK, MOVE_SWIFT, MOVE_TACKLE, MOVE_LIGHT_SCREEN } },
+@@ -161,7 +161,7 @@
+         0, 0,
+     },
+     {
+-        "FIRE LADDER", "Five Fire types in a row: your HP carries over.",
++        "FIRE LADDER", "Nothing but ash.",
+         PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "OilBody", NULL }, 5,
+         {
+             { SPECIES_TORKOAL, 55, { MOVE_HEAT_WAVE, MOVE_BODY_SLAM, MOVE_EMBER, MOVE_AMNESIA } },
+@@ -173,7 +173,7 @@
+         0, 0,
+     },
+     {
+-        "NORMAL LADDER", "Five Normal types in a row: your HP carries over.",
++        "NORMAL LADDER", "No tricks.",
+         PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "Collect", NULL }, 5,
+         {
+             { SPECIES_KECLEON, 55, { MOVE_SLASH, MOVE_PSYBEAM, MOVE_ANCIENT_POWER, MOVE_SUBSTITUTE } },
+@@ -185,7 +185,7 @@
+         0, 0,
+     },
+     {
+-        "FLYING LADDER", "Five Flying types in a row: your HP carries over.",
++        "FLYING LADDER", "Eyes on the sky.",
+         PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "SneakRun", NULL }, 5,
+         {
+             { SPECIES_PELIPPER, 55, { MOVE_SPIT_UP, MOVE_WING_ATTACK, MOVE_WATER_GUN, MOVE_SWALLOW } },
+@@ -197,7 +197,7 @@
+         0, 0,
+     },
+     {
+-        "PSYCHIC LADDER", "Five Psychic types in a row: your HP carries over.",
++        "PSYCHIC LADDER", "They already know.",
+         PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "MegFldr1", NULL }, 5,
+         {
+             { SPECIES_GRUMPIG, 55, { MOVE_PSYCHIC, MOVE_BOUNCE, MOVE_SNORE, MOVE_REST } },
+@@ -209,7 +209,7 @@
+         0, 0,
+     },
+     {
+-        "WATER LADDER", "Five Water types in a row: your HP carries over.",
++        "WATER LADDER", "Deeper still.",
+         PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "HP+400", NULL }, 5,
+         {
+             { SPECIES_WHISCASH, 55, { MOVE_EARTHQUAKE, MOVE_FUTURE_SIGHT, MOVE_WATER_GUN, MOVE_REST } },
+@@ -221,7 +221,7 @@
+         0, 0,
+     },
+     {
+-        "OMEGA GROUDON", "Groudon, Lv80: cracked ground and harsh sun.",
++        "GROUDON", "The earth splits.",
+         PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_SUN, CH_PANELS_CRACKED, 120, { "Tango", NULL }, 1,
+         {
+             { SPECIES_GROUDON, 80, { MOVE_EARTHQUAKE, MOVE_ERUPTION, MOVE_SOLAR_BEAM, MOVE_REST } }
+@@ -229,7 +229,7 @@
+         FLAG_DEFEATED_GROUDON, CHR_BOSS,
+     },
+     {
+-        "OMEGA KYOGRE", "Kyogre, Lv80: rain and currents. Nothing heals.",
++        "KYOGRE", "The sea rises.",
+         PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_RAIN, CH_PANELS_CURRENT, 0, { "AutoHeal", NULL }, 1,
+         {
+             { SPECIES_KYOGRE, 80, { MOVE_WATER_SPOUT, MOVE_DOUBLE_EDGE, MOVE_ICE_BEAM, MOVE_REST } }
+@@ -237,7 +237,7 @@
+         FLAG_DEFEATED_KYOGRE, CHR_BOSS | CHR_NO_HEAL,
+     },
+     {
+-        "OMEGA RAYQUAZA", "Rayquaza, Lv80: dives every 6 s. Nothing heals.",
++        "RAYQUAZA", "The sky tears open.",
+         PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 150, { "FldrPak1", NULL }, 1,
+         {
+             { SPECIES_RAYQUAZA, 80, { MOVE_OUTRAGE, MOVE_FLY, MOVE_EXTREME_SPEED, MOVE_REST } }
+diff --git a/src/pkbn/challenge_ui.c b/src/pkbn/challenge_ui.c
+index 6a2272a..6f21cd1 100644
+--- a/src/pkbn/challenge_ui.c
++++ b/src/pkbn/challenge_ui.c
+@@ -86,6 +86,7 @@ static void LoadIcons(void)
+     sC.iconsFor = sC.cursor;
+ }
+ 
++// POC-16 (Khaled: show, don't tell): locked entries are ?????, the Ω battles wear a red Ω, no hints.
+ static void DrawList(u16 *fb)
+ {
+     u8 i, cleared = 0;
+@@ -93,7 +94,7 @@ static void DrawList(u16 *fb)
+     for (i = 0; i < PKBN_CHALLENGE_COUNT; i++)
+         cleared += PkbnChallenge_Cleared(i);
+     Pkbn_DrawEmText(fb, 6, 0, "NET CHALLENGE", PKBN_FONT_NORMAL, RGB(8, 28, 31), RGB(2, 2, 5));
+-    snprintf(line, sizeof(line), "CLEARED %u/%u", cleared, PKBN_CHALLENGE_COUNT);
++    snprintf(line, sizeof(line), "%u/%u", cleared, PKBN_CHALLENGE_COUNT);
+     Text(fb, CW - 4 - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), 4, line, RGB(31, 31, 31));
+     if (sC.cursor < sC.top)
+         sC.top = sC.cursor;
+@@ -106,24 +107,26 @@ static void DrawList(u16 *fb)
+     for (i = sC.top; i < PKBN_CHALLENGE_COUNT && i < sC.top + LIST_ROWS; i++)
+     {
+         s32 y = LIST_Y + (i - sC.top) * ROW_H;
+-        bool8 open = PkbnChallenge_Unlocked(i), on = i == sC.cursor;
++        bool8 open = PkbnChallenge_Unlocked(i), on = i == sC.cursor, omega = (gPkbnChallenges[i].rules & CHR_BOSS) != 0;
+         if (on)
+         {
+-            Pkbn_FillRect(fb, LIST_X, y, PANEL_X - LIST_X - 4, ROW_H, RGB(6, 10, 22));
+-            Pkbn_FrameRect(fb, LIST_X, y, PANEL_X - LIST_X - 4, ROW_H, RGB(8, 28, 31));
++            Pkbn_FillRect(fb, LIST_X, y, PANEL_X - LIST_X - 4, ROW_H, omega && open ? RGB(12, 1, 3) : RGB(6, 10, 22));
++            Pkbn_FrameRect(fb, LIST_X, y, PANEL_X - LIST_X - 4, ROW_H, omega && open ? RGB(31, 4, 4) : RGB(8, 28, 31));
+         }
+         if (PkbnChallenge_Cleared(i))
+             Text(fb, LIST_X + 3, y, "*", RGB(31, 26, 6));
+-        Text(fb, LIST_X + 12, y, gPkbnChallenges[i].name, open ? RGB(31, 31, 31) : RGB(12, 13, 16));
+-        if (!open && gPkbnChallenges[i].unlockFlag && PkbnChallenge_Badges() >= gPkbnChallenges[i].badges)
+-            Text(fb, PANEL_X - 8 - Pkbn_EmTextWidth("FIND IT", PKBN_FONT_SMALL), y, "FIND IT", RGB(20, 10, 10));
+-        else if (!open)
++        if (!open)
+         {
+-            snprintf(line, sizeof(line), gPkbnChallenges[i].badges == PKBN_CHALLENGE_BADGES_CHAMPION ? "CHAMP"
+-                     : gPkbnChallenges[i].badges == 1 ? "%u BADGE" : "%u BADGES",
+-                     gPkbnChallenges[i].badges);
+-            Text(fb, PANEL_X - 8 - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), y, line, RGB(20, 10, 10));
++            Text(fb, LIST_X + 12, y, "?????", RGB(12, 13, 16));
++            continue;
+         }
++        if (omega)
++        {
++            Gfx_DrawOmega(fb, LIST_X + 12, y + 1, FALSE, 1, RGB(31, 4, 4));
++            Text(fb, LIST_X + 24, y, gPkbnChallenges[i].name, RGB(31, 18, 16));
++        }
++        else
++            Text(fb, LIST_X + 12, y, gPkbnChallenges[i].name, RGB(31, 31, 31));
+     }
+ }
+ 
+@@ -148,7 +151,7 @@ static void DrawRecords(u16 *fb)
+     Text(fb, 84, LIST_Y, "BEST TIME", RGB(16, 18, 24));
+     Text(fb, 136, LIST_Y, "BUSTING", RGB(16, 18, 24));
+     Text(fb, 178, LIST_Y, "CHIP", RGB(16, 18, 24));
+-    Text(fb, 206, LIST_Y, "OMEGA", RGB(31, 12, 24));   // POC-16d
++    Gfx_DrawOmega(fb, 214, LIST_Y + 1, FALSE, 1, RGB(31, 4, 4));   // POC-16d
+     for (l = 0; l < PKBN_LEADERS; l++)
+     {
+         u16 frames;
+@@ -162,10 +165,8 @@ static void DrawRecords(u16 *fb)
+         if (PkbnLeader_OmegaWon(l))
+         {
+             TimeText(t, sizeof(t), PkbnLeader_OmegaBest(l));
+-            Text(fb, 206, y, t, RGB(31, 12, 24));
++            Text(fb, 206, y, t, RGB(31, 8, 8));
+         }
+-        else if (chip >= 3)
+-            Text(fb, 206, y, "OPEN", RGB(31, 26, 6));
+         if (level)
+         {
+             if (level >= 11)
+@@ -184,74 +185,36 @@ static void DrawRecords(u16 *fb)
+ 
+ static void DrawPanel(u16 *fb)
+ {
+-    static const char *const sWeather[] = { NULL, "SUN", "RAIN", "SANDSTORM", "HAIL" };
+-    static const char *const sPanels[] = { NULL, "CRACKED PANELS", "HOLY PANELS", "CURRENTS", "POISON PANELS" };
+     const struct PkbnChallenge *c = &gPkbnChallenges[sC.cursor];
+-    bool8 open = PkbnChallenge_Unlocked(sC.cursor), done = PkbnChallenge_Cleared(sC.cursor);
+-    char line[64];
+-    s32 i, y, lo = 100, hi = 0;
++    bool8 open = PkbnChallenge_Unlocked(sC.cursor), omega = (c->rules & CHR_BOSS) != 0;
++    char line[32], t[16];
++    s32 i, y;
+     if (sC.iconsFor != sC.cursor)
+         LoadIcons();
+-    Pkbn_FillRect(fb, PANEL_X, LIST_Y - 2, CW - PANEL_X - 4, CH - LIST_Y - 24, RGB(2, 3, 9));
+-    Pkbn_FrameRect(fb, PANEL_X, LIST_Y - 2, CW - PANEL_X - 4, CH - LIST_Y - 24, RGB(8, 10, 16));
+-    for (i = 0; i < c->monCount; i++)
+-        Pkbn_BlitIcon(fb, sC.icons[i], PANEL_X + 4 + (i % 3) * 34, LIST_Y - 6 + (i / 3) * 26, FALSE,
+-                      open ? 0 : RGB(4, 4, 8));
+-    y = LIST_Y + 2 + ((c->monCount + 2) / 3) * 26;
+-    y = TextWrap(fb, PANEL_X + 4, y, CW - PANEL_X - 12, 3, c->desc, RGB(22, 26, 31));
+-    for (i = 0; i < c->monCount; i++)
++    Pkbn_FillRect(fb, PANEL_X, LIST_Y - 2, CW - PANEL_X - 4, CH - LIST_Y - 24, omega && open ? RGB(6, 0, 2) : RGB(2, 3, 9));
++    Pkbn_FrameRect(fb, PANEL_X, LIST_Y - 2, CW - PANEL_X - 4, CH - LIST_Y - 24, omega && open ? RGB(20, 3, 4) : RGB(8, 10, 16));
++    if (!open)
+     {
+-        if (c->mons[i].level < lo) lo = c->mons[i].level;
+-        if (c->mons[i].level > hi) hi = c->mons[i].level;
++        TextWrap(fb, PANEL_X + 4, LIST_Y + 2, CW - PANEL_X - 12, 1, "?????", RGB(12, 13, 16));
++        return;
+     }
+-    if (c->monCount == 1)
+-        snprintf(line, sizeof(line), "1 FOE, LV%u", lo);
+-    else if (lo == hi)
+-        snprintf(line, sizeof(line), "%u FOES LV%u, %u AT ONCE", c->monCount, lo, c->together);
+-    else if (c->together == 1)
+-        snprintf(line, sizeof(line), "%u FOES LV%u-%u, IN TURN", c->monCount, lo, hi);   // POC-16e: fits the panel
+-    else
+-        snprintf(line, sizeof(line), "%u FOES LV%u-%u, %u AT ONCE", c->monCount, lo, hi, c->together);
+-    Text(fb, PANEL_X + 4, y, line, RGB(31, 31, 31));
+-    y += 10;
+-    line[0] = '\0';
+-    if (c->weather)
+-        snprintf(line, sizeof(line), "%s", sWeather[c->weather]);
+-    if (c->panels)
+-        snprintf(line + strlen(line), sizeof(line) - strlen(line), "%s%s", line[0] ? ", " : "", sPanels[c->panels]);
++    if (omega)
++        Gfx_DrawOmega(fb, CW - 4 - 8 - 26, LIST_Y + 4, TRUE, 2, RGB(16, 2, 3));   // behind the boss
++    for (i = 0; i < c->monCount; i++)
++        Pkbn_BlitIcon(fb, sC.icons[i], PANEL_X + 4 + (i % 3) * 34, LIST_Y - 6 + (i / 3) * 26, FALSE, 0);
++    y = LIST_Y + 2 + ((c->monCount + 2) / 3) * 26;
++    y = TextWrap(fb, PANEL_X + 4, y, CW - PANEL_X - 12, 3, c->desc, omega ? RGB(31, 18, 16) : RGB(22, 26, 31));
+     if (c->seconds)
+-        snprintf(line + strlen(line), sizeof(line) - strlen(line), "%s%u SEC", line[0] ? ", " : "", c->seconds);
+-    if (line[0])
+     {
+-        Text(fb, PANEL_X + 4, y, line, RGB(31, 20, 10));
+-        y += 10;
++        snprintf(line, sizeof(line), "%u:%02u", c->seconds / 60, c->seconds % 60);   // a clock is a fact, not a hint
++        Text(fb, PANEL_X + 4, y + 4, line, RGB(31, 20, 10));
++        y += 14;
+     }
+-    if (c->unlockFlag && !open)
+-        snprintf(line, sizeof(line), "CATCH OR BEAT IT FIRST");
+-    else if (c->rules & CHR_NO_HEAL)
+-        snprintf(line, sizeof(line), "NOTHING HEALS. FOE STRENGTH %u/5", c->tier);
+-    else
+-        snprintf(line, sizeof(line), "FOE STRENGTH %u/5", c->tier);
+-    Text(fb, PANEL_X + 4, y, line, RGB(16, 18, 24));
+     if (PkbnChallenge_Best(sC.cursor))
+     {
+-        char t[16];
+         TimeText(t, sizeof(t), PkbnChallenge_Best(sC.cursor));
+-        snprintf(line, sizeof(line), "BEST TIME %s", t);
+-        Text(fb, PANEL_X + 4, y + 10, line, RGB(8, 28, 31));
+-        y += 10;
+-    }
+-    y += 11;
+-    if (done)
+-        Text(fb, PANEL_X + 4, y, "AGAIN: * CHIP DATA", RGB(31, 26, 6));
+-    else
+-    {
+-        Text(fb, PANEL_X + 4, y, c->rewards[1] ? "FIRST CLEAR PAYS PROGRAMS" : "FIRST CLEAR PAYS", RGB(10, 31, 12));
+-        if (c->rewards[1])
+-            snprintf(line, sizeof(line), "%s + %s", c->rewards[0], c->rewards[1]);
+-        else
+-            snprintf(line, sizeof(line), "RARE PROGRAM %s", c->rewards[0]);
+-        Text(fb, PANEL_X + 10, y + 10, line, RGB(10, 31, 12));
++        snprintf(line, sizeof(line), "BEST %s", t);
++        Text(fb, PANEL_X + 4, y + 4, line, RGB(8, 28, 31));
+     }
+ }
+ 
+@@ -271,7 +234,7 @@ static void Draw(u16 *fb)
+     }
+     DrawList(fb);
+     DrawPanel(fb);
+-    Text(fb, 4, CH - 13, PkbnChallenge_Unlocked(sC.cursor) ? "A:JACK IN  L/R:RECORDS" : "LOCKED  L/R:RECORDS", RGB(16, 18, 24));
++    Text(fb, 4, CH - 13, PkbnChallenge_Unlocked(sC.cursor) ? "A:JACK IN  L/R:RECORDS" : "L/R:RECORDS", RGB(16, 18, 24));
+     if (sC.replay)
+         Text(fb, CW - 4 - Pkbn_EmTextWidth("SELECT:REPLAY LAST BATTLE", PKBN_FONT_SMALL), CH - 13, "SELECT:REPLAY LAST BATTLE",
+              RGB(31, 20, 10));
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index 0afcb0f..9ba7dbc 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -435,7 +435,7 @@ static void PartnerCycleMove(u8 i)
+ static void DrawPartnerList(u16 *fb)
+ {
+     s32 i;
+-    Text(fb, LIST_X + 4, LIST_Y - 14, "PARTNER CHIPS: SWITCH IN + MOVE", RGB(12, 14, 20));
++    Text(fb, LIST_X + 4, LIST_Y - 14, "PARTNER", RGB(12, 14, 20));
+     for (i = 0; i < PKBN_PARTNER_SLOTS; i++)
+     {
+         struct PkbnPartnerSlot *ps = PkbnPartner_Slot(i);
+@@ -803,8 +803,8 @@ static void DrawPanel(u16 *fb)
+     RowChip(sF.cursor[sF.page], &mv, &letter);
+     if (sF.page == PAGE_LIBRARY && !PkbnLibrary_Has(mv))
+     {
+-        Text(fb, x + 2, y + 4, "NOT SEEN YET", RGB(16, 18, 22));
+-        TextWrap(fb, x + 2, y + 20, CW - x - 6, 6, "Learn it, catch a Pokemon that knows it, buy it, find it as chip data or win it to fill this page.", RGB(22, 26, 31));
++        Text(fb, x + 2, y + 4, "?????", RGB(16, 18, 22));
++
+         return;
+     }
+     // the chip: BN-style icon, code, name
+@@ -951,7 +951,7 @@ static void AddToFolder(u16 mv, u8 letter)
+     {
+         char line[64], nm[MOVE_NAME_LENGTH + 1];
+         MoveName(nm, sizeof(nm), mv);
+-        snprintf(line, sizeof(line), "LIMIT: %u %s PER FOLDER (MB %u)", Chip_CopyCap(mv), nm, Chip_MB(mv));
++        snprintf(line, sizeof(line), "%s: %u MAX", nm, Chip_CopyCap(mv));
+         Note(line);
+     }
+     else if (!PartyCanUse(mv))
+@@ -1008,11 +1008,7 @@ static void Buy(void)
+     r = &sF.candy[sF.cursor[PAGE_CANDY]];
+     if (r->needLevel)
+     {
+-        char line[64], sp[16];
+-        Pkbn_GameStringToAscii(sp, gSpeciesNames[r->species], sizeof(sp));
+-        snprintf(line, sizeof(line), "LOCKED: %s LEARNS IT AT LV%u", sp, r->needLevel);
+-        Note(line);
+-        PlaySE(SE_FAILURE);
++        PlaySE(SE_FAILURE);   // the row already shows the level it needs
+         return;
+     }
+     cost = CandyCost(r->move, r->letter);
+@@ -1052,12 +1048,6 @@ static void CycleCode(void)
+ 
+ // POC-16c: the FOLDER page's SELECT menu: how to build the folder you're editing (src/pkbn/folder.c)
+ static const char *const sStyleNames[FOLDER_STYLE_COUNT] = { "BALANCED", "VS NEXT GYM", "PA HUNTER", "ONE CODE" };
+-static const char *const sStyleDesc[FOLDER_STYLE_COUNT] = {
+-    "Best chips for the party",
+-    "Beats the next Leader's type",
+-    "PAs you can build, one code",
+-    "Your top code + *: big hands",
+-};
+ 
+ static void BuildWithStyle(u8 style)
+ {
+@@ -1068,8 +1058,7 @@ static void BuildWithStyle(u8 style)
+         PkbnFolderEdit_Set(NULL, NULL, 0);
+         LoadFolder();
+         BuildGroups();
+-        PlaySE(SE_SELECT);
+-        Note("AUTO-BUILT FROM YOUR PACK");
++        PlaySE(SE_SUCCESS);
+         return;
+     }
+     sF.fCount = PkbnFolder_BuildStyle(style, sF.party, sF.partyCount, sF.fMove, sF.fLetter, what, sizeof(what));
+@@ -1088,7 +1077,7 @@ static void BuildWithStyle(u8 style)
+     }
+     else
+         snprintf(line, sizeof(line), "%s: %s", sStyleNames[style], what[0] ? what : "BUILT");
+-    Note(line);
++    // (the new folder shows in the list; no words - show, don't tell)
+     printf("[pkbn] folder style %s -> %u chips (%s)\n", sStyleNames[style], sF.fCount, line);
+ }
+ 
+@@ -1097,16 +1086,14 @@ static void DrawStyleMenu(u16 *fb)
+     s32 i, x = LIST_X + 6, y = LIST_Y + 2, w = PANEL_X - LIST_X - 16;
+     if (!sF.menu)
+         return;
+-    Pkbn_FillRect(fb, x, y, w, 16 + FOLDER_STYLE_COUNT * 22, RGB(2, 4, 12));
+-    Pkbn_FrameRect(fb, x, y, w, 16 + FOLDER_STYLE_COUNT * 22, RGB(31, 26, 6));
+-    Pkbn_DrawEmText(fb, x + 4, y, "BUILD THIS FOLDER", PKBN_FONT_SMALL, RGB(31, 26, 6), RGB(2, 2, 5));
++    Pkbn_FillRect(fb, x, y, w, 6 + FOLDER_STYLE_COUNT * 13, RGB(2, 4, 12));
++    Pkbn_FrameRect(fb, x, y, w, 6 + FOLDER_STYLE_COUNT * 13, RGB(31, 26, 6));
+     for (i = 0; i < FOLDER_STYLE_COUNT; i++)
+     {
+-        s32 ry = y + 14 + i * 22;
++        s32 ry = y + 3 + i * 13;
+         if (i == sF.menuSel)
+-            Pkbn_FillRect(fb, x + 2, ry, w - 4, 21, RGB(8, 14, 28));
++            Pkbn_FillRect(fb, x + 2, ry, w - 4, 12, RGB(8, 14, 28));
+         Text(fb, x + 6, ry - 2, sStyleNames[i], i == sF.menuSel ? RGB(31, 31, 31) : RGB(20, 22, 28));
+-        TextWrap(fb, x + 6, ry + 8, w - 10, 1, sStyleDesc[i], RGB(14, 18, 24));
+     }
+ }
+ 
+diff --git a/src/pkbn/gfx.c b/src/pkbn/gfx.c
+index 684d87d..83892ad 100644
+--- a/src/pkbn/gfx.c
++++ b/src/pkbn/gfx.c
+@@ -275,3 +275,21 @@ bool8 Fx_Loops(u8 id)
+ }
+ 
+ #endif // PORTABLE
++
++// POC-16: an Ω (the game's font has none). Two hand-drawn sizes; `scale` multiplies them.
++static const char *const sOmegaSmall[9] = {
++    "..#####..", ".#.....#.", "#.......#", "#.......#", "#.......#", ".#.....#.", "..#...#..", "..#...#..", "###...###" };
++static const char *const sOmegaBig[13] = {
++    "....#####....", "..##.....##..", ".##.......##.", "##.........##", "##.........##", "##.........##",
++    "##.........##", ".##.......##.", "..##.....##..", "...##...##...", "...##...##...", "####.....####",
++    "####.....####" };
++
++void Gfx_DrawOmega(u16 *fb, s32 x, s32 y, bool8 big, s32 scale, u16 color)
++{
++    const char *const *rows = big ? sOmegaBig : sOmegaSmall;
++    s32 n = big ? 13 : 9, r, c;
++    for (r = 0; r < n; r++)
++        for (c = 0; rows[r][c]; c++)
++            if (rows[r][c] == '#')
++                Pkbn_FillRect(fb, x + c * scale, y + r * scale, scale, scale, color);
++}
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index ea1da60..763eca3 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -1081,18 +1081,20 @@ static void ApplyOmega(void)
+         sB.f[SIDE_ENEMY].x = x, sB.f[SIDE_ENEMY].y = y;
+     }
+     Foe_Select(0);
+-    Pkbn_GameStringToAscii(nm, gTrainers[gTrainerBattleOpponent_A].trainerName, sizeof(nm));
+-    snprintf(sB.banner, sizeof(sB.banner), "OMEGA %s WANTS TO BATTLE!", nm);
++    (void)nm;   // the banner stays Emerald's own line; the red Ω does the talking (grid_draw.c)
+     PKBN_LOG("omega rematch: trainer %u, levels +5, tier 6", gTrainerBattleOpponent_A);
+ }
+ 
+ static void UpdateOmegaChoice(void)
+ {
+     u16 keys = gMain.newKeys;
+-    if (keys & (DPAD_UP | DPAD_DOWN))
++    if (keys & (DPAD_UP | DPAD_DOWN | DPAD_LEFT | DPAD_RIGHT))
+     {
+         sB.omegaCursor ^= 1;
+-        PlaySE(SE_SELECT);
++        if (sB.omegaCursor)
++            PlayCry_ByMode(sB.f[SIDE_ENEMY].bm.species, 0, CRY_MODE_GROWL_1);   // the ace growls at the Ω
++        else
++            PlaySE(SE_SELECT);
+     }
+     if (keys & A_BUTTON)
+     {
+@@ -1308,17 +1310,11 @@ static void UpdateCustom(void)
+             PlaySE(SE_FAILURE);
+         }
+         else if (sB.challenge)
+-        {
+-            SetMsg("CAN'T CATCH DATA IN A SIMULATION!", 60);
+-            PlaySE(SE_FAILURE);
+-        }
++            PlaySE(SE_FAILURE);   // a simulation: nothing to catch (no words)
+         else if (sB.ballItem == 0 || sB.queueCount > 0)
+             PlaySE(SE_FAILURE);
+         else if (Foe_LiveCount() > 1)
+-        {
+-            SetMsg("CAN'T AIM WITH MORE THAN ONE OUT!", 60); // POC-11 design: thin the pack first
+-            PlaySE(SE_FAILURE);
+-        }
++            PlaySE(SE_FAILURE);   // POC-11 design: thin the pack first (no words)
+         else
+         {
+             s32 i;
+@@ -1688,12 +1684,10 @@ static void UpdatePlayer(void)
+         {
+             TargetForPlayer();
+             Moves_Use(SIDE_PLAYER, MOVE_SWIFT, 0, &p->bm, p->name, sB.active);
+-            SetMsg("ANTIDMG: STAR!", 40);
+         }
+         else
+         {
+             p->shieldT = 30;
+-            SetMsg(p->navi.leftB == 2 ? "REFLECT!" : "SHIELD!", 30);
+             PlaySE(SE_M_REFLECT);   // Protect's sound (Move_PROTECT)
+         }
+         PKBN_LOG("%s: B+back program %u", p->name, p->navi.leftB);
+@@ -2269,12 +2263,8 @@ static void NaviFrame(u8 side)
+         *done = TRUE;
+         f->bm.hp = f->bm.hp + h > f->bm.maxHP ? f->bm.maxHP : f->bm.hp + h;
+         f->statusFlash = 20;
+-        {
+-            char line[40];
+-            snprintf(line, sizeof(line), "%s IS HEALED BY TANGO!", f->name);
+-            SetMsg(line, 50);
+-        }
+-        Vis_GeneralAnim(side, B_ANIM_WISH_HEAL, TRUE);
++        Vis_GeneralAnim(side, B_ANIM_WISH_HEAL, TRUE);   // the heal shows and sounds; no words
++        PKBN_LOG("%s: tango heal", f->name);
+     }
+ }
+ 
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 353d2e9..2f77120 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -1225,9 +1225,7 @@ static void DrawChipArt(u16 *fb, u32 t)
+             if (i != sB.active && PartyAlive(i))
+                 Pkbn_BlitIcon(fb, sB.party[i].icon[(t / 16) & 1], ART_X + 4 + (n++) * 30, ART_Y + 16, FALSE, 0);
+         Gfx_ClipNone();
+-        Text(fb, ART_X + 4, ART_Y - 1, "SWITCH TO ANY POKEMON", COL_WHITE);
+-        if (n == 0)
+-            Text(fb, ART_X + 4, ART_Y + 22, "NOBODY ELSE CAN FIGHT", COL_DIM);
++        (void)n;
+     }
+     else
+     {
+@@ -1270,7 +1268,7 @@ static void DrawChipInfo(u16 *fb)
+         else if (ch->slot & LEADER_CHIP)
+             snprintf(line, sizeof(line), "%s V%u", Leader_Name(LEADER_INDEX(ch->slot)), LEADER_LEVEL(ch->slot));
+         else if (sB.hand[cur] == FOLDER_STRUGGLE)
+-            snprintf(line, sizeof(line), "FOLDER USED UP - NO LIMIT");
++            line[0] = '\0';
+         else
+             snprintf(line, sizeof(line), "%s  x%u LEFT", gPkbnKindNames[gPkbnMoveInfo[ch->move].kind], CopiesLeft(ch->move));
+         Text(fb, ART_X, y + 13, line, RGB(22, 26, 31));
+@@ -1287,7 +1285,7 @@ static void DrawChipInfo(u16 *fb)
+     else if (cur == sB.handCount)
+     {
+         TextBig(fb, ART_X, y - 2, "SWITCH", COL_WHITE);
+-        Text(fb, ART_X, y + 13, "ANY  -  NOTHING AFTER IT", RGB(22, 26, 31));
++
+     }
+     else
+     {
+@@ -1302,8 +1300,7 @@ static void DrawChipInfo(u16 *fb)
+             snprintf(line, sizeof(line), "x%u", CountTotalItemQuantityInBag(sB.ballItem));
+             TextBig(fb, ART_X + ART_W - Pkbn_EmTextWidth(line, PKBN_FONT_NORMAL), y - 2, line, COL_GAUGE_FULL);
+         }
+-        Text(fb, ART_X, y + 13, sB.trainer ? "CAN'T CATCH A TRAINER'S" : sB.queueCount ? "ONLY WITHOUT CHIPS" : "THROW INSTEAD OF CHIPS  L/R",
+-             sB.trainer || sB.queueCount ? COL_HP_LOW : RGB(22, 26, 31));
++        // (no rules spelled out: an unusable ball is greyed in its slot)
+     }
+ }
+ 
+@@ -1474,7 +1471,7 @@ static void DrawCustomScreen(u16 *fb)
+     DrawChipArt(fb, t);
+     DrawChipInfo(fb);
+     if (sB.handCount == 0)
+-        Text(fb, 8, SLOTS_Y + 6, "NO CHIPS LEFT - BUSTER", COL_DIM);
++        Text(fb, 8, SLOTS_Y + 6, "NO CHIPS", COL_DIM);
+     DrawSlots(fb, t);
+     if (sB.f[SIDE_PLAYER].recharge && ((t / 16) & 1))
+     {
+@@ -1509,34 +1506,29 @@ static void DrawPicker(u16 *fb)
+     }
+ }
+ 
+-// POC-16d: before an Ω-eligible Leader rematch: NORMAL or OMEGA
++// POC-16d: before an Ω-eligible Leader rematch. No words (Khaled: show, don't tell): the Leader's lead Pokémon on a
++// calm card, a red Ω on the other; on the Ω the whole screen bleeds red.
+ static void DrawOmegaChoice(u16 *fb)
+ {
+-    s8 l = Leader_FromTrainer(gTrainerBattleOpponent_A);
+-    char line[48];
+-    s32 i, x = 34, y = 30, w = CW - 68, h = 92;
+-    Gfx_Darken(fb, 0, 0, CW, CH, 7);
+-    Draw_Box(fb, x, y, w, h, RGB(4, 2, 10), RGB(31, 12, 24), 15);
+-    snprintf(line, sizeof(line), "%s REMATCH", l >= 0 ? Leader_Name(l) : "LEADER");
+-    TextCentered(fb, CW / 2, y + 1, line, COL_GAUGE_FULL, TRUE);
+-    for (i = 0; i < 2; i++)
+-    {
+-        s32 ry = y + 22 + i * 24;
+-        bool8 on = sB.omegaCursor == i;
+-        if (on)
+-            Draw_Box(fb, x + 6, ry - 1, w - 12, 22, i ? RGB(16, 2, 10) : RGB(6, 10, 22), i ? COL_PA : COL_BOX_EDGE, 15);
+-        Text(fb, x + 12, ry - 2, i ? "OMEGA - HIGHEST DIFFICULTY" : "NORMAL", on ? COL_WHITE : COL_DIM);
+-        if (i == 0)
+-            Text(fb, x + 12, ry + 8, "AS ALWAYS: CHIP AND RECORD", on ? RGB(22, 26, 31) : COL_DIM);
+-        else if (l >= 0 && !PkbnLeader_OmegaWon(l))
+-        {
+-            snprintf(line, sizeof(line), "LV+5, OMEGA AI. FIRST WIN: %s", Leader_OmegaProgram(l));
+-            Text(fb, x + 12, ry + 8, line, on ? RGB(31, 26, 6) : COL_DIM);
+-        }
+-        else
+-            Text(fb, x + 12, ry + 8, "LV+5, OMEGA AI. WON: * CHIP", on ? RGB(22, 26, 31) : COL_DIM);
++    s32 cw = 64, ch = 64, gap = 20, x0 = CW / 2 - cw - gap / 2, x1 = CW / 2 + gap / 2, y = 52;
++    bool8 om = sB.omegaCursor == 1;
++    u8 pulse = (u8)((sTick / 3) % 16);
++    pulse = pulse < 8 ? pulse : 15 - pulse;
++    Gfx_Darken(fb, 0, 0, CW, CH, om ? 10 : 7);
++    if (om)
++    {
++        Gfx_FillBlend(fb, 0, 0, CW, CH, RGB(20, 0, 2), (u8)(4 + pulse / 2));
++        Gfx_FillBlend(fb, 0, 0, CW, 14, RGB(12, 0, 0), 12);         // the edges close in
++        Gfx_FillBlend(fb, 0, CH - 14, CW, 14, RGB(12, 0, 0), 12);
+     }
+-    Text(fb, x + 8, y + h - 13, "UP/DOWN: CHOOSE   A: FIGHT", COL_DIM);
++    // the familiar fight
++    Draw_Box(fb, x0, y, cw, ch, om ? RGB(2, 3, 8) : RGB(5, 9, 22), om ? RGB(8, 10, 16) : COL_WHITE, 15);
++    Pkbn_BlitIcon(fb, sB.f[SIDE_ENEMY].icon[om ? 0 : (sTick / 16) & 1], x0 + cw / 2 - 16, y + ch / 2 - 18, FALSE,
++                  om ? RGB(3, 3, 6) : 0);
++    // Ω
++    Draw_Box(fb, x1, y, cw, ch, om ? RGB(10, 0, 2) : RGB(4, 1, 2), om ? RGB(31, (u8)(4 + pulse), 4) : RGB(12, 3, 4), 15);
++    Gfx_DrawOmega(fb, x1 + cw / 2 - 19 + (om && (sTick & 8) ? 1 : 0), y + ch / 2 - 20, TRUE, 3,
++                  om ? RGB(31, (u8)(2 + pulse), 2) : RGB(14, 3, 4));
+ }
+ 
+ static void DrawTimeStop(u16 *fb)
+@@ -1953,7 +1945,15 @@ void Draw_Overlay(u16 *fb)
+     }
+     if (sB.state == ST_INTRO || sB.state == ST_END || sB.state == ST_SENDOUT)
+     {
+-        Draw_Box(fb, -2, 36, CW + 4, 20, COL_BOX, COL_BOX_EDGE, 14);
++        if (sB.omega)
++        {
++            // POC-16d: an Ω battle says so in red, not in words
++            Draw_Box(fb, -2, 36, CW + 4, 20, RGB(10, 0, 2), RGB(31, 4, 4), 14);
++            Gfx_DrawOmega(fb, 6, 41, FALSE, 1, RGB(31, 6, 4));
++            Gfx_DrawOmega(fb, CW - 15, 41, FALSE, 1, RGB(31, 6, 4));
++        }
++        else
++            Draw_Box(fb, -2, 36, CW + 4, 20, COL_BOX, COL_BOX_EDGE, 14);
+         TextCentered(fb, CW / 2, 37, sB.banner, COL_WHITE, TRUE);
+     }
+     DrawCustomClosing(fb);
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 6f43820..539c52d 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -236,10 +236,7 @@ static void Heal(struct Fighter *f, s32 amount)
+     if (f->bm.hp == 0 || amount <= 0)
+         return;
+     if (sB.noHeal)
+-    {
+-        SetMsg("NOTHING HEALS HERE!", 40);   // POC-16e
+-        return;
+-    }
++        return;   // POC-16e: nothing heals (no words: the HP bar doesn't move)
+     f->bm.hp = (f->bm.hp + amount > f->bm.maxHP) ? f->bm.maxHP : f->bm.hp + amount;
+     f->statusFlash = 12;
+ }
+@@ -946,13 +943,12 @@ static void ApplyHit(struct Attack *a, bool8 last)
+         def->hurtFlash = 4;
+         a->hitAnything = TRUE;
+         PlaySE(SE_BOO);
++        // (no words on screen: the shield, the flash and the sound show it - Khaled's show-don't-tell rule)
+         if (def->navi.leftB == 2 && me && (dmg = CalcHitDamage(a, defSide, &eff, &crit) / 2) > 0)
+         {
+-            SetMsg("REFLECTED!", 40);
+-            Moves_DamageFighter(a->side, dmg, "TAKES THE REFLECTED HIT!");
++            me->hurtFlash = 8;
++            Moves_DamageFighter(a->side, dmg, NULL);
+         }
+-        else
+-            SetMsg("SHIELD BLOCKED IT!", 40);
+         PKBN_LOG("%s's %s blocked move %u", def->name, def->navi.leftB == 2 ? "Reflect" : "Shield", a->move);
+         return;
+     }
+diff --git a/src/pkbn/leader.c b/src/pkbn/leader.c
+index c2d1384..0afff99 100644
+--- a/src/pkbn/leader.c
++++ b/src/pkbn/leader.c
+@@ -13,6 +13,7 @@
+ #include "pkbn/chip_pack.h"
+ #include "pkbn/folder.h"
+ #include "pkbn/move_table.h"
++#include "pkbn/render.h"
+ #include "constants/opponents.h"
+ #include "constants/trainers.h"
+ #include "constants/moves.h"
+@@ -133,9 +134,8 @@ static void OmegaWin(u8 l, u32 frames, char *line1, char *line2, u32 size)
+     {
+         PkbnLeader_SetOmegaWon(l);
+         PkbnProgram_GrantByName(sOmegaPrograms[l], 1);
+-        snprintf(line1, size, "OMEGA %s DEFEATED IN %u:%02u.%u!", sNames[l], (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60),
+-                 (unsigned)(s10 % 10));
+-        snprintf(line2, size, "GOT THE RARE PROGRAM %s!", sOmegaPrograms[l]);
++        snprintf(line1, size, "TIME %u:%02u.%u", (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60), (unsigned)(s10 % 10));
++        snprintf(line2, size, "GOT %s!", sOmegaPrograms[l]);
+     }
+     else
+     {
+@@ -144,11 +144,13 @@ static void OmegaWin(u8 l, u32 frames, char *line1, char *line2, u32 size)
+         u8 lv;
+         Leader_Ace(l, &species, &lv, &mv);
+         PkbnPack_Add(mv, LETTER_WILD, 1);
++        char nm[16];
+         if (best == 0 || frames < best)
+-            snprintf(line1, size, "NEW OMEGA RECORD %u:%02u.%u!", (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60), (unsigned)(s10 % 10));
++            snprintf(line1, size, "NEW RECORD %u:%02u.%u!", (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60), (unsigned)(s10 % 10));
+         else
+-            snprintf(line1, size, "OMEGA %s DEFEATED AGAIN!", sNames[l]);
+-        snprintf(line2, size, "GOT A * CHIP OF THE ACE'S MOVE!");
++            snprintf(line1, size, "TIME %u:%02u.%u", (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60), (unsigned)(s10 % 10));
++        Pkbn_GameStringToAscii(nm, gMoveNames[mv], sizeof(nm));
++        snprintf(line2, size, "GOT %s * CHIP!", nm);
+     }
+     printf("[pkbn] omega win: %s %u frames: %s / %s\n", sNames[l], (unsigned)frames, line1, line2);
+ }
+@@ -202,7 +204,7 @@ void Leader_AfterWin(u16 trainerId, u8 bust, u32 frames, bool8 omega, char *line
+         else if (have == 0)
+             snprintf(line2, size, "GOT PROGRAMS %s AND %s!", sFirstWinPrograms[l][0], sFirstWinPrograms[l][1]);
+         else
+-            snprintf(line2, size, "TIME %u:%02u.%u - THE RECORD TO BEAT", (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60),
++            snprintf(line2, size, "TIME %u:%02u.%u", (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60),
+                      (unsigned)(s10 % 10));
+         printf("[pkbn] leader record: %s %u frames, level %u\n", sNames[l], (unsigned)frames, bust);
+     }
+diff --git a/src/pkbn/ncp_table.c b/src/pkbn/ncp_table.c
+index b939e47..acfdb75 100644
+--- a/src/pkbn/ncp_table.c
++++ b/src/pkbn/ncp_table.c
+@@ -151,61 +151,61 @@ const struct PkbnNcp gPkbnNcps[NCP_COUNT] =
+         "SilkScrf", "Normal moves +10%.", NCPE_TYPE_BOOST, TYPE_NORMAL, 10, TRUE, 0, 7, NCP_COND_COOL, 1, {TYPE_NORMAL}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
+     },
+     { // bn6f entry 32 (Shield)
+-        "Shield", "\"[B]+Left= Strong shield!\" Hold B, press back: a shield blocks everything for half a second.", NCPE_LEFT_B, 0, 0, FALSE, 2, 1, NCP_COND_TOUGH, 2, {TYPE_STEEL, TYPE_ROCK}, {3, 3, {7, 1, 1, 0, 0}}, {2, 2, {3, 1, 0, 0, 0}}
++        "Shield", "B+Left: Strong shield!", NCPE_LEFT_B, 0, 0, FALSE, 2, 1, NCP_COND_TOUGH, 2, {TYPE_STEEL, TYPE_ROCK}, {3, 3, {7, 1, 1, 0, 0}}, {2, 2, {3, 1, 0, 0, 0}}
+     },
+     { // bn6f entry 36 (Reflect)
+-        "Reflect", "\"[B]+Left= Reflect attacks!\" Like Shield; a blocked hit sends half its damage back.", NCPE_LEFT_B, 1, 0, FALSE, 2, 1, NCP_COND_BEAUTY, 2, {TYPE_PSYCHIC, TYPE_FIRE}, {5, 3, {4, 31, 4, 0, 0}}, {5, 1, {31, 0, 0, 0, 0}}
++        "Reflect", "B+Left: Reflect attacks!", NCPE_LEFT_B, 1, 0, FALSE, 2, 1, NCP_COND_BEAUTY, 2, {TYPE_PSYCHIC, TYPE_FIRE}, {5, 3, {4, 31, 4, 0, 0}}, {5, 1, {31, 0, 0, 0, 0}}
+     },
+     { // bn6f entry 40 (AntiDmg)
+-        "AntiDmg", "\"[B]+Left= Throw a star!\" Hold B, press back: a star flies down your row.", NCPE_LEFT_B, 2, 0, FALSE, 2, 1, NCP_COND_COOL, 2, {TYPE_FIGHTING, TYPE_DARK}, {3, 4, {6, 6, 3, 1, 0}}, {3, 4, {4, 6, 3, 1, 0}}
++        "AntiDmg", "B+Left: Throw a star!", NCPE_LEFT_B, 2, 0, FALSE, 2, 1, NCP_COND_COOL, 2, {TYPE_FIGHTING, TYPE_DARK}, {3, 4, {6, 6, 3, 1, 0}}, {3, 4, {4, 6, 3, 1, 0}}
+     },
+     { // bn6f entry 16 (MegFldr1)
+-        "MegFldr1", "\"MegaChip +1\": 6 MegaChips in the folder (your lead Pokemon's programs count).", NCPE_MEGA_PLUS, 0, 1, FALSE, 0, 4, NCP_COND_SMART, 1, {TYPE_PSYCHIC}, {3, 3, {4, 7, 4, 0, 0}}, {3, 1, {7, 0, 0, 0, 0}}
++        "MegFldr1", "MegaChip +1", NCPE_MEGA_PLUS, 0, 1, FALSE, 0, 4, NCP_COND_SMART, 1, {TYPE_PSYCHIC}, {3, 3, {4, 7, 4, 0, 0}}, {3, 1, {7, 0, 0, 0, 0}}
+     },
+     { // bn6f entry 20 (MegFldr2)
+-        "MegFldr2", "\"MegaChip +2\": 7 MegaChips in the folder (your lead Pokemon's programs count).", NCPE_MEGA_PLUS, 0, 2, FALSE, 0, 4, NCP_COND_SMART, 1, {TYPE_PSYCHIC}, {4, 3, {6, 15, 6, 0, 0}}, {4, 3, {4, 15, 2, 0, 0}}
++        "MegFldr2", "MegaChip +2", NCPE_MEGA_PLUS, 0, 2, FALSE, 0, 4, NCP_COND_SMART, 1, {TYPE_PSYCHIC}, {4, 3, {6, 15, 6, 0, 0}}, {4, 3, {4, 15, 2, 0, 0}}
+     },
+     { // bn6f entry 24 (GigFldr1)
+-        "GigFldr1", "\"GigaChip +1\": 2 GigaChips in the folder (your lead Pokemon's programs count).", NCPE_GIGA_PLUS, 0, 1, FALSE, 0, 4, NCP_COND_SMART, 1, {TYPE_WATER}, {5, 3, {4, 14, 31, 0, 0}}, {3, 3, {2, 7, 7, 0, 0}}
++        "GigFldr1", "GigaChip +1", NCPE_GIGA_PLUS, 0, 1, FALSE, 0, 4, NCP_COND_SMART, 1, {TYPE_WATER}, {5, 3, {4, 14, 31, 0, 0}}, {3, 3, {2, 7, 7, 0, 0}}
+     },
+     { // bn6f entry 116 (FldrPak1)
+-        "FldrPak1", "\"A 2-pack Custom1& MegFldr1\": +1 chip in the hand and 6 MegaChips.", NCPE_FOLDER_PACK, 0, 1, FALSE, 0, 4, NCP_COND_SMART, 1, {TYPE_NORMAL}, {3, 3, {6, 7, 3, 0, 0}}, {3, 3, {6, 7, 2, 0, 0}}
++        "FldrPak1", "A 2-pack: Custom1 & MegFldr1", NCPE_FOLDER_PACK, 0, 1, FALSE, 0, 4, NCP_COND_SMART, 1, {TYPE_NORMAL}, {3, 3, {6, 7, 3, 0, 0}}, {3, 3, {6, 7, 2, 0, 0}}
+     },
+     { // bn6f entry 152 (AttckMAX)
+-        "AttckMAX", "\"MegaBstr AttckMAX\": Buster Attack 5.", NCPE_BUSTER_MAX, 0, 0, TRUE, 0, 7, NCP_COND_COOL, 1, {TYPE_FIGHTING}, {2, 4, {3, 3, 3, 3, 0}}, {2, 4, {3, 3, 3, 2, 0}}
++        "AttckMAX", "MegaBuster Attack MAX", NCPE_BUSTER_MAX, 0, 0, TRUE, 0, 7, NCP_COND_COOL, 1, {TYPE_FIGHTING}, {2, 4, {3, 3, 3, 3, 0}}, {2, 4, {3, 3, 3, 2, 0}}
+     },
+     { // bn6f entry 156 (SpeedMAX)
+-        "SpeedMAX", "\"MegaBstr SpeedMAX\": Buster Speed 5.", NCPE_BUSTER_MAX, 1, 0, TRUE, 0, 7, NCP_COND_SMART, 1, {TYPE_FLYING}, {3, 1, {7, 0, 0, 0, 0}}, {2, 1, {3, 0, 0, 0, 0}}
++        "SpeedMAX", "MegaBuster Speed MAX", NCPE_BUSTER_MAX, 1, 0, TRUE, 0, 7, NCP_COND_SMART, 1, {TYPE_FLYING}, {3, 1, {7, 0, 0, 0, 0}}, {2, 1, {3, 0, 0, 0, 0}}
+     },
+     { // bn6f entry 160 (ChargMAX)
+-        "ChargMAX", "\"MegaBstr ChargeMAX\": Buster Charge 5.", NCPE_BUSTER_MAX, 2, 0, TRUE, 0, 7, NCP_COND_TOUGH, 1, {TYPE_ELECTRIC}, {3, 2, {2, 7, 0, 0, 0}}, {2, 2, {1, 3, 0, 0, 0}}
++        "ChargMAX", "MegaBuster Charge MAX", NCPE_BUSTER_MAX, 2, 0, TRUE, 0, 7, NCP_COND_TOUGH, 1, {TYPE_ELECTRIC}, {3, 2, {2, 7, 0, 0, 0}}, {2, 2, {1, 3, 0, 0, 0}}
+     },
+     { // bn6f entries 176-178 (HP+300)
+-        "HP+300", "Max HP +30% in battle.", NCPE_HP_PCT, 0, 30, TRUE, 0, 9, NCP_COND_CUTE, 3, {TYPE_NORMAL, TYPE_GRASS, TYPE_WATER}, {4, 2, {15, 7, 0, 0, 0}}, {4, 2, {15, 7, 0, 0, 0}}
++        "HP+300", "Max HP +30%.", NCPE_HP_PCT, 0, 30, TRUE, 0, 9, NCP_COND_CUTE, 3, {TYPE_NORMAL, TYPE_GRASS, TYPE_WATER}, {4, 2, {15, 7, 0, 0, 0}}, {4, 2, {15, 7, 0, 0, 0}}
+     },
+     { // bn6f entries 180-182 (HP+400)
+-        "HP+400", "Max HP +40% in battle.", NCPE_HP_PCT, 0, 40, TRUE, 0, 9, NCP_COND_CUTE, 3, {TYPE_NORMAL, TYPE_GRASS, TYPE_WATER}, {4, 2, {15, 15, 0, 0, 0}}, {4, 2, {15, 15, 0, 0, 0}}
++        "HP+400", "Max HP +40%.", NCPE_HP_PCT, 0, 40, TRUE, 0, 9, NCP_COND_CUTE, 3, {TYPE_NORMAL, TYPE_GRASS, TYPE_WATER}, {4, 2, {15, 15, 0, 0, 0}}, {4, 2, {15, 15, 0, 0, 0}}
+     },
+     { // bn6f entries 184-186 (HP+500)
+-        "HP+500", "Max HP +50% in battle.", NCPE_HP_PCT, 0, 50, TRUE, 0, 9, NCP_COND_CUTE, 3, {TYPE_NORMAL, TYPE_GRASS, TYPE_WATER}, {5, 2, {31, 31, 0, 0, 0}}, {5, 2, {31, 31, 0, 0, 0}}
++        "HP+500", "Max HP +50%.", NCPE_HP_PCT, 0, 50, TRUE, 0, 9, NCP_COND_CUTE, 3, {TYPE_NORMAL, TYPE_GRASS, TYPE_WATER}, {5, 2, {31, 31, 0, 0, 0}}, {5, 2, {31, 31, 0, 0, 0}}
+     },
+     { // bn6f entry 76 (Battery)
+-        "Battery", "\"Attracts Elec Viruses!\" On your lead: wild Electric Pokemon half the time (as Static does).", NCPE_ATTRACT, TYPE_ELECTRIC, 0, FALSE, 3, 5, NCP_COND_SMART, 1, {TYPE_ELECTRIC}, {3, 3, {2, 2, 7, 0, 0}}, {2, 3, {2, 2, 3, 0, 0}}
++        "Battery", "Attracts Electric Pokemon!", NCPE_ATTRACT, TYPE_ELECTRIC, 0, FALSE, 3, 5, NCP_COND_SMART, 1, {TYPE_ELECTRIC}, {3, 3, {2, 2, 7, 0, 0}}, {2, 3, {2, 2, 3, 0, 0}}
+     },
+     { // bn6f entry 68 (OilBody)
+-        "OilBody", "\"Attracts Fire Viruses!\" On your lead: wild Fire Pokemon half the time (as Static does).", NCPE_ATTRACT, TYPE_FIRE, 0, FALSE, 3, 5, NCP_COND_COOL, 1, {TYPE_FIRE}, {3, 3, {2, 2, 7, 0, 0}}, {2, 3, {2, 2, 3, 0, 0}}
++        "OilBody", "Attracts Fire Pokemon!", NCPE_ATTRACT, TYPE_FIRE, 0, FALSE, 3, 5, NCP_COND_COOL, 1, {TYPE_FIRE}, {3, 3, {2, 2, 7, 0, 0}}, {2, 3, {2, 2, 3, 0, 0}}
+     },
+     { // bn6f entry 84 (Collect)
+-        "Collect", "\"Get more chips frm enmy\": on your lead, battle chip rewards come with one more copy.", NCPE_COLLECT, 0, 1, FALSE, 0, 6, NCP_COND_CUTE, 1, {TYPE_NORMAL}, {3, 3, {7, 7, 6, 0, 0}}, {3, 3, {7, 6, 4, 0, 0}}
++        "Collect", "Get more chips from foes", NCPE_COLLECT, 0, 1, FALSE, 0, 6, NCP_COND_CUTE, 1, {TYPE_NORMAL}, {3, 3, {7, 7, 6, 0, 0}}, {3, 3, {7, 6, 4, 0, 0}}
+     },
+     { // bn6f entry 64 (SneakRun)
+-        "SneakRun", "\"No weak enemies\": on your lead, wild Pokemon below its level stay away (as a Repel does).", NCPE_SNEAK_RUN, 0, 0, FALSE, 0, 5, NCP_COND_BEAUTY, 2, {TYPE_FLYING, TYPE_GHOST}, {3, 3, {2, 7, 2, 0, 0}}, {3, 2, {2, 7, 0, 0, 0}}
++        "SneakRun", "No weak enemies", NCPE_SNEAK_RUN, 0, 0, FALSE, 0, 5, NCP_COND_BEAUTY, 2, {TYPE_FLYING, TYPE_GHOST}, {3, 3, {2, 7, 2, 0, 0}}, {3, 2, {2, 7, 0, 0, 0}}
+     },
+     { // bn6f entry 104 (AutoHeal)
+-        "AutoHeal", "\"HP recv after battle\": after a win this Pokemon gets back 25% of its max HP.", NCPE_AUTO_HEAL, 0, 25, FALSE, 0, 3, NCP_COND_CUTE, 2, {TYPE_GRASS, TYPE_WATER}, {3, 4, {4, 4, 4, 7, 0}}, {3, 3, {4, 4, 7, 0, 0}}
++        "AutoHeal", "HP recovers after battle", NCPE_AUTO_HEAL, 0, 25, FALSE, 0, 3, NCP_COND_CUTE, 2, {TYPE_GRASS, TYPE_WATER}, {3, 4, {4, 4, 4, 7, 0}}, {3, 3, {4, 4, 7, 0, 0}}
+     },
+     { // bn6f entry 136 (Tango)
+-        "Tango", "\"Heals low HP\": once a battle, below 1/4 HP, it heals 30% of its max HP.", NCPE_TANGO, 0, 30, FALSE, 0, 8, NCP_COND_CUTE, 2, {TYPE_GRASS, TYPE_NORMAL}, {3, 4, {7, 2, 2, 7, 0}}, {3, 4, {7, 2, 2, 3, 0}}
++        "Tango", "Heals low HP", NCPE_TANGO, 0, 30, FALSE, 0, 8, NCP_COND_CUTE, 2, {TYPE_GRASS, TYPE_NORMAL}, {3, 4, {7, 2, 2, 7, 0}}, {3, 4, {7, 2, 2, 3, 0}}
+     },
+ };
+ 
+-- 
+2.43.0
+

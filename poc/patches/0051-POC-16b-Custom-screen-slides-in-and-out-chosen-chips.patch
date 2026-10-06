@@ -1,0 +1,319 @@
+From 026409d10f8f7f751609853539250a5ecc172bb0 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 16:00:53 +0300
+Subject: [PATCH 51/54] POC-16b: Custom screen slides in and out, chosen chips
+ ride above the Pokemon, Program Advances form on screen
+
+- The Custom window slides in over 12 frames and back out over 10 after OK (TUNE).
+- In the fight the queued chips stack above the player's Pokemon (BN shows them over MegaMan's
+  head), the next one in front; a PA shows its finisher's icon with a flashing rim.
+- At OK a Program Advance forms: the three chips converge, flash, and become the PA's card
+  (replaces the flash banner). Sounds: SE_WIN_OPEN on open, SE_RG_BAG_CURSOR on undo,
+  SE_RG_POKE_JUMP_SUCCESS when a PA forms (was SE_EXP_MAX).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |   3 +-
+ src/pkbn/grid_battle.c       |   5 +-
+ src/pkbn/grid_draw.c         | 170 ++++++++++++++++++++++++++++++++++-
+ 3 files changed, 174 insertions(+), 4 deletions(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index a7221fe..debf8c7 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -196,7 +196,7 @@ struct Attack
+ };
+ 
+ // Visual events (POC-15): the rules post what happened, the drawing code plays it. Visual only.
+-enum { VEV_USE, VEV_LAUNCH, VEV_PUSH, VEV_STAT, VEV_ANIM, VEV_SHAKE };
++enum { VEV_USE, VEV_LAUNCH, VEV_PUSH, VEV_STAT, VEV_ANIM, VEV_SHAKE, VEV_PAFORM };
+ struct VisEvent
+ {
+     u32 serial;
+@@ -208,6 +208,7 @@ struct VisEvent
+     s8 arg;          // VEV_USE: wind-up frames; VEV_PUSH: panels moved (signed); VEV_STAT: stages (+/-); VEV_ANIM: index
+                      // VEV_ANIM: kind 0 = B_ANIM_STATUS_*, 1 = B_ANIM_* ; x = 1 when it plays on side itself only
+                      // VEV_SHAKE (POC-16a): kind = BN6 shake level 0-3, arg = frames
++                     // VEV_PAFORM (POC-16b): a Program Advance formed at OK; arg = its sB.paQueue index
+     s8 x, y;         // VEV_PUSH: where it was before
+ };
+ #define MAX_VIS_EVENTS 16
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 0e71195..ab00ed0 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -674,6 +674,7 @@ static void OpenCustom(void)
+         }
+     RefillHand();
+     sB.state = ST_CUSTOM;
++    PlaySE(SE_WIN_OPEN);   // POC-16b
+ }
+ 
+ // POC-11: how many extra wild Pokémon join (TUNE): none before the first badge 90% of the time; with b badges a pack
+@@ -1205,7 +1206,8 @@ static void FormProgramAdvances(void)
+         sB.queueCount -= 2;
+         snprintf(line, sizeof(line), "PROGRAM ADVANCE! %s", gPkbnProgramAdvances[p].name);
+         Flash(line, 120);
+-        PlaySE(SE_EXP_MAX);
++        PlaySE(SE_RG_POKE_JUMP_SUCCESS);   // POC-16b: a fanfare (was SE_EXP_MAX)
++        Vis_Post(VEV_PAFORM, SIDE_PLAYER, MOVE_NONE, 0, (s8)k, 0, 0);
+         PKBN_LOG("Program Advance formed: %s", gPkbnProgramAdvances[p].name);
+     }
+ }
+@@ -1305,6 +1307,7 @@ static void UpdateCustom(void)
+             if (sB.hand[i] == last)
+                 sB.picked[i] = FALSE;
+         UpdatePAPreview();
++        PlaySE(SE_RG_BAG_CURSOR);   // POC-16b: taking a chip back
+     }
+     if (keys & (START_BUTTON | R_BUTTON))
+     {
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index cd7ead4..5e08baa 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -371,6 +371,10 @@ static u8 VS(u8 side)
+ static u16 sMaxSerial;     // newest attack the visuals have announced
+ static u32 sTick;
+ static u8 sShakeLevel, sShakeT;   // POC-16a camera shake (ShakeFrame)
++static s32 sHeadX, sHeadY;        // POC-16b: top of the player's picture this frame (the chip stack rides above it)
++static bool8 sHeadValid;
++static u8 sPAAnimT, sCloseT;      // POC-16b: Program Advance forming, the Custom window sliding out
++static bool8 sWasCustom;
+ static u32 sShakeRng = 0x2545F491;
+ static u32 sLastBattleFrame;
+ 
+@@ -386,6 +390,8 @@ static void ResetVisuals(void)
+     memset(sAnimSoundLast, 0, sizeof(sAnimSoundLast));
+     sAnimSoundFree = 0;
+     sShakeT = 0;
++    sPAAnimT = sCloseT = 0;
++    sWasCustom = FALSE;
+     memset(sLastSoundMove, 0, sizeof(sLastSoundMove));
+     sLastVis = sB.visSerial;
+     memset(sAppearT, 0, sizeof(sAppearT));
+@@ -728,6 +734,21 @@ static void DrawFighter(u16 *fb, u8 side)
+     else
+         Gfx_Draw(fb, &img, x + dx, y - lift, flags, color, amt);
+     Gfx_ClipBottom(9999);
++    if (side == SIDE_PLAYER && f->bm.hp)
++    {
++        // the first row with a pixel in it
++        s32 r, c;
++        for (r = 0; r < 64; r++)
++        {
++            for (c = 0; c < 64 && img.px[r * 64 + c] == 0; c++)
++                ;
++            if (c < 64)
++                break;
++        }
++        sHeadX = x + dx;
++        sHeadY = y - lift + img.oy + r;
++        sHeadValid = TRUE;
++    }
+ 
+     if (f->charging)
+         Gfx_Draw(fb, Fx_Frame(FX_CHARGE_RINGS, sTick), x, y - 18 - lift, GFX_ADD, 0, 0);
+@@ -1596,6 +1617,137 @@ static void VisHpUnder(u8 side, u8 v)
+         DrawEnemyHpUnder(sDrawFb);
+ }
+ 
++// ---- POC-16b: around the Custom screen ---------------------------------------------------------------------------
++// Our timings and layout (TUNE). In BN the chosen chips ride above MegaMan's head during the fight; here above the
++// Pokémon, the next one in front. The Custom window slides in and out; a Program Advance forms on screen at OK.
++#define STACK_SHOWN 5
++#define SLIDE_IN 12
++#define SLIDE_OUT 10
++#define PA_ANIM 44
++
++static void DrawStackChip(u16 *fb, s32 x, s32 y, u8 id)
++{
++    if (id == FOLDER_QUEUE_WILD)
++    {
++        Draw_Box(fb, x, y, CHIP_ICON_W + 2, CHIP_ICON_H + 2, RGB(4, 14, 6), RGB(14, 31, 16), 16);
++        Text(fb, x + 5, y + 1, "SW", COL_WHITE);
++        return;
++    }
++    if (id >= QUEUE_PA_BASE)
++    {
++        const struct PkbnProgramAdvance *pa = &gPkbnProgramAdvances[sB.paQueue[id - QUEUE_PA_BASE].pa];
++        Pkbn_FrameRect(fb, x, y, CHIP_ICON_W + 2, CHIP_ICON_H + 2, ((sTick / 4) & 1) ? COL_PA : COL_WHITE);
++        DrawChipIcon(fb, x + 1, y + 1, pa->recipe[2], FALSE);
++        return;
++    }
++    Pkbn_FrameRect(fb, x, y, CHIP_ICON_W + 2, CHIP_ICON_H + 2, RGB(24, 28, 31));
++    DrawChipIcon(fb, x + 1, y + 1, sB.folder.chips[id].move, FALSE);
++}
++
++static void DrawChipStack(u16 *fb)
++{
++    s32 i, n = sB.queueCount < STACK_SHOWN ? sB.queueCount : STACK_SHOWN;
++    s32 base;
++    if (sB.state != ST_FIGHT || !sHeadValid || n == 0)
++        return;
++    base = sHeadY - CHIP_ICON_H - 6;
++    if (base < 28)
++        base = 28;
++    for (i = n - 1; i >= 0; i--)   // the back of the stack first; the next chip last, in front
++        DrawStackChip(fb, sHeadX - (CHIP_ICON_W + 2) / 2 + i * 2, base - i * 4, sB.queue[i]);
++}
++
++static u16 sPAAnimMoves[3];
++static u8 sPAAnimPA;
++
++static void DrawPAForming(u16 *fb)
++{
++    s32 k, i, cx = CW / 2, cy = 58;
++    if (sPAAnimT == 0)
++        return;
++    k = PA_ANIM - sPAAnimT;
++    if (sB.state == ST_FIGHT && !sB.hitStop)
++        sPAAnimT--;
++    if (k < 14)
++    {
++        // the three chips come together
++        for (i = 0; i < 3; i++)
++        {
++            s32 from = (i - 1) * 84, x = cx + from * (14 - k) / 14 - 40, y = cy - 8;
++            char nm[MOVE_NAME_LENGTH + 1];
++            u16 c = Vfx_TypeColor(gBattleMoves[sPAAnimMoves[i]].type);
++            Draw_Box(fb, x, y, 80, 18, Gfx_Blend(c, COL_BLACK, 7), Gfx_Blend(c, COL_WHITE, 8), 15);
++            DrawChipIcon(fb, x + 1, y + 1, sPAAnimMoves[i], FALSE);
++            Pkbn_GameStringToAscii(nm, gMoveNames[sPAAnimMoves[i]], sizeof(nm));
++            Text(fb, x + 26, y + 1, nm, COL_WHITE);
++        }
++        return;
++    }
++    if (k < 19)
++    {
++        // they flash into one
++        s32 w = 80 + (k - 14) * 16, h = 18 + (k - 14) * 3;
++        Draw_Box(fb, cx - w / 2, cy - h / 2, w, h, COL_WHITE, COL_PA, 16);
++        return;
++    }
++    {
++        // the Program Advance's card
++        const struct PkbnProgramAdvance *pa = &gPkbnProgramAdvances[sPAAnimPA];
++        char line[32];
++        s32 w = 164, h = 36;
++        Draw_Box(fb, cx - w / 2, cy - h / 2, w, h, RGB(16, 2, 10), ((sTick / 4) & 1) ? COL_PA : COL_WHITE, 15);
++        DrawChipIcon(fb, cx - w / 2 + 6, cy - 8, pa->recipe[2], FALSE);
++        TextCentered(fb, cx + 12, cy - 18, "PROGRAM ADVANCE", ((sTick / 4) & 1) ? COL_WHITE : COL_PA, FALSE);
++        snprintf(line, sizeof(line), "%s %u", pa->name, pa->power);
++        TextCentered(fb, cx + 12, cy - 6, line, COL_GAUGE_FULL, TRUE);
++    }
++}
++
++// The Custom window's picture (its columns, CUS_W + its rim), kept to slide it out after OK.
++#define CUS_SHOT_W (CUS_W + 3)
++static u16 sCustomShot[CUS_SHOT_W * PKBN_CANVAS_H];
++static u32 sCustomOpenT;
++
++static void DrawCustomSliding(u16 *fb)
++{
++    static u16 sBase[PKBN_CANVAS_W * PKBN_CANVAS_H];
++    s32 x, y, k;
++    if (!sWasCustom)
++        sCustomOpenT = sTick;
++    sWasCustom = TRUE;
++    memcpy(sBase, fb, sizeof(sBase));
++    Gfx_Darken(sBase, 0, 0, CW, CH, 5);
++    DrawCustomScreen(fb);
++    for (y = 0; y < CH; y++)
++        memcpy(&sCustomShot[y * CUS_SHOT_W], &fb[y * CW], CUS_SHOT_W * sizeof(u16));
++    k = (s32)(sTick - sCustomOpenT);
++    if (k < SLIDE_IN)
++    {
++        // ease out: quick at first, settling in
++        s32 rem = SLIDE_IN - k, off = CUS_SHOT_W * rem * rem / (SLIDE_IN * SLIDE_IN);
++        for (y = 0; y < CH; y++)
++            for (x = 0; x < CUS_SHOT_W; x++)
++                fb[y * CW + x] = x + off < CUS_SHOT_W ? sCustomShot[y * CUS_SHOT_W + x + off] : sBase[y * CW + x];
++    }
++}
++
++static void DrawCustomClosing(u16 *fb)
++{
++    s32 x, y, off;
++    if (sWasCustom && sB.state != ST_CUSTOM)
++    {
++        sWasCustom = FALSE;
++        sCloseT = sB.state == ST_FIGHT ? SLIDE_OUT : 0;
++    }
++    if (sCloseT == 0)
++        return;
++    off = CUS_SHOT_W * (SLIDE_OUT - sCloseT + 1) * (SLIDE_OUT - sCloseT + 1) / (SLIDE_OUT * SLIDE_OUT);
++    sCloseT--;
++    for (y = 0; y < CH; y++)
++        for (x = 0; x + off < CUS_SHOT_W; x++)
++            fb[y * CW + x] = sCustomShot[y * CUS_SHOT_W + x + off];
++}
++
+ void Draw_Overlay(u16 *fb)
+ {
+     s32 bw;
+@@ -1677,6 +1829,15 @@ void Draw_Overlay(u16 *fb)
+             case VEV_ANIM:
+                 OnAnimEvent(e);
+                 break;
++            case VEV_PAFORM:
++            {
++                u8 j, k = (u8)e->arg & 1;
++                for (j = 0; j < 3; j++)
++                    sPAAnimMoves[j] = sB.folder.chips[sB.paQueue[k].chips[j]].move;
++                sPAAnimPA = sB.paQueue[k].pa;
++                sPAAnimT = PA_ANIM;
++                break;
++            }
+             case VEV_SHAKE:
+                 // a stronger shake takes over; an equal one runs for the longer time
+                 if (e->kind > sShakeLevel || sShakeT == 0)
+@@ -1694,6 +1855,7 @@ void Draw_Overlay(u16 *fb)
+     }
+ 
+     Vfx_BeginFrame();
++    sHeadValid = FALSE;
+     DrawBackdrop(fb, t);
+     DrawField(fb, t);
+     Vfx_DrawLayer(fb, VFX_LAYER_GROUND);
+@@ -1717,6 +1879,7 @@ void Draw_Overlay(u16 *fb)
+     Vfx_DrawWeather(fb, t);
+     Vfx_DrawLayer(fb, VFX_LAYER_HUD);
+     Vfx_EndFrame(fb);
++    DrawChipStack(fb);
+     ShakeFrame(fb);
+ 
+     if (sB.state != ST_CUSTOM)
+@@ -1732,7 +1895,7 @@ void Draw_Overlay(u16 *fb)
+     if (sB.state == ST_TIMESTOP)
+         DrawTimeStop(fb);
+     if (sB.state == ST_CUSTOM)
+-        DrawCustomScreen(fb);
++        DrawCustomSliding(fb);
+     if (sB.state == ST_PICK)
+         DrawPicker(fb);
+     if (sB.msgTimer && sB.state != ST_TIMESTOP && sB.state != ST_CUSTOM)
+@@ -1743,7 +1906,9 @@ void Draw_Overlay(u16 *fb)
+         Draw_Box(fb, (CW - bw) / 2 - 5, my, bw + 10, 12, COL_BOX, RGB(14, 16, 22), 11);
+         TextCentered(fb, CW / 2, my - 2, sB.msg, COL_GAUGE_FULL, FALSE);
+     }
+-    if (sB.flashTimer && sB.state != ST_CUSTOM && sB.state != ST_TIMESTOP)
++    DrawPAForming(fb);
++    if (sB.flashTimer && sB.state != ST_CUSTOM && sB.state != ST_TIMESTOP
++     && strncmp(sB.flashText, "PROGRAM ADVANCE!", 16) != 0)   // POC-16b: DrawPAForming shows it
+     {
+         bw = Pkbn_EmTextWidth(sB.flashText, PKBN_FONT_NORMAL);
+         Draw_Box(fb, (CW - bw) / 2 - 6, 52, bw + 12, 16, RGB(16, 2, 10), COL_PA, 13);
+@@ -1754,6 +1919,7 @@ void Draw_Overlay(u16 *fb)
+         Draw_Box(fb, -2, 36, CW + 4, 20, COL_BOX, COL_BOX_EDGE, 14);
+         TextCentered(fb, CW / 2, 37, sB.banner, COL_WHITE, TRUE);
+     }
++    DrawCustomClosing(fb);
+ }
+ 
+ #endif // PORTABLE
+-- 
+2.43.0
+

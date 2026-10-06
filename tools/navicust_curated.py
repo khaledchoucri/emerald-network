@@ -127,6 +127,71 @@ for nm, t in TYPE_ITEMS:
                          shape=['##'], cshape=['#'], src='design (Gen 3 type item, +10%)',
                          desc='%s moves +10%%.' % t.capitalize()))
 
+# ---- POC-16d: rare BN6 programs, won in Ω rematches, type ladders and Ω legendaries ---------------------------------
+# Appended after everything else so saved program indices don't move. Names, descriptions (quoted) and BN6 data
+# (group, plus, bug, shapes) are BN6's: StructArr_813944C (data/dat36.s:379, tools/bn6_ncp_shapes.py) and the
+# program texts in data/textscript/compressed/CompText873ECC8.s (the descs are those texts, lightly adapted: Pokemon
+# for viruses). What each one does here is our port (TUNE): poc/POC-16.md.
+PROGRAMS += [
+    dict(name='Shield', effect=('LEFT_B', 0), plus=False, group=2, bug=1, cond='TOUGH', types=['STEEL', 'ROCK'],
+         shape=['###', '#..', '#..'], cshape=['##', '#.'], src='bn6f entry 32 (Shield)',
+         desc='B+Left: Strong shield!'),
+    dict(name='Reflect', effect=('LEFT_B', 1), plus=False, group=2, bug=1, cond='BEAUTY', types=['PSYCHIC', 'FIRE'],
+         shape=['..#..', '#####', '..#..'], cshape=['#####'], src='bn6f entry 36 (Reflect)',
+         desc='B+Left: Reflect attacks!'),
+    dict(name='AntiDmg', effect=('LEFT_B', 2), plus=False, group=2, bug=1, cond='COOL', types=['FIGHTING', 'DARK'],
+         shape=['.##', '.##', '##.', '#..'], cshape=['..#', '.##', '##.', '#..'], src='bn6f entry 40 (AntiDmg)',
+         desc='B+Left: Throw a star!'),
+    dict(name='MegFldr1', effect=('MEGA_PLUS', 1), plus=False, group=0, bug=4, cond='SMART', types=['PSYCHIC'],
+         shape=['..#', '###', '..#'], cshape=['###'], src='bn6f entry 16 (MegFldr1)',
+         desc='MegaChip +1'),
+    dict(name='MegFldr2', effect=('MEGA_PLUS', 2), plus=False, group=0, bug=4, cond='SMART', types=['PSYCHIC'],
+         shape=['.##.', '####', '.##.'], cshape=['..#.', '####', '.#..'], src='bn6f entry 20 (MegFldr2)',
+         desc='MegaChip +2'),
+    dict(name='GigFldr1', effect=('GIGA_PLUS', 1), plus=False, group=0, bug=4, cond='SMART', types=['WATER'],
+         shape=['..#..', '.###.', '#####'], cshape=['.#.', '###', '###'], src='bn6f entry 24 (GigFldr1)',
+         desc='GigaChip +1'),
+    dict(name='FldrPak1', effect=('FOLDER_PACK', 1), plus=False, group=0, bug=4, cond='SMART', types=['NORMAL'],
+         shape=['.##', '###', '##.'], cshape=['.##', '###', '.#.'], src='bn6f entry 116 (FldrPak1)',
+         desc='A 2-pack: Custom1 & MegFldr1'),
+    dict(name='AttckMAX', effect=('BUSTER_MAX', 0), plus=True, group=0, bug=7, cond='COOL', types=['FIGHTING'],
+         shape=['##', '##', '##', '##'], cshape=['##', '##', '##', '.#'], src='bn6f entry 152 (AttckMAX)',
+         desc='MegaBuster Attack MAX'),
+    dict(name='SpeedMAX', effect=('BUSTER_MAX', 1), plus=True, group=0, bug=7, cond='SMART', types=['FLYING'],
+         shape=['###'], cshape=['##'], src='bn6f entry 156 (SpeedMAX)',
+         desc='MegaBuster Speed MAX'),
+    dict(name='ChargMAX', effect=('BUSTER_MAX', 2), plus=True, group=0, bug=7, cond='TOUGH', types=['ELECTRIC'],
+         shape=['.#.', '###'], cshape=['#.', '##'], src='bn6f entry 160 (ChargMAX)',
+         desc='MegaBuster Charge MAX'),
+    dict(name='HP+300', effect=('HP_PCT', 30), plus=True, group=0, bug=9, cond='CUTE', types=['NORMAL', 'GRASS', 'WATER'],
+         shape=['####', '###.'], cshape=['####', '###.'], src='bn6f entries 176-178 (HP+300)',
+         desc='Max HP +30%.'),
+    dict(name='HP+400', effect=('HP_PCT', 40), plus=True, group=0, bug=9, cond='CUTE', types=['NORMAL', 'GRASS', 'WATER'],
+         shape=['####', '####'], cshape=['####', '####'], src='bn6f entries 180-182 (HP+400)',
+         desc='Max HP +40%.'),
+    dict(name='HP+500', effect=('HP_PCT', 50), plus=True, group=0, bug=9, cond='CUTE', types=['NORMAL', 'GRASS', 'WATER'],
+         shape=['#####', '#####'], cshape=['#####', '#####'], src='bn6f entries 184-186 (HP+500)',
+         desc='Max HP +50%.'),
+    dict(name='Battery', effect=('ATTRACT', 'ELECTRIC'), plus=False, group=3, bug=5, cond='SMART', types=['ELECTRIC'],
+         shape=['.#.', '.#.', '###'], cshape=['.#', '.#', '##'], src='bn6f entry 76 (Battery)',
+         desc='Attracts Electric Pokemon!'),
+    dict(name='OilBody', effect=('ATTRACT', 'FIRE'), plus=False, group=3, bug=5, cond='COOL', types=['FIRE'],
+         shape=['.#.', '.#.', '###'], cshape=['.#', '.#', '##'], src='bn6f entry 68 (OilBody)',
+         desc='Attracts Fire Pokemon!'),
+    dict(name='Collect', effect=('COLLECT', 1), plus=False, group=0, bug=6, cond='CUTE', types=['NORMAL'],
+         shape=['###', '###', '.##'], cshape=['###', '.##', '..#'], src='bn6f entry 84 (Collect)',
+         desc='Get more chips from foes'),
+    dict(name='SneakRun', effect=('SNEAK_RUN', 0), plus=False, group=0, bug=5, cond='BEAUTY', types=['FLYING', 'GHOST'],
+         shape=['.#.', '###', '.#.'], cshape=['.#.', '###'], src='bn6f entry 64 (SneakRun)',
+         desc='No weak enemies'),
+    dict(name='AutoHeal', effect=('AUTO_HEAL', 25), plus=False, group=0, bug=3, cond='CUTE', types=['GRASS', 'WATER'],
+         shape=['..#', '..#', '..#', '###'], cshape=['..#', '..#', '###'], src='bn6f entry 104 (AutoHeal)',
+         desc='HP recovers after battle'),
+    dict(name='Tango', effect=('TANGO', 30), plus=False, group=0, bug=8, cond='CUTE', types=['GRASS', 'NORMAL'],
+         shape=['###', '.#.', '.#.', '###'], cshape=['###', '.#.', '.#.', '##.'], src='bn6f entry 136 (Tango)',
+         desc='Heals low HP'),
+]
+
 # Abilities as fixed programs (design): every Pokémon's ability sits on the left end of the command line, in the
 # Pokémon's first type, and can't be moved. Size tiers (TUNE): 1 cell for minor abilities, 3 cells (an L) for the
 # strongest; everything else 2 cells. A few abilities also grant a program effect (BN-style twins).

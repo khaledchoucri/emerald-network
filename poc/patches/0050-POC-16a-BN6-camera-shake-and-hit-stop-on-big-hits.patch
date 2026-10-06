@@ -1,0 +1,284 @@
+From 3bd84112f1a4f62974b35b680603d690c68d9a47 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 15:56:38 +0300
+Subject: [PATCH 50/54] POC-16a: BN6 camera shake and hit-stop on big hits
+
+- Screen shake as BN6's camera_initShakeEffect / camera_doShakeEffect (asm/asm03_0.s:20653-20751,
+  byte_8030284 levels +-1/2/4/8 px): super-effective/crit L1, KO and broken panels L2 20f,
+  MegaChips and boss phases L2 30f, PAs and GigaChips L3 30f (TUNE). The HUD stays put.
+- Hit-stop (our addition, TUNE): 3-8 frames on super-effective, crit, counter, PA/Giga hits and
+  KOs; buttons pressed during it are delivered after. PKBN_NO_HITSTOP=1 turns it off.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |  6 ++++-
+ src/pkbn/grid_battle.c       | 13 ++++++++++
+ src/pkbn/grid_draw.c         | 49 +++++++++++++++++++++++++++++++++++-
+ src/pkbn/grid_field.c        |  2 ++
+ src/pkbn/grid_moves.c        | 44 +++++++++++++++++++++++++++++++-
+ 5 files changed, 111 insertions(+), 3 deletions(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 137d03e..a7221fe 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -196,7 +196,7 @@ struct Attack
+ };
+ 
+ // Visual events (POC-15): the rules post what happened, the drawing code plays it. Visual only.
+-enum { VEV_USE, VEV_LAUNCH, VEV_PUSH, VEV_STAT, VEV_ANIM };
++enum { VEV_USE, VEV_LAUNCH, VEV_PUSH, VEV_STAT, VEV_ANIM, VEV_SHAKE };
+ struct VisEvent
+ {
+     u32 serial;
+@@ -207,6 +207,7 @@ struct VisEvent
+     u16 move;
+     s8 arg;          // VEV_USE: wind-up frames; VEV_PUSH: panels moved (signed); VEV_STAT: stages (+/-); VEV_ANIM: index
+                      // VEV_ANIM: kind 0 = B_ANIM_STATUS_*, 1 = B_ANIM_* ; x = 1 when it plays on side itself only
++                     // VEV_SHAKE (POC-16a): kind = BN6 shake level 0-3, arg = frames
+     s8 x, y;         // VEV_PUSH: where it was before
+ };
+ #define MAX_VIS_EVENTS 16
+@@ -223,6 +224,8 @@ struct GridBattle
+     bool8 folderEmptyLogged;
+     bool8 struggleLogged;
+     bool8 fullSynchro;         // POC-14: BN6 Full Synchro after a counter hit (next chip x2)
++    u8 hitStop;                // POC-16a: frames the fight stays frozen after a big hit
++    u16 stopKeys;              // buttons pressed during the freeze, delivered after it
+     struct PkbnBustStats bust;
+     u32 counterReady;           // next frame a counter hit can count  // Busting Level / Capture Grade counters (POC-10b)
+     struct Folder folder;
+@@ -355,6 +358,7 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+ void Vis_Post(u8 ev, u8 side, u16 move, u8 kind, s8 arg, s8 x, s8 y);   // POC-15 visual events
+ void Vis_StatusAnim(u8 side, u8 anim);                  // POC-15e: B_ANIM_STATUS_* on that side (its sounds)
+ void Vis_GeneralAnim(u8 side, u8 anim, bool8 self);     // POC-15e: B_ANIM_* from that side (self: on itself)
++void Vis_Shake(u8 level, u8 frames);                    // POC-16a: BN6 camera shake (camera_initShakeEffect)
+ u8 Moves_Windup(u8 side, u8 kind, bool8 fast);
+ extern bool8 gPkbnNoWindup;                           // POC-15: BN wind-up frames before an attack
+ void Moves_Update(void);
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 346cb32..0e71195 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -1854,6 +1854,7 @@ static void BossPhaseLands(struct Fighter *e)
+         break;
+     }
+     }
++    Vis_Shake(2, 30);   // POC-16a (TUNE)
+     PKBN_LOG("boss phase: %s", b->phaseText);
+ }
+ 
+@@ -2475,6 +2476,18 @@ void CB2_PkbnGridBattle(void)
+         UpdateCustom();
+         break;
+     case ST_FIGHT:
++        // POC-16a hit-stop: everything waits; buttons pressed meanwhile are kept for the first frame after
++        if (sB.hitStop)
++        {
++            sB.hitStop--;
++            sB.stopKeys |= gMain.newKeys;
++            break;
++        }
++        if (sB.stopKeys)
++        {
++            gMain.newKeys |= sB.stopKeys;
++            sB.stopKeys = 0;
++        }
+         UpdateFight();
+         break;
+     case ST_PICK:
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 291465b..cd7ead4 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -370,6 +370,8 @@ static u8 VS(u8 side)
+ }
+ static u16 sMaxSerial;     // newest attack the visuals have announced
+ static u32 sTick;
++static u8 sShakeLevel, sShakeT;   // POC-16a camera shake (ShakeFrame)
++static u32 sShakeRng = 0x2545F491;
+ static u32 sLastBattleFrame;
+ 
+ static void ResetVisuals(void)
+@@ -383,6 +385,7 @@ static void ResetVisuals(void)
+     memset(sPendingSound, 0, sizeof(sPendingSound));
+     memset(sAnimSoundLast, 0, sizeof(sAnimSoundLast));
+     sAnimSoundFree = 0;
++    sShakeT = 0;
+     memset(sLastSoundMove, 0, sizeof(sLastSoundMove));
+     sLastVis = sB.visSerial;
+     memset(sAppearT, 0, sizeof(sAppearT));
+@@ -512,6 +515,41 @@ static void OnStatSound(const struct VisEvent *e)
+         }
+ }
+ 
++// ---- POC-16a: BN6 camera shake -------------------------------------------------------------------------------------
++// camera_doShakeEffect_80301e8 (asm/asm03_0.s:20653): each frame the camera moves by (rand & mask) - half on both
++// axes, mask 1/3/7/15 for levels 0-3 (byte_8030284), for as many frames as camera_initShakeEffect set. Here the
++// battle field moves (the HUD stays put, as BN6's does). Our own random numbers: the drawing never touches the game's.
++
++static void ShakeFrame(u16 *fb)
++{
++    static u16 sTmp[PKBN_CANVAS_W * PKBN_CANVAS_H];
++    static const u8 sMask[4] = { 1, 3, 7, 15 };
++    s32 dx, dy, x, y;
++    if (sShakeT == 0)
++        return;
++    sShakeT--;
++    sShakeRng = sShakeRng * 1103515245 + 12345;
++    dx = (s32)((sShakeRng >> 16) & sMask[sShakeLevel & 3]) - (sMask[sShakeLevel & 3] + 1) / 2;
++    sShakeRng = sShakeRng * 1103515245 + 12345;
++    dy = (s32)((sShakeRng >> 16) & sMask[sShakeLevel & 3]) - (sMask[sShakeLevel & 3] + 1) / 2;
++    if (dx == 0 && dy == 0)
++        return;
++    memcpy(sTmp, fb, sizeof(sTmp));
++    for (y = 0; y < PKBN_CANVAS_H; y++)
++    {
++        s32 sy = y - dy;
++        if (sy < 0) sy = 0;
++        if (sy >= PKBN_CANVAS_H) sy = PKBN_CANVAS_H - 1;
++        for (x = 0; x < PKBN_CANVAS_W; x++)
++        {
++            s32 sx = x - dx;
++            if (sx < 0) sx = 0;
++            if (sx >= PKBN_CANVAS_W) sx = PKBN_CANVAS_W - 1;
++            fb[y * PKBN_CANVAS_W + x] = sTmp[sy * PKBN_CANVAS_W + sx];
++        }
++    }
++}
++
+ static void PlayDueSounds(void)
+ {
+     s32 k;
+@@ -1569,7 +1607,8 @@ void Draw_Overlay(u16 *fb)
+         ResetVisuals();
+     ForEachVis(VisAppear);
+     sLastBattleFrame = sB.frame;
+-    sTick++;
++    if (!sB.hitStop || sB.state != ST_FIGHT)
++        sTick++;   // POC-16a: during a hit-stop the pictures hold too
+     t = sTick;
+ 
+     // things the visuals notice on their own: new attacks, HP changes, fainting
+@@ -1638,6 +1677,13 @@ void Draw_Overlay(u16 *fb)
+             case VEV_ANIM:
+                 OnAnimEvent(e);
+                 break;
++            case VEV_SHAKE:
++                // a stronger shake takes over; an equal one runs for the longer time
++                if (e->kind > sShakeLevel || sShakeT == 0)
++                    sShakeLevel = e->kind, sShakeT = (u8)e->arg;
++                else if (e->kind == sShakeLevel && (u8)e->arg > sShakeT)
++                    sShakeT = (u8)e->arg;
++                break;
+             }
+         }
+         (void)s;
+@@ -1671,6 +1717,7 @@ void Draw_Overlay(u16 *fb)
+     Vfx_DrawWeather(fb, t);
+     Vfx_DrawLayer(fb, VFX_LAYER_HUD);
+     Vfx_EndFrame(fb);
++    ShakeFrame(fb);
+ 
+     if (sB.state != ST_CUSTOM)
+     {
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index ff2ebd4..353ea94 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -289,6 +289,8 @@ void Field_SetPanel(s8 x, s8 y, u8 type)
+     {
+     case PANEL_BROKEN:
+         sB.panelTimer[y][x] = BROKEN_PANEL_FRAMES;
++        if (sB.state == ST_FIGHT)
++            Vis_Shake(2, 20);   // POC-16a (TUNE)
+         break;
+     case PANEL_POISON:
+     case PANEL_HOLY:
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 1d30f10..a5d7ac9 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -15,6 +15,7 @@
+ // Kinds' timings are TUNE values unless a comment names the BN6 source.
+ #include "pkbn/grid_internal.h"
+ #include "constants/battle_anim.h"
++#include "pkbn/grid_battle.h"
+ #include "data.h"
+ #include "pkbn/render.h"
+ #include "pokedex.h"
+@@ -858,6 +859,45 @@ static struct Fighter *LiveUser(const struct Attack *a)
+     return f->bm.hp ? f : NULL;
+ }
+ 
++// ---- POC-16a: hits that feel heavy ----------------------------------------------------------------------------------
++// Screen shake is BN6's: camera_initShakeEffect(level, frames) (asm/asm03_0.s:20744) moves the battle camera up to
++// +-1/2/4/8 px for levels 0-3 (byte_8030284); its effect routines mostly use level 1-2 for 10-30 frames and level 3
++// for 30-45 (the calls in asm/asm31.s). Which hits shake how much is ours (TUNE).
++// Hit-stop is our addition (BN6 doesn't freeze on hits): the fight stops for a few frames on a big hit (TUNE).
++// PKBN_NO_HITSTOP=1 turns it off (A/B, and the old timing for comparisons).
++void Vis_Shake(u8 level, u8 frames)
++{
++    Vis_Post(VEV_SHAKE, SIDE_PLAYER, MOVE_NONE, level, (s8)min(frames, 127), 0, 0);
++}
++
++static void HitStop(u8 frames)
++{
++    static s8 sOff = -1;
++    if (sOff < 0)
++        sOff = getenv("PKBN_NO_HITSTOP") != NULL;
++    if (!sOff && !gPkbnGallery && frames > sB.hitStop)
++        sB.hitStop = frames;
++}
++
++static void HitFeel(const struct Attack *a, const struct Fighter *def, s32 dmg, u16 eff, bool8 crit, bool8 counter)
++{
++    u8 cls = a->pa ? CHIP_GIGA : Chip_Class(a->move);
++    if (dmg <= 0 || (a->kind == GK_TORNADO && a->hitsLeft > 1))
++        return;   // a Tornado's ticks: only its last one
++    if (def->bm.hp == 0)
++        HitStop(8), Vis_Shake(2, 20);   // a KO
++    else if (cls == CHIP_GIGA)
++        HitStop(6), Vis_Shake(3, 30);   // a Program Advance or GigaChip
++    else if (counter)
++        HitStop(6), Vis_Shake(1, 15);
++    else if (crit)
++        HitStop(4), Vis_Shake(1, 15);
++    else if (cls == CHIP_MEGA)
++        HitStop(eff > TYPE_MUL_NORMAL ? 3 : 0), Vis_Shake(2, 30);
++    else if (eff > TYPE_MUL_NORMAL)
++        HitStop(3), Vis_Shake(1, 10);
++}
++
+ // One hit of attack `a` on the opponent. `last` = final hit of this attack (i-frames, recoil...).
+ static void ApplyHit(struct Attack *a, bool8 last)
+ {
+@@ -866,7 +906,7 @@ static void ApplyHit(struct Attack *a, bool8 last)
+     struct Fighter *me = LiveUser(a);
+     const struct BattleMove *m = &gBattleMoves[a->move];
+     u16 eff;
+-    bool8 crit;
++    bool8 crit, counter = FALSE;
+     s32 dmg;
+     u8 type = m->type;
+ 
+@@ -917,6 +957,7 @@ static void ApplyHit(struct Attack *a, bool8 last)
+     if (a->side == SIDE_PLAYER && (def->lockout || def->charging) && sB.frame >= sB.counterReady)
+     {
+         sB.counterReady = sB.frame + CHIP_LOCKOUT + 1;
++        counter = TRUE;
+         Busting_NoteCounter();
+         SetMsg("COUNTER HIT!", 50);
+         PKBN_LOG("counter hit on %s", def->name);
+@@ -993,6 +1034,7 @@ static void ApplyHit(struct Attack *a, bool8 last)
+     else if (eff < TYPE_MUL_NORMAL)
+         SetMsg("NOT VERY EFFECTIVE", 50);
+     PlaySE(eff > TYPE_MUL_NORMAL ? SE_SUPER_EFFECTIVE : eff < TYPE_MUL_NORMAL ? SE_NOT_EFFECTIVE : SE_EFFECTIVE);
++    HitFeel(a, def, dmg, eff, crit, counter);
+     PKBN_LOG("%s's %s (move %u) hit %s: %d dmg (x%u/10%s) -> %u/%u HP", a->userName, gPkbnKindNames[a->kind],
+              a->move, def->name, (int)dmg, eff, crit ? ", crit" : "", def->bm.hp, def->bm.maxHP);
+ 
+-- 
+2.43.0
+

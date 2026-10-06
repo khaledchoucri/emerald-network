@@ -1,0 +1,486 @@
+From f8e44b96b6042da7b38db1b72b0cb0174b096ad8 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 18:08:44 +0300
+Subject: [PATCH 54/54] POC-16e: type ladders and Omega legendaries in NET
+ CHALLENGE
+
+- 8 type ladders (Rock, Fighting, Electric, Fire, Normal, Flying, Psychic, Water) after the
+  Champion: 5 foes Lv55-62 in turn, tier-5 rivals, moves from their own level-up learnsets
+  (tools/pick_challenge_moves.py). First clear: one rare program each.
+- Omega Groudon / Kyogre / Rayquaza (Lv80, boss phases and signature PAs) open once
+  FLAG_DEFEATED_* is set (caught or beaten, TerraCave_End/scripts.inc:42-52 and friends):
+  cracked ground + sun + 120 s; rain + currents + nothing heals; nothing heals + 150 s + a
+  phase every 6 s. Rewards: Tango, AutoHeal, FldrPak1.
+- Challenge rules: CHR_BOSS / CHR_NO_HEAL / CHR_FAST_PHASES and an unlock flag; the list
+  scrolls (23 entries); the TIME ATTACK page gets an OMEGA column.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/challenge.h     |  11 +++-
+ include/pkbn/grid_internal.h |   2 +
+ src/pkbn/challenge.c         |  19 ++++--
+ src/pkbn/challenge_table.inc | 123 +++++++++++++++++++++++++++++++++++
+ src/pkbn/challenge_ui.c      |  60 +++++++++++++----
+ src/pkbn/grid_battle.c       |  17 +++--
+ src/pkbn/grid_field.c        |   2 +-
+ src/pkbn/grid_moves.c        |   7 +-
+ 8 files changed, 214 insertions(+), 27 deletions(-)
+
+diff --git a/include/pkbn/challenge.h b/include/pkbn/challenge.h
+index 42c8e30..56722fa 100644
+--- a/include/pkbn/challenge.h
++++ b/include/pkbn/challenge.h
+@@ -9,7 +9,7 @@
+ enum { CH_WEATHER_NONE, CH_WEATHER_SUN, CH_WEATHER_RAIN, CH_WEATHER_SAND, CH_WEATHER_HAIL };
+ enum { CH_PANELS_NONE, CH_PANELS_CRACKED, CH_PANELS_HOLY, CH_PANELS_CURRENT, CH_PANELS_POISON };
+ 
+-#define PKBN_CHALLENGE_COUNT 12
++#define PKBN_CHALLENGE_COUNT 23   // POC-16e: + 8 type ladders + 3 Omega legendaries
+ #define PKBN_CHALLENGE_BADGES_CHAMPION 9   // "badges" 9: the Champion beaten (FLAG_SYS_GAME_CLEAR)
+ 
+ struct PkbnChallengeMon
+@@ -31,9 +31,16 @@ struct PkbnChallenge
+     u16 seconds;     // time limit, 0 = none
+     const char *rewards[2];   // NaviCust programs for the first clear
+     u8 monCount;
+-    struct PkbnChallengeMon mons[PARTY_SIZE];
++    struct PkbnChallengeMon mons[PARTY_SIZE];   // moves[0] == MOVE_NONE: Emerald's own moves for that level
++    // POC-16e
++    u16 unlockFlag;  // also needs this flag (0 = none): the Omega legendaries open once it was caught or beaten
++    u8 rules;        // CHR_*
+ };
+ 
++#define CHR_BOSS         (1 << 0)   // the first foe is a legendary boss: its field phases and signature PA
++#define CHR_NO_HEAL      (1 << 1)   // nothing heals (moves, programs, abilities)
++#define CHR_FAST_PHASES  (1 << 2)   // boss phases every 6 s from the start
++
+ extern const struct PkbnChallenge gPkbnChallenges[PKBN_CHALLENGE_COUNT];
+ extern u8 gPkbnChallengeActive;   // 0: none; else the running challenge + 1
+ 
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 975615e..823fedc 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -231,6 +231,8 @@ struct GridBattle
+     bool8 fullSynchro;         // POC-14: BN6 Full Synchro after a counter hit (next chip x2)
+     u8 hitStop;                // POC-16a: frames the fight stays frozen after a big hit
+     bool8 omega;               // POC-16d: an Ω Leader rematch (tier-6 AI, levels +5)
++    bool8 noHeal;              // POC-16e: a challenge where nothing heals
++    bool8 fastPhases;          // POC-16e: boss phases at the fast rhythm from the start
+     u8 omegaCursor;            // the NORMAL / OMEGA choice before it starts
+     u32 omegaGuardSerial;      // the player's attack the Ω AI last guarded against
+     u32 omegaPunishFrame;      // when the Ω AI last jumped on the player's end lag
+diff --git a/src/pkbn/challenge.c b/src/pkbn/challenge.c
+index fe24a3e..0240edc 100644
+--- a/src/pkbn/challenge.c
++++ b/src/pkbn/challenge.c
+@@ -36,7 +36,8 @@ u8 PkbnChallenge_Badges(void)
+ 
+ bool8 PkbnChallenge_Unlocked(u8 i)
+ {
+-    return i < PKBN_CHALLENGE_COUNT && PkbnChallenge_Badges() >= gPkbnChallenges[i].badges;
++    return i < PKBN_CHALLENGE_COUNT && PkbnChallenge_Badges() >= gPkbnChallenges[i].badges
++        && (gPkbnChallenges[i].unlockFlag == 0 || FlagGet(gPkbnChallenges[i].unlockFlag));
+ }
+ 
+ void PkbnChallenge_BuildParty(u8 i)
+@@ -48,6 +49,8 @@ void PkbnChallenge_BuildParty(u8 i)
+     {
+         // full IVs, like a strong trainer (CreateNPCTrainerParty uses fixedIV from the party data)
+         CreateMon(&gEnemyParty[m], c->mons[m].species, c->mons[m].level, MAX_PER_STAT_IVS, FALSE, 0, OT_ID_RANDOM_NO_SHINY, 0);
++        if (c->mons[m].moves[0] == MOVE_NONE)
++            continue;   // POC-16e: the moves CreateMon gave it (GiveMonInitialMoveset: the last four learned by its level)
+         for (k = 0; k < MAX_MON_MOVES; k++)
+         {
+             u16 mv = c->mons[m].moves[k];
+@@ -74,16 +77,22 @@ void PkbnChallenge_AfterWin(u8 i, u32 frames, char *line1, char *line2, u32 size
+     {
+         PkbnChallenge_SetCleared(i);
+         PkbnProgram_GrantByName(c->rewards[0], 1);
+-        PkbnProgram_GrantByName(c->rewards[1], 1);
++        if (c->rewards[1] != NULL)
++            PkbnProgram_GrantByName(c->rewards[1], 1);
+         snprintf(line1, size, "%s CLEARED IN %u:%02u.%u!", c->name, (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60),
+                  (unsigned)(s10 % 10));
+-        snprintf(line2, size, "GOT PROGRAMS %s AND %s!", c->rewards[0], c->rewards[1]);
++        if (c->rewards[1] != NULL)
++            snprintf(line2, size, "GOT PROGRAMS %s AND %s!", c->rewards[0], c->rewards[1]);
++        else
++            snprintf(line2, size, "GOT THE RARE PROGRAM %s!", c->rewards[0]);
+     }
+     else
+     {
+         // a repeat clear: a * copy of one of the foes' moves (TUNE)
+-        const struct PkbnChallengeMon *m = &c->mons[Random() % c->monCount];
+-        u16 mv = m->moves[Random() % MAX_MON_MOVES];
++        u8 who = Random() % c->monCount;
++        u16 mv = GetMonData(&gEnemyParty[who], MON_DATA_MOVE1 + Random() % MAX_MON_MOVES);   // what it really knew
++        if (!PkbnFolder_MoveIsChip(mv))
++            mv = GetMonData(&gEnemyParty[who], MON_DATA_MOVE1);
+         char nm[16];
+         {
+             struct PkbnNaviStats lead;
+diff --git a/src/pkbn/challenge_table.inc b/src/pkbn/challenge_table.inc
+index 9a24fea..0a108f1 100644
+--- a/src/pkbn/challenge_table.inc
++++ b/src/pkbn/challenge_table.inc
+@@ -121,3 +121,126 @@
+             { SPECIES_SCEPTILE, 60, { MOVE_LEAF_BLADE, MOVE_DRAGON_CLAW, MOVE_EARTHQUAKE, MOVE_QUICK_ATTACK } }
+         },
+     },
++    // ---- POC-16e: type ladders (after the Champion) and Omega legendaries (TUNE) --------------------------------------
++    // Moves: each species' strongest level-up moves up to its level (STAB first, different types, then its latest status
++    // move), from src/data/pokemon/level_up_learnsets.h - tools/pick_challenge_moves.py.
++    {
++        "ROCK LADDER", "Five Rock types in a row: your HP carries over.",
++        PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "HP+300", NULL }, 5,
++        {
++            { SPECIES_RELICANTH, 55, { MOVE_ANCIENT_POWER, MOVE_TAKE_DOWN, MOVE_ROCK_TOMB, MOVE_REST } },
++            { SPECIES_LUNATONE, 56, { MOVE_PSYCHIC, MOVE_ROCK_THROW, MOVE_CONFUSION, MOVE_COSMIC_POWER } },
++            { SPECIES_CRADILY, 58, { MOVE_ANCIENT_POWER, MOVE_ACID, MOVE_ASTONISH, MOVE_AMNESIA } },
++            { SPECIES_ARMALDO, 59, { MOVE_ANCIENT_POWER, MOVE_SLASH, MOVE_METAL_CLAW, MOVE_PROTECT } },
++            { SPECIES_AGGRON, 62, { MOVE_IRON_TAIL, MOVE_TAKE_DOWN, MOVE_METAL_CLAW, MOVE_METAL_SOUND } }
++        },
++        0, 0,
++    },
++    {
++        "FIGHTING LADDER", "Five Fighting types in a row: your HP carries over.",
++        PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "AntiDmg", NULL }, 5,
++        {
++            { SPECIES_HARIYAMA, 55, { MOVE_VITAL_THROW, MOVE_SMELLING_SALT, MOVE_FAKE_OUT, MOVE_ENDURE } },
++            { SPECIES_MEDICHAM, 56, { MOVE_HI_JUMP_KICK, MOVE_CONFUSION, MOVE_ICE_PUNCH, MOVE_RECOVER } },
++            { SPECIES_BRELOOM, 58, { MOVE_DYNAMIC_PUNCH, MOVE_HEADBUTT, MOVE_MEGA_DRAIN, MOVE_MIND_READER } },
++            { SPECIES_HITMONLEE, 59, { MOVE_HI_JUMP_KICK, MOVE_MEGA_KICK, MOVE_BRICK_BREAK, MOVE_ENDURE } },
++            { SPECIES_MACHAMP, 62, { MOVE_DYNAMIC_PUNCH, MOVE_CROSS_CHOP, MOVE_SUBMISSION, MOVE_SCARY_FACE } }
++        },
++        0, 0,
++    },
++    {
++        "ELECTRIC LADDER", "Five Electric types in a row: your HP carries over.",
++        PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "Battery", NULL }, 5,
++        {
++            { SPECIES_ELECTRODE, 55, { MOVE_SPARK, MOVE_SWIFT, MOVE_TACKLE, MOVE_LIGHT_SCREEN } },
++            { SPECIES_LANTURN, 56, { MOVE_HYDRO_PUMP, MOVE_SPARK, MOVE_TAKE_DOWN, MOVE_CONFUSE_RAY } },
++            { SPECIES_MAGNETON, 58, { MOVE_SPARK, MOVE_TRI_ATTACK, MOVE_THUNDER_SHOCK, MOVE_SCREECH } },
++            { SPECIES_RAICHU, 59, { MOVE_THUNDERBOLT, MOVE_QUICK_ATTACK, MOVE_THUNDER_SHOCK, MOVE_TAIL_WHIP } },
++            { SPECIES_MANECTRIC, 62, { MOVE_THUNDER, MOVE_BITE, MOVE_QUICK_ATTACK, MOVE_CHARGE } }
++        },
++        0, 0,
++    },
++    {
++        "FIRE LADDER", "Five Fire types in a row: your HP carries over.",
++        PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "OilBody", NULL }, 5,
++        {
++            { SPECIES_TORKOAL, 55, { MOVE_HEAT_WAVE, MOVE_BODY_SLAM, MOVE_EMBER, MOVE_AMNESIA } },
++            { SPECIES_MAGCARGO, 56, { MOVE_FLAMETHROWER, MOVE_ROCK_SLIDE, MOVE_ROCK_THROW, MOVE_AMNESIA } },
++            { SPECIES_NINETALES, 58, { MOVE_EMBER, MOVE_QUICK_ATTACK, MOVE_FIRE_SPIN, MOVE_SAFEGUARD } },
++            { SPECIES_HOUNDOOM, 59, { MOVE_FLAMETHROWER, MOVE_CRUNCH, MOVE_FAINT_ATTACK, MOVE_ODOR_SLEUTH } },
++            { SPECIES_BLAZIKEN, 62, { MOVE_BLAZE_KICK, MOVE_SKY_UPPERCUT, MOVE_FIRE_PUNCH, MOVE_MIRROR_MOVE } }
++        },
++        0, 0,
++    },
++    {
++        "NORMAL LADDER", "Five Normal types in a row: your HP carries over.",
++        PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "Collect", NULL }, 5,
++        {
++            { SPECIES_KECLEON, 55, { MOVE_SLASH, MOVE_PSYBEAM, MOVE_ANCIENT_POWER, MOVE_SUBSTITUTE } },
++            { SPECIES_ZANGOOSE, 56, { MOVE_CRUSH_CLAW, MOVE_PURSUIT, MOVE_FURY_CUTTER, MOVE_DETECT } },
++            { SPECIES_SWELLOW, 58, { MOVE_WING_ATTACK, MOVE_QUICK_ATTACK, MOVE_PECK, MOVE_AGILITY } },
++            { SPECIES_SLAKING, 59, { MOVE_SCRATCH, MOVE_FAINT_ATTACK, MOVE_COVET, MOVE_SWAGGER } },
++            { SPECIES_SNORLAX, 62, { MOVE_BODY_SLAM, MOVE_ROLLOUT, MOVE_HEADBUTT, MOVE_BLOCK } }
++        },
++        0, 0,
++    },
++    {
++        "FLYING LADDER", "Five Flying types in a row: your HP carries over.",
++        PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "SneakRun", NULL }, 5,
++        {
++            { SPECIES_PELIPPER, 55, { MOVE_SPIT_UP, MOVE_WING_ATTACK, MOVE_WATER_GUN, MOVE_SWALLOW } },
++            { SPECIES_XATU, 56, { MOVE_FUTURE_SIGHT, MOVE_PECK, MOVE_CONFUSE_RAY } },
++            { SPECIES_SKARMORY, 58, { MOVE_STEEL_WING, MOVE_AIR_CUTTER, MOVE_SWIFT, MOVE_METAL_SOUND } },
++            { SPECIES_ALTARIA, 59, { MOVE_SKY_ATTACK, MOVE_TAKE_DOWN, MOVE_DRAGON_BREATH, MOVE_PERISH_SONG } },
++            { SPECIES_SALAMENCE, 62, { MOVE_FLY, MOVE_DRAGON_BREATH, MOVE_CRUNCH, MOVE_SCARY_FACE } }
++        },
++        0, 0,
++    },
++    {
++        "PSYCHIC LADDER", "Five Psychic types in a row: your HP carries over.",
++        PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "MegFldr1", NULL }, 5,
++        {
++            { SPECIES_GRUMPIG, 55, { MOVE_PSYCHIC, MOVE_BOUNCE, MOVE_SNORE, MOVE_REST } },
++            { SPECIES_CLAYDOL, 56, { MOVE_PSYBEAM, MOVE_ANCIENT_POWER, MOVE_ROCK_TOMB, MOVE_COSMIC_POWER } },
++            { SPECIES_GARDEVOIR, 58, { MOVE_PSYCHIC, MOVE_FUTURE_SIGHT, MOVE_CONFUSION, MOVE_HYPNOSIS } },
++            { SPECIES_ALAKAZAM, 59, { MOVE_PSYCHIC, MOVE_FUTURE_SIGHT, MOVE_PSYBEAM, MOVE_TRICK } },
++            { SPECIES_METAGROSS, 62, { MOVE_METEOR_MASH, MOVE_PSYCHIC, MOVE_TAKE_DOWN, MOVE_IRON_DEFENSE } }
++        },
++        0, 0,
++    },
++    {
++        "WATER LADDER", "Five Water types in a row: your HP carries over.",
++        PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 0, { "HP+400", NULL }, 5,
++        {
++            { SPECIES_WHISCASH, 55, { MOVE_EARTHQUAKE, MOVE_FUTURE_SIGHT, MOVE_WATER_GUN, MOVE_REST } },
++            { SPECIES_SHARPEDO, 56, { MOVE_CRUNCH, MOVE_SKULL_BASH, MOVE_BITE, MOVE_AGILITY } },
++            { SPECIES_WALREIN, 58, { MOVE_BLIZZARD, MOVE_BODY_SLAM, MOVE_WATER_GUN, MOVE_REST } },
++            { SPECIES_MILOTIC, 59, { MOVE_HYDRO_PUMP, MOVE_TWISTER, MOVE_WRAP, MOVE_SAFEGUARD } },
++            { SPECIES_GYARADOS, 62, { MOVE_HYDRO_PUMP, MOVE_THRASH, MOVE_BITE, MOVE_DRAGON_DANCE } }
++        },
++        0, 0,
++    },
++    {
++        "OMEGA GROUDON", "Groudon, Lv80: cracked ground and harsh sun.",
++        PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_SUN, CH_PANELS_CRACKED, 120, { "Tango", NULL }, 1,
++        {
++            { SPECIES_GROUDON, 80, { MOVE_EARTHQUAKE, MOVE_ERUPTION, MOVE_SOLAR_BEAM, MOVE_REST } }
++        },
++        FLAG_DEFEATED_GROUDON, CHR_BOSS,
++    },
++    {
++        "OMEGA KYOGRE", "Kyogre, Lv80: rain and currents. Nothing heals.",
++        PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_RAIN, CH_PANELS_CURRENT, 0, { "AutoHeal", NULL }, 1,
++        {
++            { SPECIES_KYOGRE, 80, { MOVE_WATER_SPOUT, MOVE_DOUBLE_EDGE, MOVE_ICE_BEAM, MOVE_REST } }
++        },
++        FLAG_DEFEATED_KYOGRE, CHR_BOSS | CHR_NO_HEAL,
++    },
++    {
++        "OMEGA RAYQUAZA", "Rayquaza, Lv80: dives every 6 s. Nothing heals.",
++        PKBN_CHALLENGE_BADGES_CHAMPION, 5, 1, CH_WEATHER_NONE, CH_PANELS_NONE, 150, { "FldrPak1", NULL }, 1,
++        {
++            { SPECIES_RAYQUAZA, 80, { MOVE_OUTRAGE, MOVE_FLY, MOVE_EXTREME_SPEED, MOVE_REST } }
++        },
++        FLAG_DEFEATED_RAYQUAZA, CHR_BOSS | CHR_NO_HEAL | CHR_FAST_PHASES,
++    },
+diff --git a/src/pkbn/challenge_ui.c b/src/pkbn/challenge_ui.c
+index 2917e6b..6a2272a 100644
+--- a/src/pkbn/challenge_ui.c
++++ b/src/pkbn/challenge_ui.c
+@@ -26,11 +26,13 @@
+ #define LIST_Y 24
+ #define ROW_H 11
+ #define PANEL_X 150
++#define LIST_ROWS 12   // POC-16e
+ 
+ static struct
+ {
+     MainCallback exit;
+     u8 cursor;
++    u8 top;         // POC-16e: first row shown (the list scrolls)
+     u8 iconsFor;
+     bool8 replay;   // a recorded battle to watch (pkbn_replay.bin)
+     u8 page;        // 0: challenges; 1: TIME ATTACK records (Gym Leader rematches)
+@@ -93,9 +95,17 @@ static void DrawList(u16 *fb)
+     Pkbn_DrawEmText(fb, 6, 0, "NET CHALLENGE", PKBN_FONT_NORMAL, RGB(8, 28, 31), RGB(2, 2, 5));
+     snprintf(line, sizeof(line), "CLEARED %u/%u", cleared, PKBN_CHALLENGE_COUNT);
+     Text(fb, CW - 4 - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), 4, line, RGB(31, 31, 31));
+-    for (i = 0; i < PKBN_CHALLENGE_COUNT; i++)
++    if (sC.cursor < sC.top)
++        sC.top = sC.cursor;
++    if (sC.cursor >= sC.top + LIST_ROWS)
++        sC.top = sC.cursor - LIST_ROWS + 1;
++    if (sC.top > 0)
++        Text(fb, PANEL_X - 12, LIST_Y - 12, "^", RGB(31, 26, 6));
++    if (sC.top + LIST_ROWS < PKBN_CHALLENGE_COUNT)
++        Text(fb, PANEL_X - 12, LIST_Y + LIST_ROWS * ROW_H - 4, "~", RGB(31, 26, 6));
++    for (i = sC.top; i < PKBN_CHALLENGE_COUNT && i < sC.top + LIST_ROWS; i++)
+     {
+-        s32 y = LIST_Y + i * ROW_H;
++        s32 y = LIST_Y + (i - sC.top) * ROW_H;
+         bool8 open = PkbnChallenge_Unlocked(i), on = i == sC.cursor;
+         if (on)
+         {
+@@ -105,7 +115,9 @@ static void DrawList(u16 *fb)
+         if (PkbnChallenge_Cleared(i))
+             Text(fb, LIST_X + 3, y, "*", RGB(31, 26, 6));
+         Text(fb, LIST_X + 12, y, gPkbnChallenges[i].name, open ? RGB(31, 31, 31) : RGB(12, 13, 16));
+-        if (!open)
++        if (!open && gPkbnChallenges[i].unlockFlag && PkbnChallenge_Badges() >= gPkbnChallenges[i].badges)
++            Text(fb, PANEL_X - 8 - Pkbn_EmTextWidth("FIND IT", PKBN_FONT_SMALL), y, "FIND IT", RGB(20, 10, 10));
++        else if (!open)
+         {
+             snprintf(line, sizeof(line), gPkbnChallenges[i].badges == PKBN_CHALLENGE_BADGES_CHAMPION ? "CHAMP"
+                      : gPkbnChallenges[i].badges == 1 ? "%u BADGE" : "%u BADGES",
+@@ -133,9 +145,10 @@ static void DrawRecords(u16 *fb)
+     Pkbn_DrawEmText(fb, 6, 0, "TIME ATTACK", PKBN_FONT_NORMAL, RGB(31, 26, 6), RGB(2, 2, 5));
+     Text(fb, CW - 4 - Pkbn_EmTextWidth("GYM LEADERS", PKBN_FONT_SMALL), 4, "GYM LEADERS", RGB(31, 31, 31));
+     Text(fb, 12, LIST_Y, "LEADER", RGB(16, 18, 24));
+-    Text(fb, 110, LIST_Y, "BEST TIME", RGB(16, 18, 24));
+-    Text(fb, 170, LIST_Y, "BUSTING", RGB(16, 18, 24));
+-    Text(fb, 220, LIST_Y, "CHIP", RGB(16, 18, 24));
++    Text(fb, 84, LIST_Y, "BEST TIME", RGB(16, 18, 24));
++    Text(fb, 136, LIST_Y, "BUSTING", RGB(16, 18, 24));
++    Text(fb, 178, LIST_Y, "CHIP", RGB(16, 18, 24));
++    Text(fb, 206, LIST_Y, "OMEGA", RGB(31, 12, 24));   // POC-16d
+     for (l = 0; l < PKBN_LEADERS; l++)
+     {
+         u16 frames;
+@@ -145,19 +158,26 @@ static void DrawRecords(u16 *fb)
+         Pkbn_FillRect(fb, 6, y - 1, CW - 12, 13, l & 1 ? RGB(2, 3, 9) : RGB(3, 5, 12));
+         Text(fb, 12, y, Leader_Name(l), frames ? RGB(31, 31, 31) : RGB(12, 13, 16));
+         TimeText(t, sizeof(t), frames);
+-        Text(fb, 110, y, t, frames ? RGB(8, 28, 31) : RGB(12, 13, 16));
++        Text(fb, 84, y, t, frames ? RGB(8, 28, 31) : RGB(12, 13, 16));
++        if (PkbnLeader_OmegaWon(l))
++        {
++            TimeText(t, sizeof(t), PkbnLeader_OmegaBest(l));
++            Text(fb, 206, y, t, RGB(31, 12, 24));
++        }
++        else if (chip >= 3)
++            Text(fb, 206, y, "OPEN", RGB(31, 26, 6));
+         if (level)
+         {
+             if (level >= 11)
+                 snprintf(line, sizeof(line), "S");
+             else
+                 snprintf(line, sizeof(line), "%u", level);
+-            Text(fb, 186, y, line, level >= 11 ? RGB(31, 26, 6) : RGB(31, 31, 31));
++            Text(fb, 150, y, line, level >= 11 ? RGB(31, 26, 6) : RGB(31, 31, 31));
+         }
+         if (chip)
+         {
+             snprintf(line, sizeof(line), "V%u", chip);
+-            Text(fb, 224, y, line, RGB(10, 31, 12));
++            Text(fb, 182, y, line, RGB(10, 31, 12));
+         }
+     }
+ }
+@@ -178,14 +198,18 @@ static void DrawPanel(u16 *fb)
+         Pkbn_BlitIcon(fb, sC.icons[i], PANEL_X + 4 + (i % 3) * 34, LIST_Y - 6 + (i / 3) * 26, FALSE,
+                       open ? 0 : RGB(4, 4, 8));
+     y = LIST_Y + 2 + ((c->monCount + 2) / 3) * 26;
+-    y = TextWrap(fb, PANEL_X + 4, y, CW - PANEL_X - 12, 2, c->desc, RGB(22, 26, 31));
++    y = TextWrap(fb, PANEL_X + 4, y, CW - PANEL_X - 12, 3, c->desc, RGB(22, 26, 31));
+     for (i = 0; i < c->monCount; i++)
+     {
+         if (c->mons[i].level < lo) lo = c->mons[i].level;
+         if (c->mons[i].level > hi) hi = c->mons[i].level;
+     }
+-    if (lo == hi)
++    if (c->monCount == 1)
++        snprintf(line, sizeof(line), "1 FOE, LV%u", lo);
++    else if (lo == hi)
+         snprintf(line, sizeof(line), "%u FOES LV%u, %u AT ONCE", c->monCount, lo, c->together);
++    else if (c->together == 1)
++        snprintf(line, sizeof(line), "%u FOES LV%u-%u, IN TURN", c->monCount, lo, hi);   // POC-16e: fits the panel
+     else
+         snprintf(line, sizeof(line), "%u FOES LV%u-%u, %u AT ONCE", c->monCount, lo, hi, c->together);
+     Text(fb, PANEL_X + 4, y, line, RGB(31, 31, 31));
+@@ -202,7 +226,12 @@ static void DrawPanel(u16 *fb)
+         Text(fb, PANEL_X + 4, y, line, RGB(31, 20, 10));
+         y += 10;
+     }
+-    snprintf(line, sizeof(line), "FOE STRENGTH %u/5", c->tier);
++    if (c->unlockFlag && !open)
++        snprintf(line, sizeof(line), "CATCH OR BEAT IT FIRST");
++    else if (c->rules & CHR_NO_HEAL)
++        snprintf(line, sizeof(line), "NOTHING HEALS. FOE STRENGTH %u/5", c->tier);
++    else
++        snprintf(line, sizeof(line), "FOE STRENGTH %u/5", c->tier);
+     Text(fb, PANEL_X + 4, y, line, RGB(16, 18, 24));
+     if (PkbnChallenge_Best(sC.cursor))
+     {
+@@ -217,8 +246,11 @@ static void DrawPanel(u16 *fb)
+         Text(fb, PANEL_X + 4, y, "AGAIN: * CHIP DATA", RGB(31, 26, 6));
+     else
+     {
+-        Text(fb, PANEL_X + 4, y, "FIRST CLEAR PAYS PROGRAMS", RGB(10, 31, 12));
+-        snprintf(line, sizeof(line), "%s + %s", c->rewards[0], c->rewards[1]);
++        Text(fb, PANEL_X + 4, y, c->rewards[1] ? "FIRST CLEAR PAYS PROGRAMS" : "FIRST CLEAR PAYS", RGB(10, 31, 12));
++        if (c->rewards[1])
++            snprintf(line, sizeof(line), "%s + %s", c->rewards[0], c->rewards[1]);
++        else
++            snprintf(line, sizeof(line), "RARE PROGRAM %s", c->rewards[0]);
+         Text(fb, PANEL_X + 10, y + 10, line, RGB(10, 31, 12));
+     }
+ }
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 4dfdcd9..ea1da60 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -663,7 +663,7 @@ static void OpenCustom(void)
+         if (sB.wishHeal[i])
+         {
+             struct Fighter *f = &sB.f[i];
+-            if (f->bm.hp)
++            if (f->bm.hp && !sB.noHeal)
+             {
+                 f->bm.hp = (f->bm.hp + sB.wishHeal[i] > f->bm.maxHP) ? f->bm.maxHP : f->bm.hp + sB.wishHeal[i];
+                 f->statusFlash = 20;
+@@ -914,7 +914,16 @@ static void Begin(void)
+         sB.rivalTier = c->tier;
+         sB.aiFlags = AI_SCRIPT_CHECK_BAD_MOVE | AI_SCRIPT_TRY_TO_FAINT | AI_SCRIPT_CHECK_VIABILITY;
+         sB.timeLimit = c->seconds * 60;
+-        PKBN_LOG("net challenge %u: %s, tier %u, %u at once, %u s", sB.challenge - 1, c->name, c->tier, c->together, c->seconds);
++        sB.noHeal = (c->rules & CHR_NO_HEAL) != 0;
++        sB.fastPhases = (c->rules & CHR_FAST_PHASES) != 0;
++        if (c->rules & CHR_BOSS)
++        {
++            // POC-16e Omega legendaries: the boss battle's phases and signature PA (POC-14h)
++            sB.boss = BossOf(c->mons[0].species);
++            sB.bossTimer = sB.fastPhases ? BOSS_PHASE_FRAMES_LOW / 2 : BOSS_PHASE_FRAMES / 2;
++        }
++        PKBN_LOG("net challenge %u: %s, tier %u, %u at once, %u s, rules %x", sB.challenge - 1, c->name, c->tier, c->together,
++                 c->seconds, c->rules);
+     }
+     else if (!sB.trainer && (gBattleTypeFlags & BATTLE_TYPE_LEGENDARY))
+     {
+@@ -1988,7 +1997,7 @@ static void BossFrame(void)
+     }
+     if (sB.bossTimer && --sB.bossTimer)
+         return;
+-    sB.bossTimer = e->bm.hp <= e->bm.maxHP / 2 ? BOSS_PHASE_FRAMES_LOW : BOSS_PHASE_FRAMES;
++    sB.bossTimer = e->bm.hp <= e->bm.maxHP / 2 || sB.fastPhases ? BOSS_PHASE_FRAMES_LOW : BOSS_PHASE_FRAMES;
+     if (Moves_SideHasPending(SIDE_ENEMY))
+     {
+         sB.bossTimer = 30;   // after its attack lands
+@@ -2254,7 +2263,7 @@ static void NaviFrame(u8 side)
+         f->shieldT--;
+     if (f->leftBCd)
+         f->leftBCd--;
+-    if (f->navi.tango && !*done && f->bm.hp && f->bm.hp <= f->bm.maxHP / 4)
++    if (f->navi.tango && !*done && !sB.noHeal && f->bm.hp && f->bm.hp <= f->bm.maxHP / 4)
+     {
+         u32 h = f->bm.maxHP * f->navi.tango / 100;
+         *done = TRUE;
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index b76fec4..053a7c5 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -725,7 +725,7 @@ static s32 Frac(const struct Fighter *f, s32 div)
+ 
+ static void Heal(struct Fighter *f, s32 amount)
+ {
+-    if (f->bm.hp == 0)
++    if (f->bm.hp == 0 || sB.noHeal)   // POC-16e: nothing heals in some challenges
+         return;
+     f->bm.hp = (f->bm.hp + amount > f->bm.maxHP) ? f->bm.maxHP : f->bm.hp + amount;
+ }
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 4694384..6f43820 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -235,6 +235,11 @@ static void Heal(struct Fighter *f, s32 amount)
+ {
+     if (f->bm.hp == 0 || amount <= 0)
+         return;
++    if (sB.noHeal)
++    {
++        SetMsg("NOTHING HEALS HERE!", 40);   // POC-16e
++        return;
++    }
+     f->bm.hp = (f->bm.hp + amount > f->bm.maxHP) ? f->bm.maxHP : f->bm.hp + amount;
+     f->statusFlash = 12;
+ }
+@@ -1070,7 +1075,7 @@ static void ApplyHit(struct Attack *a, bool8 last)
+         const struct PkbnProgramAdvance *pa = PAOf(a);
+         if (pa->drain && me)
+             Heal(me, dmg * pa->drain / 100 ? dmg * pa->drain / 100 : 1);
+-        if ((pa->flags & PAF_PARTYHEAL) && a->side == SIDE_PLAYER)
++        if ((pa->flags & PAF_PARTYHEAL) && a->side == SIDE_PLAYER && !sB.noHeal)
+         {
+             s32 i, h = dmg / 2 ? dmg / 2 : 1;
+             for (i = 0; i < sB.partyCount; i++)
+-- 
+2.43.0
+

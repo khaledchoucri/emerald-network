@@ -12,7 +12,10 @@ host = sys.argv[1]
 EFFECTS = ['NONE', 'SUPER_ARMOR', 'HAND', 'FIRST_BARRIER', 'FLOAT_SHOES', 'AIR_SHOES', 'UNDER_SHIRT', 'BUG_STOP',
            'BUST_PACK', 'BUSTER_ATK', 'BUSTER_SPEED', 'BUSTER_CHARGE', 'HP_PCT', 'STAT_PCT', 'QUICK_CLAW', 'KINGS_ROCK',
            'SCOPE_LENS', 'BRIGHT_POWDER', 'LEFTOVERS', 'SHELL_BELL', 'FOCUS_BAND', 'CHOICE_BAND', 'LUCKY_EGG',
-           'AMULET_COIN', 'TYPE_BOOST']
+           'AMULET_COIN', 'TYPE_BOOST',
+           # POC-16d
+           'LEFT_B', 'MEGA_PLUS', 'GIGA_PLUS', 'FOLDER_PACK', 'BUSTER_MAX', 'ATTRACT', 'COLLECT', 'SNEAK_RUN',
+           'AUTO_HEAL', 'TANGO']
 CONDS = ['COOL', 'BEAUTY', 'CUTE', 'SMART', 'TOUGH']
 STATS = {'ATK': 'STAT_ATK', 'DEF': 'STAT_DEF', 'SPATK': 'STAT_SPATK', 'SPDEF': 'STAT_SPDEF', 'SPEED': 'STAT_SPEED'}
 GRANT_FLAGS = {'FLOAT_SHOES': 'NCPF_FLOAT_SHOES', 'AIR_SHOES': 'NCPF_AIR_SHOES', 'UNDER_SHIRT': 'NCPF_UNDER_SHIRT',
@@ -65,6 +68,8 @@ for p in PROGRAMS:
     eff = p['effect']; kind = eff[0]; arg = '0'; value = eff[-1] if len(eff) > 1 else 0
     if kind == 'STAT_PCT': arg = STATS[eff[1]]
     if kind == 'TYPE_BOOST': arg = 'TYPE_' + eff[1]
+    if kind == 'ATTRACT': arg = 'TYPE_' + eff[1]; value = 0
+    if kind in ('LEFT_B', 'BUSTER_MAX'): arg = str(eff[1]); value = 0
     types = ['TYPE_' + t for t in p['types']]
     C.append('    { // %s' % p['src'])
     C.append('        "%s", "%s", NCPE_%s, %s, %d, %s, %d, %d, NCP_COND_%s, %d, {%s}, %s, %s' % (

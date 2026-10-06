@@ -1,0 +1,1140 @@
+From d48dba919d3bb366ceadab3b4d8810237d7b36cc Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 17:57:41 +0300
+Subject: [PATCH 53/54] POC-16d: 19 rare BN6 programs, Omega Leader rematches,
+ the Omega AI
+
+- Programs (appended; names, texts, groups and shapes from BN6's StructArr_813944C and
+  CompText873ECC8; effects ours, TUNE): Shield / Reflect / AntiDmg (B + back: a 30-frame
+  shield, Reflect returns half, AntiDmg throws Swift), MegFldr1/2, GigFldr1, FldrPak1
+  (lead Pokemon's raise the folder's Mega/Giga limits), AttckMAX / SpeedMAX / ChargMAX,
+  HP+300/400/500, Battery / OilBody (Static-style type attraction in wild_encounter.c),
+  SneakRun (a Repel that never runs out), Collect (+1 chip copy), AutoHeal (25% after a
+  win), Tango (once a battle below 1/4 HP: +30%).
+- Omega: a Leader rematch with the V3 Leader chip offers NORMAL / OMEGA before it starts.
+  Omega: Leader's Pokemon +5 levels, tier-6 NaviCust and the Omega AI (aims ahead, counter-chips,
+  punishes end lag, raises Protect/Detect against PAs and GigaChips, 15% faster, 20% more
+  dodges, PAs at 2/3 and 1/3 HP). First Omega win pays a rare program; repeats a * chip and a
+  record. pkbn.sav v6 keeps Omega wins and best times.
+- Self-tests: PKBN_TEST_OMEGA=1, PKBN_TEST_LEFTB=frames.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/chip_pack.h     |   4 +
+ include/pkbn/folder.h        |   1 +
+ include/pkbn/grid_battle.h   |   2 +-
+ include/pkbn/grid_internal.h |  12 ++-
+ include/pkbn/leader.h        |   5 +-
+ include/pkbn/navicust.h      |   7 ++
+ include/pkbn/ncp_table.h     |  12 ++-
+ src/pkbn/busting.c           |  11 ++-
+ src/pkbn/challenge.c         |   6 +-
+ src/pkbn/folder.c            |  17 +++-
+ src/pkbn/folder_ui.c         |  12 ++-
+ src/pkbn/grid_battle.c       | 177 ++++++++++++++++++++++++++++++++++-
+ src/pkbn/grid_draw.c         |  37 ++++++++
+ src/pkbn/grid_field.c        |   2 +
+ src/pkbn/grid_moves.c        |  18 +++-
+ src/pkbn/leader.c            |  55 ++++++++++-
+ src/pkbn/navicust.c          |  26 +++++
+ src/pkbn/ncp_table.c         |  57 +++++++++++
+ src/pkbn/pkbn_save.c         |  19 +++-
+ src/pkbn/post_battle.c       |  27 +++++-
+ src/pkbn/rival.c             |   7 ++
+ src/pkbn/selftest.c          |  21 +++++
+ src/wild_encounter.c         |  29 ++++++
+ 23 files changed, 548 insertions(+), 16 deletions(-)
+
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index 1793024..79de0c4 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -47,6 +47,10 @@ u8 PkbnLeader_Chip(u8 leader);
+ void PkbnLeader_SetChip(u8 leader, u8 level);
+ void PkbnLeader_Record(u8 leader, u16 *frames, u8 *level);
+ void PkbnLeader_SetRecord(u8 leader, u16 frames, u8 level);
++bool8 PkbnLeader_OmegaWon(u8 leader);            // POC-16d: Ω rematch won
++void PkbnLeader_SetOmegaWon(u8 leader);
++u16 PkbnLeader_OmegaBest(u8 leader);
++void PkbnLeader_SetOmegaBest(u8 leader, u16 frames);
+ bool8 PkbnChallenge_Cleared(u8 n);
+ void PkbnChallenge_SetCleared(u8 n);
+ u16 PkbnChallenge_Best(u8 n);               // best clear time in fight frames (0 = none)
+diff --git a/include/pkbn/folder.h b/include/pkbn/folder.h
+index a13c6e6..1fe9679 100644
+--- a/include/pkbn/folder.h
++++ b/include/pkbn/folder.h
+@@ -70,6 +70,7 @@ bool8 PkbnFolder_CanAppend(const struct Folder *folder, const u8 *queue, u8 queu
+ enum { FOLDER_STYLE_BALANCED, FOLDER_STYLE_GYM, FOLDER_STYLE_PA, FOLDER_STYLE_CODE, FOLDER_STYLE_COUNT };
+ u8 PkbnFolder_BuildStyle(u8 style, const struct BattlePokemon *party, u8 partyCount, u16 *moves, u8 *letters,
+                          char *what, u32 whatSize);
++void PkbnFolder_RefreshClassBonus(void);   // POC-16d: read the lead Pokémon's MegFldr / GigFldr programs
+ s8 PkbnFolder_NextGym(void);   // 0-7: the first badge not won yet, -1 when all are
+ u8 PkbnFolder_GymType(u8 gym);
+ 
+diff --git a/include/pkbn/grid_battle.h b/include/pkbn/grid_battle.h
+index 122e72f..183706e 100644
+--- a/include/pkbn/grid_battle.h
++++ b/include/pkbn/grid_battle.h
+@@ -5,7 +5,7 @@
+ // Design notes: poc/POC-1..5.md. PC (PORTABLE) builds only.
+ void CB2_PkbnGridBattle(void);
+ 
+-enum { PKBN_GRID_INTRO, PKBN_GRID_CUSTOM, PKBN_GRID_FIGHT, PKBN_GRID_END, PKBN_GRID_PICK, PKBN_GRID_TIMESTOP, PKBN_GRID_THROW, PKBN_GRID_SENDOUT };
++enum { PKBN_GRID_INTRO, PKBN_GRID_CUSTOM, PKBN_GRID_FIGHT, PKBN_GRID_END, PKBN_GRID_PICK, PKBN_GRID_TIMESTOP, PKBN_GRID_THROW, PKBN_GRID_SENDOUT, PKBN_GRID_OMEGA };
+ 
+ struct PkbnGridDebug
+ {
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index debf8c7..975615e 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -62,7 +62,7 @@
+ #define MAX_ATTACKS          10
+ #define MAX_FOES             3    // POC-11: wild packs of up to 3 on the enemy side (BN virus battles have 1-3)
+ 
+-enum { ST_INTRO, ST_CUSTOM, ST_FIGHT, ST_END, ST_PICK, ST_TIMESTOP, ST_THROW, ST_SENDOUT };
++enum { ST_INTRO, ST_CUSTOM, ST_FIGHT, ST_END, ST_PICK, ST_TIMESTOP, ST_THROW, ST_SENDOUT, ST_OMEGA };
+ enum { SIDE_PLAYER, SIDE_ENEMY };
+ enum { PICK_WILD, PICK_BATON, PICK_FAINT };
+ enum { TS_SWITCH, TS_ASSIST, TS_BENCH };
+@@ -95,6 +95,9 @@ struct Fighter
+     u16 hurtFlash;
+     u16 statusFlash;
+     bool8 barrier;
++    u8 shieldT;            // POC-16d: Shield / Reflect up (frames)
++    u16 leftBCd;           // POC-16d: B + back recharging (frames)
++    bool8 tangoDone;       // POC-16d: an enemy's Tango was used (the player's is in its PartyMember)
+     u8 protectUses;
+     u16 lastMove;        // last move this Pokémon used (Mirror Move / Mimic read the foe's)
+     u16 lastKind;
+@@ -157,6 +160,7 @@ struct PartyMember
+     struct PkbnNaviStats navi;   // its NaviCust, compiled at battle start (POC-9)
+     u16 hpBonus;                 // HP+ programs: extra max HP for this battle (taken off again at the end)
+     bool8 enteredOnce;           // FirstBarrier / status bug apply on its first entry only
++    bool8 tangoDone;             // POC-16d: its Tango heal was used this battle
+ };
+ 
+ // An attack in flight / winding up / ticking.
+@@ -226,6 +230,12 @@ struct GridBattle
+     bool8 struggleLogged;
+     bool8 fullSynchro;         // POC-14: BN6 Full Synchro after a counter hit (next chip x2)
+     u8 hitStop;                // POC-16a: frames the fight stays frozen after a big hit
++    bool8 omega;               // POC-16d: an Ω Leader rematch (tier-6 AI, levels +5)
++    u8 omegaCursor;            // the NORMAL / OMEGA choice before it starts
++    u32 omegaGuardSerial;      // the player's attack the Ω AI last guarded against
++    u32 omegaPunishFrame;      // when the Ω AI last jumped on the player's end lag
++    s8 playerStepDy;           // the player's last up/down step, and when (the Ω AI aims ahead of it)
++    u32 playerStepFrame;
+     u16 stopKeys;              // buttons pressed during the freeze, delivered after it
+     struct PkbnBustStats bust;
+     u32 counterReady;           // next frame a counter hit can count  // Busting Level / Capture Grade counters (POC-10b)
+diff --git a/include/pkbn/leader.h b/include/pkbn/leader.h
+index 3d2ce3d..ace4be8 100644
+--- a/include/pkbn/leader.h
++++ b/include/pkbn/leader.h
+@@ -14,5 +14,8 @@ void Leader_Ace(u8 leader, u16 *species, u8 *level, u16 *move);   // the ace a L
+ char Leader_Code(u8 leader);                       // 0-25
+ const char *Leader_Name(u8 leader);
+ // After a won Gym Leader battle: chip and record. Writes up to two lines of post-battle text (empty if none).
+-void Leader_AfterWin(u16 trainerId, u8 bustingLevel, u32 fightFrames, char *line1, char *line2, u32 size);
++void Leader_AfterWin(u16 trainerId, u8 bustingLevel, u32 fightFrames, bool8 omega, char *line1, char *line2, u32 size);
++// POC-16d: an Ω rematch is offered once you hold the Leader's V3 chip; its first win pays this rare program.
++bool8 Leader_OmegaOffered(u16 trainerId);
++const char *Leader_OmegaProgram(u8 leader);
+ #endif // GUARD_PKBN_LEADER_H
+diff --git a/include/pkbn/navicust.h b/include/pkbn/navicust.h
+index 5b3fa1d..6c98fdf 100644
+--- a/include/pkbn/navicust.h
++++ b/include/pkbn/navicust.h
+@@ -51,6 +51,12 @@ struct PkbnNaviStats
+     u8 typePct[NUMBER_OF_MON_TYPES];
+     u8 quickClaw, kingsRock, scopeLens, brightPowder, leftovers, shellBell, focusBand, choiceBand;
+     u8 luckyEgg, amuletCoin;
++    // POC-16d: the rare BN6 programs
++    u8 leftB;                 // B + back: 1 Shield, 2 Reflect, 3 AntiDmg
++    u8 megaPlus, gigaPlus;    // MegFldr / GigFldr / FldrPak: more Mega / Giga chips (the lead Pokémon's count)
++    u8 attractType;           // Battery / OilBody: TYPE_* + 1 (0 = none)
++    bool8 collect, sneakRun;
++    u8 autoHeal, tango;       // % of max HP
+     u8 bug[NAVI_BUG_TYPES];   // bug levels 0-3 by BN6 bug type
+     u8 colours;               // distinct colours that count toward BN6's colour limit
+     bool8 pokerus;            // active Pokérus softened the bugs
+@@ -90,6 +96,7 @@ void Navi_Compile(const struct PkbnNavi *navi, const struct PkbnNaviOwner *owner
+ // The layout of a Pokémon; create = give it a Navi ID (and an empty layout) when it has none. NULL if none.
+ struct PkbnNavi *Navi_ForMon(struct Pokemon *mon, bool8 create);
+ void Navi_StatsForMon(struct Pokemon *mon, struct PkbnNaviStats *out);
++void Navi_LeadStats(struct PkbnNaviStats *out);   // POC-16d: gPlayerParty[0]'s (all zero for an egg / nobody)
+ u8 Navi_ProgramsInUse(u8 prog);        // copies placed on all Pokémon
+ u8 Navi_ProgramsOwned(u8 prog);
+ const char *Navi_BugName(u8 bugType);
+diff --git a/include/pkbn/ncp_table.h b/include/pkbn/ncp_table.h
+index 6e59c5a..2abadd7 100644
+--- a/include/pkbn/ncp_table.h
++++ b/include/pkbn/ncp_table.h
+@@ -31,6 +31,16 @@ enum PkbnNcpEffect
+     NCPE_LUCKY_EGG,
+     NCPE_AMULET_COIN,
+     NCPE_TYPE_BOOST,
++    NCPE_LEFT_B,
++    NCPE_MEGA_PLUS,
++    NCPE_GIGA_PLUS,
++    NCPE_FOLDER_PACK,
++    NCPE_BUSTER_MAX,
++    NCPE_ATTRACT,
++    NCPE_COLLECT,
++    NCPE_SNEAK_RUN,
++    NCPE_AUTO_HEAL,
++    NCPE_TANGO,
+     NCPE_COUNT
+ };
+ 
+@@ -60,7 +70,7 @@ struct PkbnNcp
+     struct PkbnNcpShape shape, cshape;
+ };
+ 
+-#define NCP_COUNT 48
++#define NCP_COUNT 67
+ extern const struct PkbnNcp gPkbnNcps[NCP_COUNT];
+ extern const u8 gPkbnAbilityCells[];   // 1..3 cells of the fixed ability program, by ABILITY_*
+ extern const u8 gPkbnAbilityGrants[];  // NCPF_* an ability grants
+diff --git a/src/pkbn/busting.c b/src/pkbn/busting.c
+index 63fa519..a90e5bb 100644
+--- a/src/pkbn/busting.c
++++ b/src/pkbn/busting.c
+@@ -273,8 +273,17 @@ static void ChipName(char *dst, u32 size, u16 move, u8 letter)
+ static void GiveChip(u16 move, u8 letter, char *msg, u32 size)
+ {
+     char nm[24];
+-    PkbnPack_Add(move, letter, 1);
++    struct PkbnNaviStats lead;
++    Navi_LeadStats(&lead);
+     ChipName(nm, sizeof(nm), move, letter);
++    if (lead.collect)
++    {
++        // POC-16d: BN6's Collect ("Get more chips frm enmy") on the lead Pokémon: one more copy
++        PkbnPack_Add(move, letter, 2);
++        snprintf(msg, size, "GOT 2 CHIPS: %s! (COLLECT)", nm);
++        return;
++    }
++    PkbnPack_Add(move, letter, 1);
+     snprintf(msg, size, "GOT A CHIP: %s!", nm);
+ }
+ 
+diff --git a/src/pkbn/challenge.c b/src/pkbn/challenge.c
+index 6830639..fe24a3e 100644
+--- a/src/pkbn/challenge.c
++++ b/src/pkbn/challenge.c
+@@ -85,7 +85,11 @@ void PkbnChallenge_AfterWin(u8 i, u32 frames, char *line1, char *line2, u32 size
+         const struct PkbnChallengeMon *m = &c->mons[Random() % c->monCount];
+         u16 mv = m->moves[Random() % MAX_MON_MOVES];
+         char nm[16];
+-        PkbnPack_Add(mv, LETTER_WILD, 1);
++        {
++            struct PkbnNaviStats lead;
++            Navi_LeadStats(&lead);
++            PkbnPack_Add(mv, LETTER_WILD, lead.collect ? 2 : 1);   // POC-16d: Collect
++        }
+         Pkbn_GameStringToAscii(nm, gMoveNames[mv], sizeof(nm));
+         if (record)
+             snprintf(line1, size, "NEW RECORD %u:%02u.%u!", (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60), (unsigned)(s10 % 10));
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index 1654e03..31307ac 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -17,6 +17,7 @@
+ #include "event_data.h"
+ #include "constants/flags.h"
+ #include "battle_main.h"
++#include "pkbn/navicust.h"
+ 
+ bool8 PkbnFolder_MoveIsChip(u16 move)
+ {
+@@ -63,9 +64,22 @@ u8 Chip_Class(u16 move)
+     return CHIP_STANDARD;
+ }
+ 
++// POC-16d: BN6's MegFldr1/2, GigFldr1 and FldrPak on the lead Pokémon raise these (PkbnFolder_RefreshClassBonus).
++static u8 sMegaPlus, sGigaPlus;
++
++void PkbnFolder_RefreshClassBonus(void)
++{
++#ifdef PORTABLE
++    struct PkbnNaviStats s;
++    Navi_LeadStats(&s);
++    sMegaPlus = s.megaPlus;
++    sGigaPlus = s.gigaPlus;
++#endif
++}
++
+ u8 Chip_ClassMax(u8 cls)
+ {
+-    return cls == CHIP_GIGA ? 1 : cls == CHIP_MEGA ? 5 : 0xFF;
++    return cls == CHIP_GIGA ? 1 + sGigaPlus : cls == CHIP_MEGA ? 5 + sMegaPlus : 0xFF;
+ }
+ 
+ // Can `mv` join a folder holding moves[0..n)? Only the class rule: room for another distinct Mega / Giga chip.
+@@ -314,6 +328,7 @@ void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party,
+     u8 size;
+ 
+     memset(folder, 0, sizeof(*folder));
++    PkbnFolder_RefreshClassBonus();
+     for (p = 0; p < partyCount; p++)
+         if (party[p].species != SPECIES_NONE)
+             mons++;
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index 30c9d2d..0afcb0f 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -689,10 +689,10 @@ static void DrawList(u16 *fb)
+                 giga += Chip_Class(sF.fMove[j]) == CHIP_GIGA;
+             }
+             s32 cx = LIST_X + 2;
+-            snprintf(cl, sizeof(cl), "MEGA %u/5", mega);
++            snprintf(cl, sizeof(cl), "MEGA %u/%u", mega, Chip_ClassMax(CHIP_MEGA));
+             Text(fb, cx, LIST_Y - 14, cl, RGB(10, 20, 31));
+             cx += Pkbn_EmTextWidth(cl, PKBN_FONT_SMALL) + 6;
+-            snprintf(cl, sizeof(cl), "GIGA %u/1", giga);
++            snprintf(cl, sizeof(cl), "GIGA %u/%u", giga, Chip_ClassMax(CHIP_GIGA));
+             Text(fb, cx, LIST_Y - 14, cl, RGB(31, 12, 24));
+         }
+     }
+@@ -939,7 +939,12 @@ static void AddToFolder(u16 mv, u8 letter)
+     else if (InFolder(mv, letter) >= PkbnPack_Get(mv, letter))
+         Note("ALL YOUR COPIES ARE IN ALREADY");
+     else if (Chip_Class(mv) != CHIP_STANDARD && !Chip_ClassFits(sF.fMove, sF.fCount, mv))
+-        Note(Chip_Class(mv) == CHIP_GIGA ? "YOU CAN USE ONLY 1 GIGACHIP" : "YOU CAN USE ONLY 5 MEGACHIPS");   // CompText86CF1A8 unk6/7
++    {
++        char line[40];
++        snprintf(line, sizeof(line), "YOU CAN USE ONLY %u %s", Chip_ClassMax(Chip_Class(mv)),
++                 Chip_Class(mv) == CHIP_GIGA ? "GIGACHIP(S)" : "MEGACHIPS");   // CompText86CF1A8 unk6/7
++        Note(line);
++    }
+     else if (Chip_Class(mv) != CHIP_STANDARD && InFolder(mv, -1) >= 1)
+         Note(Chip_Class(mv) == CHIP_GIGA ? "ONLY 1 OF THE SAME GIGACHIP" : "ONLY 1 OF THE SAME MEGACHIP");  // unk4/5
+     else if (InFolder(mv, -1) >= Chip_CopyCap(mv))
+@@ -1340,6 +1345,7 @@ static void OpenCommon(MainCallback exitCallback)
+         sF.fMax = Chip_FolderSize(mons);
+     }
+     sF.edited = PkbnFolderEdit_Get(sF.fMove, sF.fLetter) > 0;
++    PkbnFolder_RefreshClassBonus();
+     LoadFolder();
+     BuildGroups();
+     BuildPack();
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index ab00ed0..4dfdcd9 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -497,6 +497,7 @@ static void LoadEnemy(struct Pokemon *mon)
+     Gfx_LoadMonPic(&f->pic, f->bm.species, f->bm.personality, f->bm.otId);
+     Field_ResetFighterConditions(f);
+     memset(&f->navi, 0, sizeof(f->navi));
++    f->tangoDone = FALSE;
+     f->chainSlot = 0;
+     f->paUses = 0;
+     f->style = (!sB.trainer && !sB.challenge && getenv("PKBN_NO_STYLES") == NULL) ? StyleOf(f->bm.species) : STYLE_NONE;
+@@ -1024,6 +1025,12 @@ static void Begin(void)
+     Foe_Select(0);
+     sB.state = ST_INTRO;
+     sB.timer = 70;
++    if (sB.trainer && !sB.challenge && sB.rivalTier && Leader_OmegaOffered(gTrainerBattleOpponent_A))
++    {
++        // POC-16d: with the Leader's V3 chip in hand, a rematch can be taken at Ω (the choice is made on the grid)
++        sB.state = ST_OMEGA;
++        sB.omegaCursor = getenv("PKBN_TEST_OMEGA") != NULL ? 1 : 0;
++    }
+     gPkbnCanvasOverlay = Overlay;
+     sActive = TRUE;
+     if (gPkbnReplayActive)
+@@ -1032,6 +1039,65 @@ static void Begin(void)
+         PkbnReplay_StartRecording();
+ }
+ 
++// POC-16d: Ω - the Leader's Pokémon 5 levels higher (TUNE) and the tier-6 rival: Ω AI and NaviCust (src/pkbn/rival.c).
++static void ApplyOmega(void)
++{
++    s32 i, k;
++    char nm[16];
++    sB.omega = TRUE;
++    sB.rivalTier = 6;
++    for (i = 0; i < PARTY_SIZE; i++)
++    {
++        struct Pokemon *mon = &gEnemyParty[i];
++        u16 sp = GetMonData(mon, MON_DATA_SPECIES);
++        u32 lv, exp, hp;
++        if (sp == SPECIES_NONE)
++            continue;
++        lv = GetMonData(mon, MON_DATA_LEVEL) + 5;
++        if (lv > MAX_LEVEL)
++            lv = MAX_LEVEL;
++        exp = gExperienceTables[gSpeciesInfo[sp].growthRate][lv];
++        SetMonData(mon, MON_DATA_EXP, &exp);
++        SetMonData(mon, MON_DATA_LEVEL, &lv);
++        CalculateMonStats(mon);
++        hp = GetMonData(mon, MON_DATA_MAX_HP);
++        SetMonData(mon, MON_DATA_HP, &hp);
++    }
++    for (k = 0; k < sB.foeCount; k++)
++    {
++        s8 x, y;
++        Foe_Select(k);
++        x = sB.f[SIDE_ENEMY].x, y = sB.f[SIDE_ENEMY].y;
++        LoadEnemy(&gEnemyParty[sB.foeSlot[k]]);
++        sB.f[SIDE_ENEMY].x = x, sB.f[SIDE_ENEMY].y = y;
++    }
++    Foe_Select(0);
++    Pkbn_GameStringToAscii(nm, gTrainers[gTrainerBattleOpponent_A].trainerName, sizeof(nm));
++    snprintf(sB.banner, sizeof(sB.banner), "OMEGA %s WANTS TO BATTLE!", nm);
++    PKBN_LOG("omega rematch: trainer %u, levels +5, tier 6", gTrainerBattleOpponent_A);
++}
++
++static void UpdateOmegaChoice(void)
++{
++    u16 keys = gMain.newKeys;
++    if (keys & (DPAD_UP | DPAD_DOWN))
++    {
++        sB.omegaCursor ^= 1;
++        PlaySE(SE_SELECT);
++    }
++    if (keys & A_BUTTON)
++    {
++        if (sB.omegaCursor)
++        {
++            ApplyOmega();
++            PlaySE(SE_M_DRAGON_RAGE);
++        }
++        else
++            PlaySE(SE_SELECT);
++        sB.state = ST_INTRO;
++    }
++}
++
+ static void Finish(void)
+ {
+     s32 i, m;
+@@ -1086,7 +1152,8 @@ static u16 EnemyAttackInterval(void)
+     if (spd > 100)
+         spd = 100;
+     return (150 - spd / 2 + (Random() % 40)) * (20 - sB.rivalTier) / 20      // TUNE: faster Pokémon attack more often; rivals -5%/tier
+-         * sStyleAttack[sB.f[SIDE_ENEMY].style] / 100;                         // wild patterns (POC-13)
++         * sStyleAttack[sB.f[SIDE_ENEMY].style] / 100                          // wild patterns (POC-13)
++         * (sB.omega ? 85 : 100) / 100;                                        // POC-16d Ω: 15% sooner (TUNE)
+ }
+ 
+ // ---- Per-state update -----------------------------------------------------------------
+@@ -1601,6 +1668,28 @@ static void UpdatePlayer(void)
+     if (BusyOrDisabled(SIDE_PLAYER))
+         return;
+ 
++    // POC-16d: BN6's [B]+Left programs - Shield, Reflect ("Strong shield!", "Reflect attacks!") and AntiDmg ("Throw a
++    // star!"): hold B and press back. Ours: the shield lasts 30 frames, the star is Swift (Emerald's star move); 150
++    // frames to recharge (TUNE).
++    if (p->navi.leftB && (held & B_BUTTON) && (keys & DPAD_LEFT) && p->leftBCd == 0)
++    {
++        p->leftBCd = 150;
++        p->moveCd = 12;   // the press doesn't also step back
++        if (p->navi.leftB == 3)
++        {
++            TargetForPlayer();
++            Moves_Use(SIDE_PLAYER, MOVE_SWIFT, 0, &p->bm, p->name, sB.active);
++            SetMsg("ANTIDMG: STAR!", 40);
++        }
++        else
++        {
++            p->shieldT = 30;
++            SetMsg(p->navi.leftB == 2 ? "REFLECT!" : "SHIELD!", 30);
++            PlaySE(SE_M_REFLECT);   // Protect's sound (Move_PROTECT)
++        }
++        PKBN_LOG("%s: B+back program %u", p->name, p->navi.leftB);
++        return;
++    }
+     if (p->moveCd == 0 && !p->hold && !p->slideDx && !p->slideDy)
+     {
+         s8 dx = 0, dy = 0;
+@@ -1615,6 +1704,8 @@ static void UpdatePlayer(void)
+         }
+         if ((dx || dy) && Field_CanStand(SIDE_PLAYER, p->x + dx, p->y + dy))
+         {
++            if (dy)
++                sB.playerStepDy = dy, sB.playerStepFrame = sB.frame;   // POC-16d: the Ω AI reads it
+             Field_Step(SIDE_PLAYER, p->x + dx, p->y + dy);
+             Busting_NoteStep();
+             // Gen 3 paralysis quarters Speed -> four times slower steps
+@@ -1692,6 +1783,22 @@ static bool8 PickEnemyMove(u8 *outSlot)
+             if (sc[i] == best)
+                 top[nt++] = options[i];
+         *outSlot = top[Random() % nt];
++        if (sB.omega)
++        {
++            // POC-16d Ω counter-chips: its move that hits the player's Pokémon hardest (type x STAB x power, the
++            // damage estimate), unless the trainer AI wants a status / stat move - kept 1 time in 3 (TUNE)
++            s32 bestDmg = 0;
++            s8 pick = -1;
++            for (i = 0; i < n; i++)
++            {
++                u16 eff;
++                s32 d = gBattleMoves[e->bm.moves[options[i]]].power ? Moves_EstimateDamage(SIDE_ENEMY, e->bm.moves[options[i]], &eff) : 0;
++                if (d > bestDmg)
++                    bestDmg = d, pick = options[i];
++            }
++            if (pick >= 0 && (gBattleMoves[e->bm.moves[*outSlot]].power || Random() % 3 != 0))
++                *outSlot = pick;
++        }
+         return TRUE;
+     }
+     if (e->style)
+@@ -1719,6 +1826,10 @@ static void EnemyLineUp(u8 kind)
+     s8 x = e->x, y = p->y, want = -1;
+     if (Moves_IsPositionFree(kind) || kind == GK_PANEL || e->hold)
+         return;
++    // POC-16d Ω: aims ahead - a player who just stepped up or down is taken to keep going (TUNE: within 12 frames)
++    if (sB.omega && sB.playerStepDy && sB.frame - sB.playerStepFrame <= 12 && y + sB.playerStepDy >= 0
++     && y + sB.playerStepDy < GRID_ROWS && Field_CanStand(SIDE_PLAYER, p->x, y + sB.playerStepDy))
++        y += sB.playerStepDy;
+     switch (kind)
+     {
+     case GK_SWORD: case GK_WIDESWORD: case GK_LIFESWORD:
+@@ -1762,6 +1873,8 @@ static void EnemyDodge(void)
+     chance = 100 * se / (se + sp + 1);
+     chance = chance * (e->bm.statStages[STAT_EVASION] + 2) / (DEFAULT_STAT_STAGE + 2);
+     chance = chance * sStyleDodge[e->style] / 100;   // wild patterns (POC-13)
++    if (sB.omega)
++        chance = chance * 120 / 100;                 // POC-16d Ω: 20% more often (TUNE)
+     if (chance < 10) chance = 10;
+     if (chance > 85) chance = 85;
+     if ((s32)(Random() % 100) >= chance)
+@@ -1965,6 +2078,8 @@ static bool8 RivalSpecial(struct Fighter *e)
+     s8 pa;
+     u8 allowed = sB.boss ? 2 : sB.rivalTier >= 5 ? 2 : sB.rivalTier >= 3 ? 1 : 0;
+     u32 hpLine = e->paUses == 0 ? e->bm.maxHP / 2 : e->bm.maxHP / 4;
++    if (sB.omega)
++        hpLine = e->paUses == 0 ? e->bm.maxHP * 2 / 3 : e->bm.maxHP / 3;   // POC-16d Ω: earlier PAs (TUNE)
+     if (e->paUses >= allowed || e->bm.hp > hpLine
+      || (pa = sB.boss ? PAByName(sBosses[sB.boss - 1].signature) : RivalPA(e)) < 0)
+         return FALSE;
+@@ -1999,6 +2114,30 @@ static void RivalQueueCombo(struct Fighter *e, u8 slot)
+         }
+ }
+ 
++// POC-16d Ω: the player is winding up a PA or GigaChip and the foe knows Protect / Detect / Endure (GK_BARRIER):
++// it raises it now. Once per attack.
++static bool8 OmegaGuard(struct Fighter *e)
++{
++    s32 i, m;
++    for (i = 0; i < MAX_ATTACKS; i++)
++    {
++        const struct Attack *a = &sB.attacks[i];
++        if (!a->active || a->side != SIDE_PLAYER || a->serial == sB.omegaGuardSerial || a->phase != PH_CHARGE
++         || !(a->pa || Chip_Class(a->move) == CHIP_GIGA))
++            continue;
++        sB.omegaGuardSerial = a->serial;
++        for (m = 0; m < MAX_MON_MOVES; m++)
++            if (e->bm.pp[m] && Moves_KindOf(e->bm.moves[m]) == GK_BARRIER)
++            {
++                e->bm.pp[m]--;
++                Moves_Use(SIDE_ENEMY, e->bm.moves[m], m, &e->bm, e->name, 0);
++                PKBN_LOG("omega guard: %s raises move %u against the player's big attack", e->name, e->bm.moves[m]);
++                return TRUE;
++            }
++    }
++    return FALSE;
++}
++
+ static void UpdateOneEnemy(void)
+ {
+     struct Fighter *e = &sB.f[SIDE_ENEMY];
+@@ -2006,6 +2145,13 @@ static void UpdateOneEnemy(void)
+     EnemyDodge();
+     if (BusyOrDisabled(SIDE_ENEMY) || Moves_SideHasPending(SIDE_ENEMY))
+         return;
++    if (sB.omega && OmegaGuard(e))
++        return;
++    if (sB.omega && sB.f[SIDE_PLAYER].lockout && sB.aiAttackTimer > 8 && sB.frame - sB.omegaPunishFrame > 60)
++    {
++        sB.aiAttackTimer = 8;   // POC-16d Ω: fire while the player is stuck after its attack (TUNE)
++        sB.omegaPunishFrame = sB.frame;
++    }
+ 
+     if (sB.aiAttackTimer && --sB.aiAttackTimer == 0)
+     {
+@@ -2099,6 +2245,30 @@ static void UpdateEnemy(void)
+     }
+ }
+ 
++// POC-16d: the B + back timers and BN6's Tango ("Heals low HP": once a battle below 1/4 HP, it heals; 30% TUNE).
++static void NaviFrame(u8 side)
++{
++    struct Fighter *f = &sB.f[side];
++    bool8 *done = side == SIDE_PLAYER ? &sB.party[sB.active].tangoDone : &f->tangoDone;
++    if (f->shieldT)
++        f->shieldT--;
++    if (f->leftBCd)
++        f->leftBCd--;
++    if (f->navi.tango && !*done && f->bm.hp && f->bm.hp <= f->bm.maxHP / 4)
++    {
++        u32 h = f->bm.maxHP * f->navi.tango / 100;
++        *done = TRUE;
++        f->bm.hp = f->bm.hp + h > f->bm.maxHP ? f->bm.maxHP : f->bm.hp + h;
++        f->statusFlash = 20;
++        {
++            char line[40];
++            snprintf(line, sizeof(line), "%s IS HEALED BY TANGO!", f->name);
++            SetMsg(line, 50);
++        }
++        Vis_GeneralAnim(side, B_ANIM_WISH_HEAL, TRUE);
++    }
++}
++
+ static void Tick(struct Fighter *f)
+ {
+     if (f->moveCd) f->moveCd--;
+@@ -2418,10 +2588,12 @@ static void UpdateFight(void)
+         return;
+     }
+     Tick(&sB.f[SIDE_PLAYER]);
++    NaviFrame(SIDE_PLAYER);
+     for (r = 0; r < sB.foeCount; r++)
+     {
+         Foe_Select(r);
+         Tick(&sB.f[SIDE_ENEMY]);
++        NaviFrame(SIDE_ENEMY);
+     }
+     for (r = 0; r < GRID_ROWS; r++)
+         for (c = 0; c < GRID_COLS; c++)
+@@ -2496,6 +2668,9 @@ void CB2_PkbnGridBattle(void)
+     case ST_PICK:
+         UpdatePicker();
+         break;
++    case ST_OMEGA:
++        UpdateOmegaChoice();
++        break;
+     case ST_TIMESTOP:
+         if (--sB.timer == 0)
+         {
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 5e08baa..353d2e9 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -11,6 +11,8 @@
+ #include "sound.h"
+ #include "m4a.h"
+ #include "pkbn/leader.h"
++#include "battle_setup.h"
++#include "pkbn/chip_pack.h"
+ #include "data.h"
+ #include "item.h"
+ #include "constants/moves.h"
+@@ -754,6 +756,9 @@ static void DrawFighter(u16 *fb, u8 side)
+         Gfx_Draw(fb, Fx_Frame(FX_CHARGE_RINGS, sTick), x, y - 18 - lift, GFX_ADD, 0, 0);
+     if (f->barrier)
+         Gfx_Draw(fb, Fx_Frame(FX_BARRIER, sTick), x, y - 6 - lift, GFX_HALF, 0, 0);   // POC-15: around the body
++    if (f->shieldT)   // POC-16d: Shield (white) / Reflect (gold), solid while it's up
++        Gfx_Draw(fb, Fx_Frame(FX_BARRIER, sTick), x + (side == SIDE_PLAYER ? 12 : -12), y - 6 - lift, GFX_HALF | GFX_TINT,
++                 f->navi.leftB == 2 ? RGB(31, 26, 6) : RGB(31, 31, 31), 8);
+     if ((f->bm.status1 & STATUS1_SLEEP))
+     {
+         s32 k = (s32)((sTick / 2) % 48);
+@@ -1504,6 +1509,36 @@ static void DrawPicker(u16 *fb)
+     }
+ }
+ 
++// POC-16d: before an Ω-eligible Leader rematch: NORMAL or OMEGA
++static void DrawOmegaChoice(u16 *fb)
++{
++    s8 l = Leader_FromTrainer(gTrainerBattleOpponent_A);
++    char line[48];
++    s32 i, x = 34, y = 30, w = CW - 68, h = 92;
++    Gfx_Darken(fb, 0, 0, CW, CH, 7);
++    Draw_Box(fb, x, y, w, h, RGB(4, 2, 10), RGB(31, 12, 24), 15);
++    snprintf(line, sizeof(line), "%s REMATCH", l >= 0 ? Leader_Name(l) : "LEADER");
++    TextCentered(fb, CW / 2, y + 1, line, COL_GAUGE_FULL, TRUE);
++    for (i = 0; i < 2; i++)
++    {
++        s32 ry = y + 22 + i * 24;
++        bool8 on = sB.omegaCursor == i;
++        if (on)
++            Draw_Box(fb, x + 6, ry - 1, w - 12, 22, i ? RGB(16, 2, 10) : RGB(6, 10, 22), i ? COL_PA : COL_BOX_EDGE, 15);
++        Text(fb, x + 12, ry - 2, i ? "OMEGA - HIGHEST DIFFICULTY" : "NORMAL", on ? COL_WHITE : COL_DIM);
++        if (i == 0)
++            Text(fb, x + 12, ry + 8, "AS ALWAYS: CHIP AND RECORD", on ? RGB(22, 26, 31) : COL_DIM);
++        else if (l >= 0 && !PkbnLeader_OmegaWon(l))
++        {
++            snprintf(line, sizeof(line), "LV+5, OMEGA AI. FIRST WIN: %s", Leader_OmegaProgram(l));
++            Text(fb, x + 12, ry + 8, line, on ? RGB(31, 26, 6) : COL_DIM);
++        }
++        else
++            Text(fb, x + 12, ry + 8, "LV+5, OMEGA AI. WON: * CHIP", on ? RGB(22, 26, 31) : COL_DIM);
++    }
++    Text(fb, x + 8, y + h - 13, "UP/DOWN: CHOOSE   A: FIGHT", COL_DIM);
++}
++
+ static void DrawTimeStop(u16 *fb)
+ {
+     const struct PartyMember *pm = &sB.party[sB.tsTarget];
+@@ -1898,6 +1933,8 @@ void Draw_Overlay(u16 *fb)
+         DrawCustomSliding(fb);
+     if (sB.state == ST_PICK)
+         DrawPicker(fb);
++    if (sB.state == ST_OMEGA)
++        DrawOmegaChoice(fb);
+     if (sB.msgTimer && sB.state != ST_TIMESTOP && sB.state != ST_CUSTOM)
+     {
+         // under the intro / send-out banner while it shows (switch-in abilities, overworld weather: POC-13)
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index 353ea94..b76fec4 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -554,6 +554,8 @@ u8 Field_ApplyStatStage(u8 side, u8 stat, s8 delta, bool8 fromFoe)
+ void Field_ResetFighterConditions(struct Fighter *f)
+ {
+     f->barrier = FALSE;
++    f->shieldT = 0;
++    f->leftBCd = 0;
+     f->protectUses = 0;
+     f->lastKind = GK_NONE;
+     f->stun = f->hold = f->invuln = f->charging = 0;
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index a5d7ac9..4694384 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -935,6 +935,22 @@ static void ApplyHit(struct Attack *a, bool8 last)
+         }
+     }
+ 
++    if (def->shieldT)
++    {
++        // POC-16d: BN6's Shield / Reflect (B + back): nothing gets through; Reflect sends half of it back (TUNE)
++        def->hurtFlash = 4;
++        a->hitAnything = TRUE;
++        PlaySE(SE_BOO);
++        if (def->navi.leftB == 2 && me && (dmg = CalcHitDamage(a, defSide, &eff, &crit) / 2) > 0)
++        {
++            SetMsg("REFLECTED!", 40);
++            Moves_DamageFighter(a->side, dmg, "TAKES THE REFLECTED HIT!");
++        }
++        else
++            SetMsg("SHIELD BLOCKED IT!", 40);
++        PKBN_LOG("%s's %s blocked move %u", def->name, def->navi.leftB == 2 ? "Reflect" : "Shield", a->move);
++        return;
++    }
+     if (a->pa && (PAOf(a)->flags & PAF_HITONCE) && a->paLanded)
+         return;
+     dmg = CalcHitDamage(a, defSide, &eff, &crit);
+@@ -1840,7 +1856,7 @@ void Moves_ApplyBuster(u8 side)
+     sVisBusterSide = side;
+     FlashCells(cells, charged ? 10 : 3);
+     sVisBusterSide = 0xFF;
+-    if (!cells[opp->y][opp->x] || opp->iframes || opp->invuln || opp->bm.hp == 0)
++    if (!cells[opp->y][opp->x] || opp->iframes || opp->invuln || opp->bm.hp == 0 || opp->shieldT)
+         return;
+     if (opp->barrier)
+     {
+diff --git a/src/pkbn/leader.c b/src/pkbn/leader.c
+index 69808e9..c2d1384 100644
+--- a/src/pkbn/leader.c
++++ b/src/pkbn/leader.c
+@@ -105,7 +105,55 @@ static const char *const sFirstWinPrograms[PKBN_LEADERS][2] = {
+     { "FlotShoe", "MystcWtr" }, // Juan
+ };
+ 
+-void Leader_AfterWin(u16 trainerId, u8 bust, u32 frames, char *line1, char *line2, u32 size)
++// POC-16d (Khaled: "challenge them a 4th time at this highest difficulty to earn a rare navicust program"): a rematch
++// with the V3 Leader chip in hand offers Ω. Its first win pays one of BN6's rare programs (our pick per Leader, TUNE).
++static const char *const sOmegaPrograms[PKBN_LEADERS] = {
++    "Shield", "AttckMAX", "ChargMAX", "Reflect", "HP+500", "SpeedMAX", "MegFldr2", "GigFldr1" };
++
++bool8 Leader_OmegaOffered(u16 trainerId)
++{
++    s8 l = Leader_FromTrainer(trainerId);
++    return l >= 0 && Leader_IsRematch(trainerId) && PkbnLeader_Chip(l) >= 3;
++}
++
++const char *Leader_OmegaProgram(u8 leader)
++{
++    return sOmegaPrograms[leader & 7];
++}
++
++static void OmegaWin(u8 l, u32 frames, char *line1, char *line2, u32 size)
++{
++    u32 s10 = frames * 10 / 60;
++    u16 best = PkbnLeader_OmegaBest(l);
++    if (frames > 0xFFFF)
++        frames = 0xFFFF;
++    if (best == 0 || frames < best)
++        PkbnLeader_SetOmegaBest(l, frames);
++    if (!PkbnLeader_OmegaWon(l))
++    {
++        PkbnLeader_SetOmegaWon(l);
++        PkbnProgram_GrantByName(sOmegaPrograms[l], 1);
++        snprintf(line1, size, "OMEGA %s DEFEATED IN %u:%02u.%u!", sNames[l], (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60),
++                 (unsigned)(s10 % 10));
++        snprintf(line2, size, "GOT THE RARE PROGRAM %s!", sOmegaPrograms[l]);
++    }
++    else
++    {
++        // a repeat Ω win: a * copy of the ace's move, and the Ω record
++        u16 species, mv;
++        u8 lv;
++        Leader_Ace(l, &species, &lv, &mv);
++        PkbnPack_Add(mv, LETTER_WILD, 1);
++        if (best == 0 || frames < best)
++            snprintf(line1, size, "NEW OMEGA RECORD %u:%02u.%u!", (unsigned)(s10 / 600), (unsigned)(s10 / 10 % 60), (unsigned)(s10 % 10));
++        else
++            snprintf(line1, size, "OMEGA %s DEFEATED AGAIN!", sNames[l]);
++        snprintf(line2, size, "GOT A * CHIP OF THE ACE'S MOVE!");
++    }
++    printf("[pkbn] omega win: %s %u frames: %s / %s\n", sNames[l], (unsigned)frames, line1, line2);
++}
++
++void Leader_AfterWin(u16 trainerId, u8 bust, u32 frames, bool8 omega, char *line1, char *line2, u32 size)
+ {
+     s8 l = Leader_FromTrainer(trainerId);
+     u8 have, want;
+@@ -114,6 +162,11 @@ void Leader_AfterWin(u16 trainerId, u8 bust, u32 frames, char *line1, char *line
+     line1[0] = line2[0] = '\0';
+     if (l < 0)
+         return;
++    if (omega)
++    {
++        OmegaWin(l, frames, line1, line2, size);
++        return;
++    }
+     // the chip: V1 for any win, V2 with Busting Level 9+, V3 with an S on a rematch
+     have = PkbnLeader_Chip(l);
+     want = (bust >= 11 && Leader_IsRematch(trainerId)) ? 3 : bust >= 9 ? 2 : 1;
+diff --git a/src/pkbn/navicust.c b/src/pkbn/navicust.c
+index 16fd814..62ca34d 100644
+--- a/src/pkbn/navicust.c
++++ b/src/pkbn/navicust.c
+@@ -175,6 +175,21 @@ static void Apply(struct PkbnNaviStats *s, const struct PkbnNcp *p)
+     case NCPE_CHOICE_BAND:   s->choiceBand = p->value; break;
+     case NCPE_LUCKY_EGG:     s->luckyEgg = p->value; break;
+     case NCPE_AMULET_COIN:   s->amuletCoin = p->value; break;
++    // POC-16d
++    case NCPE_LEFT_B:        s->leftB = p->arg + 1; break;   // one per group (BN6 group 2)
++    case NCPE_MEGA_PLUS:     s->megaPlus += p->value; break;
++    case NCPE_GIGA_PLUS:     s->gigaPlus += p->value; break;
++    case NCPE_FOLDER_PACK:   s->hand += p->value; s->megaPlus += p->value; break;   // "A 2-pack Custom1& MegFldr1"
++    case NCPE_BUSTER_MAX:
++        if (p->arg == 0) s->busterAtk = 4;                   // +1 base below: level 5
++        else if (p->arg == 1) s->busterSpeed = 4;
++        else s->busterCharge = 4;
++        break;
++    case NCPE_ATTRACT:       s->attractType = p->arg + 1; break;
++    case NCPE_COLLECT:       s->collect = TRUE; break;
++    case NCPE_SNEAK_RUN:     s->sneakRun = TRUE; break;
++    case NCPE_AUTO_HEAL:     s->autoHeal = p->value; break;
++    case NCPE_TANGO:         s->tango = p->value; break;
+     }
+ }
+ 
+@@ -327,6 +342,7 @@ void Navi_Compile(const struct PkbnNavi *navi, const struct PkbnNaviOwner *owner
+     for (k = 0; k < NUMBER_OF_MON_TYPES; k++)
+         CAP(s->typePct[k], 30);
+     CAP(s->scopeLens, 2);
++    CAP(s->megaPlus, 2); CAP(s->gigaPlus, 1);   // BN6 has MegFldr1/2 and GigFldr1
+     if (s->bugStop)
+         memset(s->bug, 0, sizeof(s->bug));
+ }
+@@ -364,6 +380,16 @@ void Navi_StatsForMon(struct Pokemon *mon, struct PkbnNaviStats *out)
+     Navi_Compile(n, &owner, out, NULL);
+ }
+ 
++// POC-16d: the lead Pokémon's programs act outside battle and on the shared folder, as Emerald's field abilities use
++// the first party slot (TryGetAbilityInfluencedWildMonIndex, IsAbilityAllowingEncounter: gPlayerParty[0]).
++void Navi_LeadStats(struct PkbnNaviStats *out)
++{
++    memset(out, 0, sizeof(*out));
++    if (GetMonData(&gPlayerParty[0], MON_DATA_SPECIES) == SPECIES_NONE || GetMonData(&gPlayerParty[0], MON_DATA_IS_EGG))
++        return;
++    Navi_StatsForMon(&gPlayerParty[0], out);
++}
++
+ const char *Navi_BugShort(u8 t)
+ {
+     switch (t)
+diff --git a/src/pkbn/ncp_table.c b/src/pkbn/ncp_table.c
+index 5b66a5b..b939e47 100644
+--- a/src/pkbn/ncp_table.c
++++ b/src/pkbn/ncp_table.c
+@@ -150,6 +150,63 @@ const struct PkbnNcp gPkbnNcps[NCP_COUNT] =
+     { // design (Gen 3 type item, +10%)
+         "SilkScrf", "Normal moves +10%.", NCPE_TYPE_BOOST, TYPE_NORMAL, 10, TRUE, 0, 7, NCP_COND_COOL, 1, {TYPE_NORMAL}, {2, 1, {3, 0, 0, 0, 0}}, {1, 1, {1, 0, 0, 0, 0}}
+     },
++    { // bn6f entry 32 (Shield)
++        "Shield", "\"[B]+Left= Strong shield!\" Hold B, press back: a shield blocks everything for half a second.", NCPE_LEFT_B, 0, 0, FALSE, 2, 1, NCP_COND_TOUGH, 2, {TYPE_STEEL, TYPE_ROCK}, {3, 3, {7, 1, 1, 0, 0}}, {2, 2, {3, 1, 0, 0, 0}}
++    },
++    { // bn6f entry 36 (Reflect)
++        "Reflect", "\"[B]+Left= Reflect attacks!\" Like Shield; a blocked hit sends half its damage back.", NCPE_LEFT_B, 1, 0, FALSE, 2, 1, NCP_COND_BEAUTY, 2, {TYPE_PSYCHIC, TYPE_FIRE}, {5, 3, {4, 31, 4, 0, 0}}, {5, 1, {31, 0, 0, 0, 0}}
++    },
++    { // bn6f entry 40 (AntiDmg)
++        "AntiDmg", "\"[B]+Left= Throw a star!\" Hold B, press back: a star flies down your row.", NCPE_LEFT_B, 2, 0, FALSE, 2, 1, NCP_COND_COOL, 2, {TYPE_FIGHTING, TYPE_DARK}, {3, 4, {6, 6, 3, 1, 0}}, {3, 4, {4, 6, 3, 1, 0}}
++    },
++    { // bn6f entry 16 (MegFldr1)
++        "MegFldr1", "\"MegaChip +1\": 6 MegaChips in the folder (your lead Pokemon's programs count).", NCPE_MEGA_PLUS, 0, 1, FALSE, 0, 4, NCP_COND_SMART, 1, {TYPE_PSYCHIC}, {3, 3, {4, 7, 4, 0, 0}}, {3, 1, {7, 0, 0, 0, 0}}
++    },
++    { // bn6f entry 20 (MegFldr2)
++        "MegFldr2", "\"MegaChip +2\": 7 MegaChips in the folder (your lead Pokemon's programs count).", NCPE_MEGA_PLUS, 0, 2, FALSE, 0, 4, NCP_COND_SMART, 1, {TYPE_PSYCHIC}, {4, 3, {6, 15, 6, 0, 0}}, {4, 3, {4, 15, 2, 0, 0}}
++    },
++    { // bn6f entry 24 (GigFldr1)
++        "GigFldr1", "\"GigaChip +1\": 2 GigaChips in the folder (your lead Pokemon's programs count).", NCPE_GIGA_PLUS, 0, 1, FALSE, 0, 4, NCP_COND_SMART, 1, {TYPE_WATER}, {5, 3, {4, 14, 31, 0, 0}}, {3, 3, {2, 7, 7, 0, 0}}
++    },
++    { // bn6f entry 116 (FldrPak1)
++        "FldrPak1", "\"A 2-pack Custom1& MegFldr1\": +1 chip in the hand and 6 MegaChips.", NCPE_FOLDER_PACK, 0, 1, FALSE, 0, 4, NCP_COND_SMART, 1, {TYPE_NORMAL}, {3, 3, {6, 7, 3, 0, 0}}, {3, 3, {6, 7, 2, 0, 0}}
++    },
++    { // bn6f entry 152 (AttckMAX)
++        "AttckMAX", "\"MegaBstr AttckMAX\": Buster Attack 5.", NCPE_BUSTER_MAX, 0, 0, TRUE, 0, 7, NCP_COND_COOL, 1, {TYPE_FIGHTING}, {2, 4, {3, 3, 3, 3, 0}}, {2, 4, {3, 3, 3, 2, 0}}
++    },
++    { // bn6f entry 156 (SpeedMAX)
++        "SpeedMAX", "\"MegaBstr SpeedMAX\": Buster Speed 5.", NCPE_BUSTER_MAX, 1, 0, TRUE, 0, 7, NCP_COND_SMART, 1, {TYPE_FLYING}, {3, 1, {7, 0, 0, 0, 0}}, {2, 1, {3, 0, 0, 0, 0}}
++    },
++    { // bn6f entry 160 (ChargMAX)
++        "ChargMAX", "\"MegaBstr ChargeMAX\": Buster Charge 5.", NCPE_BUSTER_MAX, 2, 0, TRUE, 0, 7, NCP_COND_TOUGH, 1, {TYPE_ELECTRIC}, {3, 2, {2, 7, 0, 0, 0}}, {2, 2, {1, 3, 0, 0, 0}}
++    },
++    { // bn6f entries 176-178 (HP+300)
++        "HP+300", "Max HP +30% in battle.", NCPE_HP_PCT, 0, 30, TRUE, 0, 9, NCP_COND_CUTE, 3, {TYPE_NORMAL, TYPE_GRASS, TYPE_WATER}, {4, 2, {15, 7, 0, 0, 0}}, {4, 2, {15, 7, 0, 0, 0}}
++    },
++    { // bn6f entries 180-182 (HP+400)
++        "HP+400", "Max HP +40% in battle.", NCPE_HP_PCT, 0, 40, TRUE, 0, 9, NCP_COND_CUTE, 3, {TYPE_NORMAL, TYPE_GRASS, TYPE_WATER}, {4, 2, {15, 15, 0, 0, 0}}, {4, 2, {15, 15, 0, 0, 0}}
++    },
++    { // bn6f entries 184-186 (HP+500)
++        "HP+500", "Max HP +50% in battle.", NCPE_HP_PCT, 0, 50, TRUE, 0, 9, NCP_COND_CUTE, 3, {TYPE_NORMAL, TYPE_GRASS, TYPE_WATER}, {5, 2, {31, 31, 0, 0, 0}}, {5, 2, {31, 31, 0, 0, 0}}
++    },
++    { // bn6f entry 76 (Battery)
++        "Battery", "\"Attracts Elec Viruses!\" On your lead: wild Electric Pokemon half the time (as Static does).", NCPE_ATTRACT, TYPE_ELECTRIC, 0, FALSE, 3, 5, NCP_COND_SMART, 1, {TYPE_ELECTRIC}, {3, 3, {2, 2, 7, 0, 0}}, {2, 3, {2, 2, 3, 0, 0}}
++    },
++    { // bn6f entry 68 (OilBody)
++        "OilBody", "\"Attracts Fire Viruses!\" On your lead: wild Fire Pokemon half the time (as Static does).", NCPE_ATTRACT, TYPE_FIRE, 0, FALSE, 3, 5, NCP_COND_COOL, 1, {TYPE_FIRE}, {3, 3, {2, 2, 7, 0, 0}}, {2, 3, {2, 2, 3, 0, 0}}
++    },
++    { // bn6f entry 84 (Collect)
++        "Collect", "\"Get more chips frm enmy\": on your lead, battle chip rewards come with one more copy.", NCPE_COLLECT, 0, 1, FALSE, 0, 6, NCP_COND_CUTE, 1, {TYPE_NORMAL}, {3, 3, {7, 7, 6, 0, 0}}, {3, 3, {7, 6, 4, 0, 0}}
++    },
++    { // bn6f entry 64 (SneakRun)
++        "SneakRun", "\"No weak enemies\": on your lead, wild Pokemon below its level stay away (as a Repel does).", NCPE_SNEAK_RUN, 0, 0, FALSE, 0, 5, NCP_COND_BEAUTY, 2, {TYPE_FLYING, TYPE_GHOST}, {3, 3, {2, 7, 2, 0, 0}}, {3, 2, {2, 7, 0, 0, 0}}
++    },
++    { // bn6f entry 104 (AutoHeal)
++        "AutoHeal", "\"HP recv after battle\": after a win this Pokemon gets back 25% of its max HP.", NCPE_AUTO_HEAL, 0, 25, FALSE, 0, 3, NCP_COND_CUTE, 2, {TYPE_GRASS, TYPE_WATER}, {3, 4, {4, 4, 4, 7, 0}}, {3, 3, {4, 4, 7, 0, 0}}
++    },
++    { // bn6f entry 136 (Tango)
++        "Tango", "\"Heals low HP\": once a battle, below 1/4 HP, it heals 30% of its max HP.", NCPE_TANGO, 0, 30, FALSE, 0, 8, NCP_COND_CUTE, 2, {TYPE_GRASS, TYPE_NORMAL}, {3, 4, {7, 2, 2, 7, 0}}, {3, 4, {7, 2, 2, 3, 0}}
++    },
+ };
+ 
+ const u8 gPkbnAbilityCells[ABILITIES_COUNT] =
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index 234fe51..7406d45 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -24,9 +24,10 @@
+ #include <stddef.h>
+ 
+ #define PKBN_SAVE_PATH    "pkbn.sav"
+-#define PKBN_SAVE_VERSION 5   // v2 (POC-10): chip pack, grants, candy, folder; v3 (POC-11): partner chips;
++#define PKBN_SAVE_VERSION 6   // v2 (POC-10): chip pack, grants, candy, folder; v3 (POC-11): partner chips;
+                               // v4 (POC-13): folders 2 and 3 and which one is equipped;
+-                              // v5 (POC-14): chip library, Leader chips and rematch records, challenges, programs.
++                              // v5 (POC-14): chip library, Leader chips and rematch records, challenges, programs;
++                              // v6 (POC-16): Ω Leader rematches won and their records.
+                               // Append-only.
+ 
+ struct PkbnSaveFile
+@@ -63,8 +64,14 @@ struct PkbnSaveFile
+     u8 programEconomy;                        // 1: programs are earned (new games); 0: everything owned (older saves)
+     u8 pad5[3];
+     u16 challengeBestFrames[32];              // NET CHALLENGE time attack: best clear time (0 = none)
++    // ---- v6 (POC-16) ----
++    u8 leaderOmega;                           // Ω rematches won (bit per Leader)
++    u8 pad6;
++    u16 leaderOmegaBest[PKBN_LEADERS];        // best Ω win time (0 = none)
+ };
+ 
++#define V5_SIZE offsetof(struct PkbnSaveFile, leaderOmega)
++
+ #define V4_SIZE offsetof(struct PkbnSaveFile, library)
+ #define V3_SIZE offsetof(struct PkbnSaveFile, extraMove)
+ #define V2_SIZE offsetof(struct PkbnSaveFile, partners)
+@@ -126,6 +133,8 @@ void PkbnSave_Read(void)
+         memset((u8 *)&tmp + V3_SIZE, 0, sizeof(tmp) - V3_SIZE); // v3 -> v5: folders 2 and 3 empty, folder 1 equipped
+     else if (tmp.version == 4)
+         memset((u8 *)&tmp + V4_SIZE, 0, sizeof(tmp) - V4_SIZE); // v4 -> v5: library rebuilt from the pack below
++    else if (tmp.version == 5)
++        memset((u8 *)&tmp + V5_SIZE, 0, sizeof(tmp) - V5_SIZE); // v5 -> v6: no Ω wins yet
+     if (tmp.version < 5)
+     {
+         u16 mv;
+@@ -489,6 +498,12 @@ void PkbnLeader_SetRecord(u8 leader, u16 frames, u8 level)
+         sSave.leaderBestFrames[leader] = frames, sSave.leaderBestLevel[leader] = level;
+ }
+ 
++// POC-16d: Ω Leader rematches
++bool8 PkbnLeader_OmegaWon(u8 leader) { return leader < PKBN_LEADERS && (sSave.leaderOmega & (1 << leader)); }
++void PkbnLeader_SetOmegaWon(u8 leader) { if (leader < PKBN_LEADERS) sSave.leaderOmega |= 1 << leader; }
++u16 PkbnLeader_OmegaBest(u8 leader) { return leader < PKBN_LEADERS ? sSave.leaderOmegaBest[leader] : 0; }
++void PkbnLeader_SetOmegaBest(u8 leader, u16 frames) { if (leader < PKBN_LEADERS) sSave.leaderOmegaBest[leader] = frames; }
++
+ bool8 PkbnChallenge_Cleared(u8 n) { return n < 32 && (sSave.challengeCleared & (1u << n)); }
+ void PkbnChallenge_SetCleared(u8 n) { if (n < 32) sSave.challengeCleared |= 1u << n; }
+ u16 PkbnChallenge_Best(u8 n) { return n < 32 ? sSave.challengeBestFrames[n] : 0; }
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index 85445fa..d91ddd1 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -108,6 +108,30 @@ static void StepCodePick(void);
+ 
+ static char sLeaderMsg[2][56];   // POC-14: Leader chip / record lines for PB_LEADER
+ 
++// POC-16d: BN6's AutoHeal ("HP recv after battle"): after a win, each Pokémon running it gets back part of its max HP.
++static void AutoHeal(void)
++{
++    s32 i;
++    for (i = 0; i < PARTY_SIZE; i++)
++    {
++        struct Pokemon *mon = &gPlayerParty[i];
++        struct PkbnNaviStats s;
++        u16 hp, max;
++        if (GetMonData(mon, MON_DATA_SPECIES) == SPECIES_NONE || GetMonData(mon, MON_DATA_IS_EGG))
++            continue;
++        hp = GetMonData(mon, MON_DATA_HP);
++        max = GetMonData(mon, MON_DATA_MAX_HP);
++        if (hp == 0 || hp >= max)
++            continue;
++        Navi_StatsForMon(mon, &s);
++        if (!s.autoHeal)
++            continue;
++        hp = hp + max * s.autoHeal / 100 > max ? max : hp + max * s.autoHeal / 100;
++        SetMonData(mon, MON_DATA_HP, &hp);
++        printf("[pkbn] autoheal: party slot %d -> %u/%u\n", (int)i, hp, max);
++    }
++}
++
+ static void Say(u8 next, const char *fmt, ...)
+ {
+     char buf[256];
+@@ -670,6 +694,7 @@ static void CB2_PkbnPostBattle(void)
+         {
+             u8 level = capture ? Capture_Grade() : Busting_Level();
+             char lv[4];
++            AutoHeal();
+             if (capture)
+                 Capture_Reward(level, sMsg, sizeof(sMsg), !sPB.autopilot || getenv("PKBN_TEST_CODE_PICK") != NULL);
+             else
+@@ -679,7 +704,7 @@ static void CB2_PkbnPostBattle(void)
+                 if (sB.challenge)
+                     PkbnChallenge_AfterWin(sB.challenge - 1, sB.bust.fightFrames, sLeaderMsg[0], sLeaderMsg[1], sizeof(sLeaderMsg[0]));
+                 else if (sB.trainer)
+-                    Leader_AfterWin(gTrainerBattleOpponent_A, level, sB.bust.fightFrames, sLeaderMsg[0], sLeaderMsg[1],
++                    Leader_AfterWin(gTrainerBattleOpponent_A, level, sB.bust.fightFrames, sB.omega, sLeaderMsg[0], sLeaderMsg[1],
+                                     sizeof(sLeaderMsg[0]));
+             }
+             if (level >= 11)
+diff --git a/src/pkbn/rival.c b/src/pkbn/rival.c
+index 3d37816..51313bd 100644
+--- a/src/pkbn/rival.c
++++ b/src/pkbn/rival.c
+@@ -146,6 +146,13 @@ void Rival_NaviForMon(struct Pokemon *mon, u8 tier, struct PkbnNaviStats *out)
+         if (t1 != t0)
+             Place(&navi, &owner, TypeProg(t1));
+     }
++    if (tier >= 6)
++    {
++        // POC-16d Ω Leaders: the rest of a full board (TUNE)
++        Place(&navi, &owner, ProgByName("QuickClw"));
++        Place(&navi, &owner, ProgByName("BrtPowdr"));
++        Place(&navi, &owner, ProgByName("HP+100"));
++    }
+     Navi_Compile(&navi, &owner, out, &board);
+ }
+ 
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index 42eefb2..3b3cb09 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -160,9 +160,30 @@ static void Autopilot(void)
+             pressed = START_BUTTON;
+         break;
+     case PKBN_GRID_PICK:
++    case PKBN_GRID_OMEGA:   // POC-16d: the cursor starts on NORMAL (PKBN_TEST_OMEGA=1: on OMEGA)
+         pressed = A_BUTTON; // first option
+         break;
+     case PKBN_GRID_FIGHT:
++        // PKBN_TEST_LEFTB=f1,f2,...: at those fight frames, hold B and press LEFT (POC-16d Shield / Reflect / AntiDmg)
++        if (getenv("PKBN_TEST_LEFTB") != NULL)
++        {
++            const char *t = getenv("PKBN_TEST_LEFTB");
++            bool8 now = FALSE;
++            while (*t)
++            {
++                u32 f = (u32)strtoul(t, (char **)&t, 10);
++                if (d.frame == f || d.frame == f + 1)
++                    now = TRUE;
++                while (*t == ',')
++                    t++;
++            }
++            if (now)
++            {
++                held = B_BUTTON;
++                pressed = DPAD_LEFT;
++                break;
++            }
++        }
+         if (SmartBot())
+         {
+             PkbnBot_Fight(&held, &pressed);
+diff --git a/src/wild_encounter.c b/src/wild_encounter.c
+index 5f19537..dcad5b1 100644
+--- a/src/wild_encounter.c
++++ b/src/wild_encounter.c
+@@ -423,11 +423,32 @@ static void CreateWildMon(u16 species, u8 level)
+ #define TRY_GET_ABILITY_INFLUENCED_WILD_MON_INDEX(wildPokemon, type, ability, ptr, count) TryGetAbilityInfluencedWildMonIndex(wildPokemon, type, ability, ptr)
+ #endif
+ 
++#ifdef PORTABLE
++#include "pkbn/navicust.h"
++static bool8 TryGetRandomWildMonIndexByType(const struct WildPokemon *wildMon, u8 type, u8 numMon, u8 *monIndex);
++// POC-16d: BN6's Battery / OilBody ("Attracts Elec / Fire Viruses!") on the lead Pokémon work like Static and Magnet
++// Pull below: half the time the encounter is one of the table's Pokémon of that type.
++static bool8 PkbnWild_NaviAttract(const struct WildPokemon *wildMon, u8 numMon, u8 *monIndex)
++{
++    struct PkbnNaviStats s;
++    Navi_LeadStats(&s);
++    if (s.attractType == 0 || Random() % 2 != 0)
++        return FALSE;
++    return TryGetRandomWildMonIndexByType(wildMon, s.attractType - 1, numMon, monIndex);
++}
++#endif
++
+ static bool8 TryGenerateWildMon(const struct WildPokemonInfo *wildMonInfo, u8 area, u8 flags)
+ {
+     u8 wildMonIndex = 0;
+     u8 level;
+ 
++#ifdef PORTABLE
++    if ((area == WILD_AREA_LAND || area == WILD_AREA_WATER)
++     && PkbnWild_NaviAttract(wildMonInfo->wildPokemon, area == WILD_AREA_LAND ? NUM_LAND_MONS_ENCOUNTER_SLOTS
++                                                                              : NUM_WATER_MONS_ENCOUNTER_SLOTS, &wildMonIndex))
++        area = 0xFF;   // chosen: skip the switch
++#endif
+     switch (area)
+     {
+     case WILD_AREA_LAND:
+@@ -885,8 +906,16 @@ static bool8 IsWildLevelAllowedByRepel(u8 wildLevel)
+ {
+     u8 i;
+ 
++#ifdef PORTABLE
++    // POC-16d: BN6's SneakRun ("No weak enemies") on the lead Pokémon: a Repel that never runs out
++    struct PkbnNaviStats s;
++    Navi_LeadStats(&s);
++    if (!VarGet(VAR_REPEL_STEP_COUNT) && !s.sneakRun)
++        return TRUE;
++#else
+     if (!VarGet(VAR_REPEL_STEP_COUNT))
+         return TRUE;
++#endif
+ 
+     for (i = 0; i < PARTY_SIZE; i++)
+     {
+-- 
+2.43.0
+

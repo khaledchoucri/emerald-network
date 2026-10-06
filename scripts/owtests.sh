@@ -83,3 +83,13 @@ if diff <(grep -a '^\[pkbn f[0-9]*\]' "$OUT/replay_record/log.txt" | grep -v ' f
 rm -f pkbn_replay.bin
 # POC-15: the chip gallery plays every chip on a fixed stage (PKBN_DUMP_DIR + tools/chip_gallery_sheet.py for pictures)
 bt chip_gallery "151:50,143:100" "done: 312 moves" PKBN_GALLERY=all PKBN_GALLERY_FRAMES=2
+# POC-16c: FOLDER -> SELECT -> BUILD THIS FOLDER -> VS NEXT GYM (Oldale Town, START menu -> FOLDER)
+run folder_style 0:10:10:10 "W240,S,W30,D,W15,D,W15,A,W200,P,W10,Q" "folder style VS NEXT GYM" \
+    PKBN_TEST_FOLDER_KEYS=".,.,.,.,.,.,.,.,.,.,E,.,.,.,.,.,D,.,.,.,.,.,A"
+# POC-16d: an Omega Leader rematch (Roxanne's V3 chip held) pays its rare program; BN6's Shield on B + back
+bt omega_rematch "285:100:57/89/58/182,288:3:45" "program grant: Shield" PKBN_BOT=smart PKBN_TEST_TRAINER=770 \
+    PKBN_TEST_LEADER_CHIPS=0:3 PKBN_TEST_OMEGA=1
+bt shield_program "285:30:57/89/58/182,288:3:45" "B+back program 1" PKBN_TEST_NCP="0:Shield@2,0,0" PKBN_TEST_LEFTB=200,400 \
+    PKBN_TEST_TRAINER=265
+# POC-16e: Omega Kyogre as a NET CHALLENGE self-test (it starts as a boss with its rules: boss + nothing heals)
+bt omega_kyogre "257:90:299/24/7/89|282:90:94/85/247/104,74:5" "KYOGRE, tier 5, 1 at once, 0 s, rules 3" PKBN_BOT=smart PKBN_TEST_CHALLENGE=21

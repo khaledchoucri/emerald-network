@@ -1,0 +1,792 @@
+From 03ad3c55c6df2c5c86d2e354501c36acbf3d95b5 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 6 Oct 2026 17:45:15 +0300
+Subject: [PATCH 52/54] POC-16c: folder filters and recommended folder styles
+
+- FOLDER, PACK, LIBRARY and the Mart's CHIP SHELF get a filter bar (TYPE / CODE / KIND):
+  UP from the first row enters it, LEFT/RIGHT change the value (only values the list has),
+  A the next field, DOWN or B back. The list shows 10 rows to make room.
+- SELECT on FOLDER opens BUILD THIS FOLDER: BALANCED (the old auto-build), VS NEXT GYM
+  (attack types weighed by Gen 3's chart against the next Leader's type), PA HUNTER (two of
+  each recipe chip for every PA you can build, in a shared code), ONE CODE (your biggest code
+  and * chips). The result goes into the folder being edited, so F1/F2/extra are presets.
+- folder.c: the greedy fill is now GreedyFill(); the auto-build gives the same folders.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/folder.h |   8 ++
+ src/pkbn/folder.c     | 307 +++++++++++++++++++++++++++++++++++-------
+ src/pkbn/folder_ui.c  | 267 +++++++++++++++++++++++++++++++++---
+ 3 files changed, 517 insertions(+), 65 deletions(-)
+
+diff --git a/include/pkbn/folder.h b/include/pkbn/folder.h
+index 33442da..a13c6e6 100644
+--- a/include/pkbn/folder.h
++++ b/include/pkbn/folder.h
+@@ -65,4 +65,12 @@ char PkbnFolder_LetterChar(u8 letter);
+ bool8 PkbnFolder_CanAppend(const struct Folder *folder, const u8 *queue, u8 queueCount, u8 cand,
+                            u8 active, const bool8 *alive, const struct BattlePokemon *party);
+ 
++// POC-16c: recommended folders (the FOLDER screen's SELECT menu). Fills moves/letters (FOLDER_MAX) with the shared
++// chips and returns how many; `what` gets a short line about the result.
++enum { FOLDER_STYLE_BALANCED, FOLDER_STYLE_GYM, FOLDER_STYLE_PA, FOLDER_STYLE_CODE, FOLDER_STYLE_COUNT };
++u8 PkbnFolder_BuildStyle(u8 style, const struct BattlePokemon *party, u8 partyCount, u16 *moves, u8 *letters,
++                         char *what, u32 whatSize);
++s8 PkbnFolder_NextGym(void);   // 0-7: the first badge not won yet, -1 when all are
++u8 PkbnFolder_GymType(u8 gym);
++
+ #endif // GUARD_PKBN_FOLDER_H
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index 0f2c578..1654e03 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -1,5 +1,7 @@
+ // Chip folder: build, draw, selection rule. See include/pkbn/folder.h.
+ #include <stdlib.h>
++#include <stdio.h>
++#include <string.h>
+ #include "global.h"
+ #include "battle.h"
+ #include "pokemon.h"
+@@ -14,6 +16,7 @@
+ #include "pkbn/move_table.h"
+ #include "event_data.h"
+ #include "constants/flags.h"
++#include "battle_main.h"
+ 
+ bool8 PkbnFolder_MoveIsChip(u16 move)
+ {
+@@ -206,62 +209,44 @@ u8 PkbnFolder_PartyBattleMons(struct BattlePokemon *out)
+     return n;
+ }
+ 
+-// The folder (design 08 §11): the edited folder when there is one (FOLDER editor, later), otherwise auto-built
+-// from the pack: greedy, one copy at a time, favouring chips several party members can use and members that
+-// have little so far (tools/shared_folder_sim.py's "balanced" builder). BN6 copy caps by MB.
+-void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party, u8 partyCount)
++// Copies of (mv, letter) owned and not yet in the folder.
++static u8 LetterLeft(const struct Folder *folder, u16 mv, u8 l)
++{
++    u8 have = PkbnPack_Get(mv, l), in = 0;
++    s32 i;
++    for (i = 0; i < folder->count; i++)
++        if (folder->chips[i].move == mv && folder->chips[i].letter == l)
++            in++;
++    return have > in ? have - in : 0;
++}
++
++// The greedy fill (tools/shared_folder_sim.py's "balanced" builder), on top of what the folder already holds.
++// POC-16c: `typeMul16` (16 = x1, NULL = all x1) weighs chips by type, 0 leaves a type out; `letter` >= 0 prefers that
++// code (and *) for every chip, and doubles the worth of chips you have in it.
++static void GreedyFill(struct Folder *folder, const struct BattlePokemon *party, u8 partyCount, u8 size,
++                       const u8 *typeMul16, s8 letterPref)
+ {
+     u16 cand[MOVES_COUNT];
+     u8 used[MOVES_COUNT];
+     u8 usable[PKBN_PARTY_MAX];
+-    s32 nc = 0, i, p, mons = 0;
+-    u8 size;
++    s32 nc = 0, i, p;
+     u16 mv;
+ 
+-    memset(folder, 0, sizeof(*folder));
+     memset(used, 0, sizeof(used));
+     memset(usable, 0, sizeof(usable));
+-    for (p = 0; p < partyCount; p++)
+-        if (party[p].species != SPECIES_NONE)
+-            mons++;
+-    size = Chip_FolderSize(mons);
+-
++    for (i = 0; i < folder->count; i++)
+     {
+-        // The FOLDER screen's folder: its chips in order, while the pack still has them, someone can use them, the
+-        // copy caps hold and they fit (30 + 2 per extra Pokémon).
+-        u16 em[PKBN_FOLDER_SLOTS];
+-        u8 el[PKBN_FOLDER_SLOTS], ne = PkbnFolderEdit_Get(em, el), cnt[PACK_LETTERS];
+-        if (ne > 0)
+-        {
+-            for (i = 0; i < ne && folder->count < size; i++)
+-            {
+-                s32 k, same = 0, sameCode = 0;
+-                for (k = 0; k < folder->count; k++)
+-                {
+-                    same += folder->chips[k].move == em[i];
+-                    sameCode += folder->chips[k].move == em[i] && folder->chips[k].letter == el[i];
+-                }
+-                for (p = 0; p < partyCount; p++)
+-                    if (Chip_CanUse(&party[p], em[i]))
+-                        break;
+-                if (p == partyCount || same >= Chip_CopyCap(em[i]) || sameCode >= PkbnPack_Get(em[i], el[i])
+-                 || !FolderClassFits(folder, em[i]))
+-                    continue;
+-                folder->chips[folder->count].move = em[i];
+-                folder->chips[folder->count].letter = el[i];
+-                folder->chips[folder->count].owner = CHIP_SHARED;
+-                folder->chips[folder->count].slot = 0;
+-                folder->count++;
+-            }
+-            (void)cnt;
+-            goto shuffle;
+-        }
++        used[folder->chips[i].move]++;
++        for (p = 0; p < partyCount && p < PKBN_PARTY_MAX; p++)
++            if (Chip_CanUse(&party[p], folder->chips[i].move))
++                usable[p]++;
+     }
+-
+     for (mv = 1; mv < MOVES_COUNT; mv++)
+     {
+         if (!PkbnFolder_MoveIsChip(mv) || PkbnPack_Total(mv) == 0)
+             continue;
++        if (typeMul16 != NULL && gBattleMoves[mv].power && typeMul16[gBattleMoves[mv].type] == 0)
++            continue;
+         for (p = 0; p < partyCount; p++)
+             if (Chip_CanUse(&party[p], mv))
+                 break;
+@@ -282,6 +267,10 @@ void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party,
+             for (p = 0; p < partyCount; p++)
+                 if (Chip_CanUse(&party[p], mv))
+                     v += ChipValue(mv, &party[p]) * 16 / (1 + usable[p]);
++            if (typeMul16 != NULL && gBattleMoves[mv].power)
++                v = v * typeMul16[gBattleMoves[mv].type] / 16;
++            if (letterPref >= 0 && LetterLeft(folder, mv, letterPref) + LetterLeft(folder, mv, LETTER_WILD) > 0)
++                v *= 2;
+             if (best < 0 || v > bestV)
+                 best = i, bestV = v;
+         }
+@@ -289,18 +278,21 @@ void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party,
+             break;
+         mv = cand[best];
+         {
+-            // the code: the letter with the most copies not yet in the folder
+-            struct FolderChip *ch = &folder->chips[folder->count++];
++            // the code: the preferred one (or *) when there are copies left, else the letter with the most copies
++            // not yet in the folder
++            struct FolderChip *ch = &folder->chips[folder->count];
+             u8 letter = 0, bestN = 0, l;
+             for (l = 0; l < PACK_LETTERS; l++)
+             {
+-                u8 have = PkbnPack_Get(mv, l), inFolder = 0;
+-                for (i = 0; i < folder->count - 1; i++)
+-                    if (folder->chips[i].move == mv && folder->chips[i].letter == l)
+-                        inFolder++;
+-                if (have > inFolder && have - inFolder > bestN)
+-                    bestN = have - inFolder, letter = l;
++                u8 left = LetterLeft(folder, mv, l);
++                if (left > bestN)
++                    bestN = left, letter = l;
+             }
++            if (letterPref >= 0 && LetterLeft(folder, mv, letterPref))
++                letter = letterPref;
++            else if (letterPref >= 0 && LetterLeft(folder, mv, LETTER_WILD))
++                letter = LETTER_WILD;
++            folder->count++;
+             ch->move = mv;
+             ch->letter = letter;
+             ch->owner = CHIP_SHARED;
+@@ -311,6 +303,55 @@ void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party,
+             if (Chip_CanUse(&party[p], mv))
+                 usable[p]++;
+     }
++}
++
++// The folder (design 08 §11): the edited folder when there is one (FOLDER editor, later), otherwise auto-built
++// from the pack: greedy, one copy at a time, favouring chips several party members can use and members that
++// have little so far (tools/shared_folder_sim.py's "balanced" builder). BN6 copy caps by MB.
++void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party, u8 partyCount)
++{
++    s32 i, p, mons = 0;
++    u8 size;
++
++    memset(folder, 0, sizeof(*folder));
++    for (p = 0; p < partyCount; p++)
++        if (party[p].species != SPECIES_NONE)
++            mons++;
++    size = Chip_FolderSize(mons);
++
++    {
++        // The FOLDER screen's folder: its chips in order, while the pack still has them, someone can use them, the
++        // copy caps hold and they fit (30 + 2 per extra Pokémon).
++        u16 em[PKBN_FOLDER_SLOTS];
++        u8 el[PKBN_FOLDER_SLOTS], ne = PkbnFolderEdit_Get(em, el), cnt[PACK_LETTERS];
++        if (ne > 0)
++        {
++            for (i = 0; i < ne && folder->count < size; i++)
++            {
++                s32 k, same = 0, sameCode = 0;
++                for (k = 0; k < folder->count; k++)
++                {
++                    same += folder->chips[k].move == em[i];
++                    sameCode += folder->chips[k].move == em[i] && folder->chips[k].letter == el[i];
++                }
++                for (p = 0; p < partyCount; p++)
++                    if (Chip_CanUse(&party[p], em[i]))
++                        break;
++                if (p == partyCount || same >= Chip_CopyCap(em[i]) || sameCode >= PkbnPack_Get(em[i], el[i])
++                 || !FolderClassFits(folder, em[i]))
++                    continue;
++                folder->chips[folder->count].move = em[i];
++                folder->chips[folder->count].letter = el[i];
++                folder->chips[folder->count].owner = CHIP_SHARED;
++                folder->chips[folder->count].slot = 0;
++                folder->count++;
++            }
++            (void)cnt;
++            goto shuffle;
++        }
++    }
++
++    GreedyFill(folder, party, partyCount, size, NULL, -1);
+ 
+ shuffle:
+     // Partner chips (POC-11): one per assigned slot whose Pokémon is in the party, on top of the folder size.
+@@ -483,3 +524,169 @@ bool8 PkbnFolder_CanAppend(const struct Folder *folder, const u8 *queue, u8 queu
+         return alive[active] && Chip_CanUse(&party[active], c->move);
+     }
+ }
++
++// ---- POC-16c: recommended folders (our design, TUNE) ---------------------------------------------------------------
++// The FOLDER screen's SELECT menu. BALANCED is the auto-build above; the others start from it with a twist and give a
++// folder you can then edit (the result goes into the folder being edited: F1, F2 and the extra folder are presets).
++
++// The Gym Leaders' types in badge order (their gyms' specialities in Emerald).
++static const u8 sGymTypes[PKBN_LEADERS] = { TYPE_ROCK, TYPE_FIGHTING, TYPE_ELECTRIC, TYPE_FIRE, TYPE_NORMAL,
++                                            TYPE_FLYING, TYPE_PSYCHIC, TYPE_WATER };
++
++s8 PkbnFolder_NextGym(void)
++{
++    s32 b;
++    for (b = 0; b < PKBN_LEADERS; b++)
++        if (!FlagGet(FLAG_BADGE01_GET + b))
++            return b;
++    return -1;
++}
++
++u8 PkbnFolder_GymType(u8 gym)
++{
++    return sGymTypes[gym & 7];
++}
++
++// Attack type vs one defending type, from Gen 3's own chart (gTypeEffectiveness, as TypeCalc reads it).
++static u8 Effectiveness(u8 atk, u8 def)
++{
++    s32 i;
++    for (i = 0; TYPE_EFFECT_ATK_TYPE(i) != TYPE_ENDTABLE; i += 3)
++    {
++        if (TYPE_EFFECT_ATK_TYPE(i) == TYPE_FORESIGHT)
++            continue;
++        if (TYPE_EFFECT_ATK_TYPE(i) == atk && TYPE_EFFECT_DEF_TYPE(i) == def)
++            return TYPE_EFFECT_MULTIPLIER(i);
++    }
++    return TYPE_MUL_NORMAL;
++}
++
++static void AddChip(struct Folder *folder, u16 mv, u8 letter, u8 size)
++{
++    s32 i, same = 0;
++    if (folder->count >= size)
++        return;
++    for (i = 0; i < folder->count; i++)
++        same += folder->chips[i].move == mv;
++    if (same >= Chip_CopyCap(mv) || !FolderClassFits(folder, mv))
++        return;
++    folder->chips[folder->count].move = mv;
++    folder->chips[folder->count].letter = letter;
++    folder->chips[folder->count].owner = CHIP_SHARED;
++    folder->chips[folder->count].slot = 0;
++    folder->count++;
++}
++
++static bool8 AnyCanUse(const struct BattlePokemon *party, u8 partyCount, u16 mv)
++{
++    s32 p;
++    for (p = 0; p < partyCount; p++)
++        if (Chip_CanUse(&party[p], mv))
++            return TRUE;
++    return FALSE;
++}
++
++u8 PkbnFolder_BuildStyle(u8 style, const struct BattlePokemon *party, u8 partyCount, u16 *moves, u8 *letters,
++                         char *what, u32 whatSize)
++{
++    struct Folder f;
++    s32 i, p, mons = 0;
++    u8 size;
++    memset(&f, 0, sizeof(f));
++    for (p = 0; p < partyCount; p++)
++        if (party[p].species != SPECIES_NONE)
++            mons++;
++    size = Chip_FolderSize(mons);
++    what[0] = '\0';
++    switch (style)
++    {
++    case FOLDER_STYLE_GYM:
++    {
++        // weigh each attack type by how it does against the next Gym Leader's type: x2 -> 2.5, x0.5 -> 0.375, x0 out
++        u8 mul[NUMBER_OF_MON_TYPES], t, def;
++        s8 gym = PkbnFolder_NextGym();
++        if (gym < 0)
++        {
++            snprintf(what, whatSize, "EVERY BADGE WON - BALANCED");
++            GreedyFill(&f, party, partyCount, size, NULL, -1);
++            break;
++        }
++        def = sGymTypes[gym];
++        for (t = 0; t < NUMBER_OF_MON_TYPES; t++)
++        {
++            u8 e = Effectiveness(t, def);
++            mul[t] = e == TYPE_MUL_SUPER_EFFECTIVE ? 40 : e == TYPE_MUL_NOT_EFFECTIVE ? 6 : e == TYPE_MUL_NO_EFFECT ? 0 : 16;
++        }
++        snprintf(what, whatSize, "VS GYM %u", gym + 1);   // the screen names the Leader and type
++        GreedyFill(&f, party, partyCount, size, mul, -1);
++        break;
++    }
++    case FOLDER_STYLE_PA:
++    {
++        // every PA whose three moves you own and someone can use: two of each, in one code they share (else *)
++        u8 formed = 0;
++        for (i = 0; i < PKBN_PA_COUNT && f.count + 6 <= size; i++)
++        {
++            const u16 *r = gPkbnProgramAdvances[i].recipe;
++            s32 k, l, code = -1;
++            for (k = 0; k < 3; k++)
++                if (!PkbnFolder_MoveIsChip(r[k]) || PkbnPack_Total(r[k]) == 0 || !AnyCanUse(party, partyCount, r[k]))
++                    break;
++            if (k < 3)
++                continue;
++            for (l = 0; l < PACK_LETTERS && code < 0; l++)
++                if (LetterLeft(&f, r[0], l) && LetterLeft(&f, r[1], l) && LetterLeft(&f, r[2], l))
++                    code = l;
++            for (k = 0; k < 3; k++)
++            {
++                s32 copies;
++                for (copies = 0; copies < 2; copies++)
++                {
++                    u8 letter = code >= 0 && LetterLeft(&f, r[k], code) ? code
++                              : LetterLeft(&f, r[k], LETTER_WILD) ? LETTER_WILD : 0xFF;
++                    if (letter == 0xFF)
++                        for (l = 0; l < PACK_LETTERS; l++)
++                            if (LetterLeft(&f, r[k], l))
++                            {
++                                letter = l;
++                                break;
++                            }
++                    if (letter != 0xFF)
++                        AddChip(&f, r[k], letter, size);
++                }
++            }
++            formed++;
++        }
++        snprintf(what, whatSize, formed ? "%u PROGRAM ADVANCE%s READY" : "NO PA YOU CAN BUILD YET", formed, formed == 1 ? "" : "S");
++        GreedyFill(&f, party, partyCount, size, NULL, -1);
++        break;
++    }
++    case FOLDER_STYLE_CODE:
++    {
++        // the code you own the most usable copies of (up to the copy caps), then everything that has it or *
++        u32 best = 0;
++        s8 code = -1;
++        s32 l;
++        u16 mv;
++        for (l = 0; l < LETTER_WILD; l++)
++        {
++            u32 n = 0;
++            for (mv = 1; mv < MOVES_COUNT; mv++)
++                if (PkbnFolder_MoveIsChip(mv) && PkbnPack_Get(mv, l) && AnyCanUse(party, partyCount, mv))
++                    n += PkbnPack_Get(mv, l) < Chip_CopyCap(mv) ? PkbnPack_Get(mv, l) : Chip_CopyCap(mv);
++            if (n > best)
++                best = n, code = l;
++        }
++        if (code >= 0)
++            snprintf(what, whatSize, "CODE %c: %u CHIPS", PkbnFolder_LetterChar(code), (unsigned)best);
++        GreedyFill(&f, party, partyCount, size, NULL, code);
++        break;
++    }
++    default:
++        GreedyFill(&f, party, partyCount, size, NULL, -1);
++        break;
++    }
++    for (i = 0; i < f.count; i++)
++        moves[i] = f.chips[i].move, letters[i] = f.chips[i].letter;
++    return f.count;
++}
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index b80ef3d..30c9d2d 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -31,6 +31,8 @@
+ #include "pkbn/move_table.h"
+ #include "pkbn/render.h"
+ #include "pkbn/gfx.h"
++#include "pkbn/folder.h"
++#include "pkbn/leader.h"
+ 
+ #ifdef PORTABLE
+ #include <stdio.h>
+@@ -41,8 +43,9 @@ extern const struct Evolution gEvolutionTable[][EVOS_PER_MON];
+ #define CH PKBN_CANVAS_H
+ #define RGB PKBN_RGB
+ #define LIST_X 4
+-#define LIST_Y 33
+-#define LIST_ROWS 11
++#define LIST_Y 42     // POC-16c: room for the filter bar above the list
++#define LIST_ROWS 10
++#define BAR_Y 19
+ #define ROW_H 11
+ #define PANEL_X 164
+ 
+@@ -78,8 +81,18 @@ static struct
+     char note[64];
+     u16 noteTimer;
+     u32 t;
++    // POC-16c: filters (0xFF = all) on the FOLDER, PACK, LIBRARY and SHELF lists, and the folder build menu
++    u8 fltType, fltCode, fltKind;
++    u8 bar;                    // 0: the list has the cursor; 1-3: the filter bar's TYPE / CODE / KIND
++    bool8 menu;
++    u8 menuSel;
++    u16 map[MOVES_COUNT * 2];  // visible row -> row of the full list
++    u16 mapCount;
+ } sF;
+ 
++static void DrawStyleMenu(u16 *fb);
++static u16 Raw(u16 row);
++
+ static s32 Text(u16 *fb, s32 x, s32 y, const char *s, u16 col)
+ {
+     return Pkbn_DrawEmText(fb, x, y, s, PKBN_FONT_SMALL, col, RGB(2, 2, 5));
+@@ -309,7 +322,7 @@ static void BuyShelf(void)
+     u32 price;
+     if (sF.shelfCount == 0)
+         return;
+-    r = &sF.shelf[sF.cursor[PAGE_SHELF]];
++    r = &sF.shelf[Raw(sF.cursor[PAGE_SHELF])];
+     price = ShelfPrice(r->move);
+     if (!IsEnoughMoney(&gSaveBlock1Ptr->money, price))
+     {
+@@ -458,14 +471,140 @@ static void DrawPartnerList(u16 *fb)
+ 
+ // ---- drawing ---------------------------------------------------------------------------------------------------
+ 
+-static u16 RowCount(void)
++static u16 RawCount(void)
+ {
+     return sF.page == PAGE_FOLDER ? sF.groupCount : sF.page == PAGE_PACK ? sF.packCount
+          : sF.page == PAGE_SHELF ? sF.shelfCount : sF.page == PAGE_PARTNER ? PKBN_PARTNER_SLOTS
+          : sF.page == PAGE_LIBRARY ? sF.libCount : sF.candyCount;
+ }
+ 
++static void RawChip(u16 row, u16 *move, u8 *letter);
++
++// ---- POC-16c: filters ----------------------------------------------------------------------------------------------
++static bool8 Filterable(void)
++{
++    return sF.page == PAGE_FOLDER || sF.page == PAGE_PACK || sF.page == PAGE_LIBRARY || sF.page == PAGE_SHELF;
++}
++
++static bool8 CodeMatches(u16 mv, u8 letter, u8 code)
++{
++    s32 i;
++    if (sF.page != PAGE_LIBRARY)
++        return letter == code;
++    for (i = 0; i < gPkbnMoveInfo[mv].laneCount; i++)   // the Library: any code the chip comes in
++        if (gPkbnMoveInfo[mv].lanes[i] == code)
++            return TRUE;
++    return FALSE;
++}
++
++static bool8 RowMatches(u16 mv, u8 letter, u8 type, u8 code, u8 kind)
++{
++    return (type == 0xFF || gBattleMoves[mv].type == type) && (kind == 0xFF || gPkbnMoveInfo[mv].kind == kind)
++        && (code == 0xFF || CodeMatches(mv, letter, code));
++}
++
++static void RebuildMap(void)
++{
++    u16 i, n = RawCount(), mv;
++    u8 letter;
++    sF.mapCount = 0;
++    for (i = 0; i < n && sF.mapCount < ARRAY_COUNT(sF.map); i++)
++    {
++        if (Filterable())
++        {
++            RawChip(i, &mv, &letter);
++            if (!RowMatches(mv, letter, sF.fltType, sF.fltCode, sF.fltKind))
++                continue;
++        }
++        sF.map[sF.mapCount++] = i;
++    }
++}
++
++static u16 RowCount(void)
++{
++    return sF.mapCount;
++}
++
++static u16 Raw(u16 row)
++{
++    return row < sF.mapCount ? sF.map[row] : 0;
++}
++
+ static void RowChip(u16 row, u16 *move, u8 *letter)
++{
++    RawChip(Raw(row), move, letter);
++}
++
++// The next value of filter field `field` (1 TYPE, 2 CODE, 3 KIND) in direction `dir`: "all", then only values some
++// row of this list has (with the other two filters as they are).
++static void CycleFilter(u8 field, s8 dir)
++{
++    u8 *v = field == 1 ? &sF.fltType : field == 2 ? &sF.fltCode : &sF.fltKind;
++    u16 count = field == 1 ? NUMBER_OF_MON_TYPES : field == 2 ? PACK_LETTERS : GK_COUNT;
++    s32 k, idx = *v == 0xFF ? count : *v;   // "all" sits after the last value
++    for (k = 0; k <= count; k++)
++    {
++        u16 i, n = RawCount(), mv;
++        u8 letter, cand;
++        bool8 any = FALSE;
++        idx = (idx + dir + count + 1) % (count + 1);
++        cand = idx == count ? 0xFF : idx;
++        if (cand == 0xFF)
++            break;
++        for (i = 0; i < n && !any; i++)
++        {
++            RawChip(i, &mv, &letter);
++            any = RowMatches(mv, letter, field == 1 ? cand : sF.fltType, field == 2 ? cand : sF.fltCode,
++                             field == 3 ? cand : sF.fltKind);
++        }
++        if (any)
++            break;
++    }
++    *v = idx == count ? 0xFF : idx;
++    sF.cursor[sF.page] = sF.top[sF.page] = 0;
++    RebuildMap();
++    PlaySE(SE_SELECT);
++}
++
++static void DrawFilterBar(u16 *fb)
++{
++    static const char *const label[3] = { "TYPE", "CODE", "KIND" };
++    s32 f, x = LIST_X - 2;
++    char line[24];
++    if (!Filterable())
++        return;
++    for (f = 1; f <= 3; f++)
++    {
++        u8 v = f == 1 ? sF.fltType : f == 2 ? sF.fltCode : sF.fltKind;
++        bool8 on = sF.bar == f, set = v != 0xFF;
++        s32 w = f == 3 ? 62 : 48;
++        if (!set)
++            snprintf(line, sizeof(line), "%s ALL", label[f - 1]);
++        else if (f == 1)
++        {
++            char tn[16];
++            Pkbn_GameStringToAscii(tn, gTypeNames[v], sizeof(tn));
++            snprintf(line, sizeof(line), "%s", tn);
++        }
++        else if (f == 2)
++            snprintf(line, sizeof(line), "CODE %c", PkbnFolder_LetterChar(v));
++        else
++            snprintf(line, sizeof(line), "%s", gPkbnKindNames[v]);
++        Pkbn_FillRect(fb, x, BAR_Y, w, 10, on ? RGB(6, 10, 22) : set ? RGB(4, 6, 14) : RGB(2, 3, 8));
++        Pkbn_FrameRect(fb, x, BAR_Y, w, 10, on ? RGB(31, 26, 6) : set ? RGB(10, 20, 31) : RGB(6, 8, 14));
++        if (f == 1 && set)
++            Pkbn_FillRect(fb, x + 2, BAR_Y + 2, 3, 6, Vfx_TypeColor(v));
++        Text(fb, x + (f == 1 && set ? 7 : 3), BAR_Y - 3, line, on ? RGB(31, 26, 6) : set ? RGB(31, 31, 31) : RGB(12, 14, 20));
++        if (on)
++        {
++            Text(fb, x - 1, BAR_Y - 3, "<", RGB(31, 26, 6));
++            Text(fb, x + w - 4, BAR_Y - 3, ">", RGB(31, 26, 6));
++        }
++        x += w + 2;
++    }
++}
++
++static void RawChip(u16 row, u16 *move, u8 *letter)
+ {
+     if (sF.page == PAGE_FOLDER)
+         *move = sF.groups[row].move, *letter = sF.groups[row].letter;
+@@ -727,7 +866,7 @@ static void DrawPanel(u16 *fb)
+ static void DrawHints(u16 *fb)
+ {
+     static const char *const hints[PAGE_COUNT + 1] = {
+-        "A:TAKE OUT  SELECT:AUTO  START:FOLDER  B:DONE",
++        "A:TAKE OUT  SELECT:BUILD  START:FOLDER  B:DONE",
+         "A:ADD  START:PP UP  SELECT:PP MAX  B:DONE",
+         "A:BUY  SELECT:CODE (+2)  L/R:PAGE  B:DONE",
+         "A:POKEMON  SELECT:MOVE  L/R:PAGE  B:DONE",
+@@ -747,8 +886,11 @@ static void Draw(u16 *fb)
+         fb[i] = RGB(1, 2, 6);
+     for (i = 0; i < CH; i += 16)
+         Gfx_FillBlend(fb, 0, (i + (s32)(sF.t / 4)) % CH, CW, 1, RGB(4, 12, 18), 4);
++    RebuildMap();
+     DrawTabs(fb);
++    DrawFilterBar(fb);
+     DrawList(fb);
++    DrawStyleMenu(fb);
+     DrawPanel(fb);
+     DrawHints(fb);
+ }
+@@ -774,7 +916,9 @@ static void TakeOut(void)
+     s32 i;
+     if (sF.groupCount == 0)
+         return;
+-    g = &sF.groups[sF.cursor[PAGE_FOLDER]];
++    if (RowCount() == 0)
++        return;
++    g = &sF.groups[Raw(sF.cursor[PAGE_FOLDER])];
+     for (i = sF.fCount - 1; i >= 0; i--)
+         if (sF.fMove[i] == g->move && sF.fLetter[i] == g->letter)
+             break;
+@@ -825,7 +969,7 @@ static void UsePP(bool8 max)
+ {
+     u16 item = max ? ITEM_PP_MAX : ITEM_PP_UP, mv;
+     u8 letter, add;
+-    if (sF.packCount == 0)
++    if (RowCount() == 0)
+         return;
+     RowChip(sF.cursor[PAGE_PACK], &mv, &letter);
+     if (!CheckBagHasItem(item, 1))
+@@ -901,9 +1045,105 @@ static void CycleCode(void)
+     PlaySE(SE_SELECT);
+ }
+ 
++// POC-16c: the FOLDER page's SELECT menu: how to build the folder you're editing (src/pkbn/folder.c)
++static const char *const sStyleNames[FOLDER_STYLE_COUNT] = { "BALANCED", "VS NEXT GYM", "PA HUNTER", "ONE CODE" };
++static const char *const sStyleDesc[FOLDER_STYLE_COUNT] = {
++    "Best chips for the party",
++    "Beats the next Leader's type",
++    "PAs you can build, one code",
++    "Your top code + *: big hands",
++};
++
++static void BuildWithStyle(u8 style)
++{
++    char what[48], line[64];
++    if (style == FOLDER_STYLE_BALANCED)
++    {
++        sF.edited = FALSE;
++        PkbnFolderEdit_Set(NULL, NULL, 0);
++        LoadFolder();
++        BuildGroups();
++        PlaySE(SE_SELECT);
++        Note("AUTO-BUILT FROM YOUR PACK");
++        return;
++    }
++    sF.fCount = PkbnFolder_BuildStyle(style, sF.party, sF.partyCount, sF.fMove, sF.fLetter, what, sizeof(what));
++    if (sF.fCount > sF.fMax)
++        sF.fCount = sF.fMax;
++    sF.edited = TRUE;
++    BuildGroups();
++    sF.cursor[PAGE_FOLDER] = sF.top[PAGE_FOLDER] = 0;
++    PlaySE(SE_SUCCESS);
++    if (style == FOLDER_STYLE_GYM && PkbnFolder_NextGym() >= 0)
++    {
++        char tn[16];
++        s8 g = PkbnFolder_NextGym();
++        Pkbn_GameStringToAscii(tn, gTypeNames[PkbnFolder_GymType(g)], sizeof(tn));
++        snprintf(line, sizeof(line), "VS %s (%s): %u CHIPS", Leader_Name(g), tn, sF.fCount);
++    }
++    else
++        snprintf(line, sizeof(line), "%s: %s", sStyleNames[style], what[0] ? what : "BUILT");
++    Note(line);
++    printf("[pkbn] folder style %s -> %u chips (%s)\n", sStyleNames[style], sF.fCount, line);
++}
++
++static void DrawStyleMenu(u16 *fb)
++{
++    s32 i, x = LIST_X + 6, y = LIST_Y + 2, w = PANEL_X - LIST_X - 16;
++    if (!sF.menu)
++        return;
++    Pkbn_FillRect(fb, x, y, w, 16 + FOLDER_STYLE_COUNT * 22, RGB(2, 4, 12));
++    Pkbn_FrameRect(fb, x, y, w, 16 + FOLDER_STYLE_COUNT * 22, RGB(31, 26, 6));
++    Pkbn_DrawEmText(fb, x + 4, y, "BUILD THIS FOLDER", PKBN_FONT_SMALL, RGB(31, 26, 6), RGB(2, 2, 5));
++    for (i = 0; i < FOLDER_STYLE_COUNT; i++)
++    {
++        s32 ry = y + 14 + i * 22;
++        if (i == sF.menuSel)
++            Pkbn_FillRect(fb, x + 2, ry, w - 4, 21, RGB(8, 14, 28));
++        Text(fb, x + 6, ry - 2, sStyleNames[i], i == sF.menuSel ? RGB(31, 31, 31) : RGB(20, 22, 28));
++        TextWrap(fb, x + 6, ry + 8, w - 10, 1, sStyleDesc[i], RGB(14, 18, 24));
++    }
++}
++
+ static void HandleInput(u16 keys)
+ {
+-    u16 n = RowCount(), *cur = &sF.cursor[sF.page];
++    u16 n, *cur = &sF.cursor[sF.page];
++    RebuildMap();
++    n = RowCount();
++    if (sF.menu)
++    {
++        if (keys & DPAD_UP)
++            sF.menuSel = (sF.menuSel + FOLDER_STYLE_COUNT - 1) % FOLDER_STYLE_COUNT, PlaySE(SE_SELECT);
++        if (keys & DPAD_DOWN)
++            sF.menuSel = (sF.menuSel + 1) % FOLDER_STYLE_COUNT, PlaySE(SE_SELECT);
++        if (keys & A_BUTTON)
++        {
++            sF.menu = FALSE;
++            BuildWithStyle(sF.menuSel);
++        }
++        if (keys & (B_BUTTON | SELECT_BUTTON))
++            sF.menu = FALSE, PlaySE(SE_SELECT);
++        return;
++    }
++    if (sF.bar)
++    {
++        // the filter bar: LEFT/RIGHT change the value, A the next field, DOWN or B back to the list
++        if (keys & (DPAD_LEFT | DPAD_RIGHT))
++            CycleFilter(sF.bar, (keys & DPAD_RIGHT) ? 1 : -1);
++        if (keys & A_BUTTON)
++            sF.bar = sF.bar % 3 + 1, PlaySE(SE_SELECT);
++        if (keys & (DPAD_DOWN | B_BUTTON))
++            sF.bar = 0, PlaySE(SE_SELECT);
++        if (!(keys & (L_BUTTON | R_BUTTON)) || sF.shelfMode)
++            return;
++        sF.bar = 0;
++    }
++    if ((keys & DPAD_UP) && *cur == 0 && Filterable())
++    {
++        sF.bar = 1;   // up from the first row: into the filter bar
++        PlaySE(SE_SELECT);
++        return;
++    }
+     if (keys & DPAD_UP)
+         *cur = n ? (*cur + n - 1) % n : 0;
+     if (keys & DPAD_DOWN)
+@@ -931,12 +1171,8 @@ static void HandleInput(u16 keys)
+             TakeOut();
+         if (keys & SELECT_BUTTON)
+         {
+-            sF.edited = FALSE;
+-            PkbnFolderEdit_Set(NULL, NULL, 0);
+-            LoadFolder();
+-            BuildGroups();
++            sF.menu = TRUE;   // POC-16c: choose how to build it
+             PlaySE(SE_SELECT);
+-            Note("AUTO-BUILT FROM YOUR PACK");
+         }
+         if (keys & START_BUTTON)
+         {
+@@ -954,8 +1190,8 @@ static void HandleInput(u16 keys)
+         }
+         break;
+     case PAGE_PACK:
+-        if ((keys & A_BUTTON) && sF.packCount)
+-            AddToFolder(sF.pack[*cur].move, sF.pack[*cur].letter);
++        if ((keys & A_BUTTON) && RowCount())
++            AddToFolder(sF.pack[Raw(*cur)].move, sF.pack[Raw(*cur)].letter);
+         if (keys & START_BUTTON)
+             UsePP(FALSE);
+         if (keys & SELECT_BUTTON)
+@@ -1092,6 +1328,7 @@ static void OpenCommon(MainCallback exitCallback)
+ {
+     s32 i;
+     memset(&sF, 0, sizeof(sF));
++    sF.fltType = sF.fltCode = sF.fltKind = 0xFF;   // POC-16c: no filter
+     sF.exit = exitCallback;
+     PkbnPack_SyncLearned();
+     sF.partyCount = PkbnFolder_PartyBattleMons(sF.party);
+-- 
+2.43.0
+
