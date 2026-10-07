@@ -1,0 +1,494 @@
+From 052bb0a43c7fb6cbb9334ad5ae0a3ae4d32d89a7 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 7 Oct 2026 02:45:50 +0300
+Subject: [PATCH 77/80] POC-19h: BN6's Chip Trader on the PC - 3 chips in (10
+ for the Special trader from the 5th badge), one random chip out by BN6's roll
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ data/scripts/pc.inc      |   8 +++
+ data/specials.inc        |   1 +
+ include/pkbn/chip_pack.h |   1 +
+ src/field_specials.c     |  30 +++++++-
+ src/pkbn/chip_trader.c   | 139 +++++++++++++++++++++++++++++++++++++
+ src/pkbn/folder_ui.c     | 144 ++++++++++++++++++++++++++++++++++++++-
+ src/script_menu.c        |   5 +-
+ 7 files changed, 324 insertions(+), 4 deletions(-)
+ create mode 100644 src/pkbn/chip_trader.c
+
+diff --git a/data/scripts/pc.inc b/data/scripts/pc.inc
+index f138657..40667c7 100644
+--- a/data/scripts/pc.inc
++++ b/data/scripts/pc.inc
+@@ -22,10 +22,18 @@ EventScript_AccessPC::
+ 	case 2, EventScript_AccessHallOfFame
+ 	case 3, EventScript_TurnOffPC
+ 	case 10, EventScript_PkbnNetChallenge
++	case 11, EventScript_PkbnChipTrader
+ 	case MULTI_B_PRESSED, EventScript_TurnOffPC
+ 	end
+ 
+ @ pkbn POC-14: NET CHALLENGE - custom battles that pay NaviCust programs (src/pkbn/challenge.c)
++EventScript_PkbnChipTrader::
++	playse SE_PC_LOGIN
++	special PkbnChipTraderMenu
++	waitstate
++	goto EventScript_PCMainMenu
++	end
++
+ EventScript_PkbnNetChallenge::
+ 	playse SE_PC_LOGIN
+ 	msgbox Text_PkbnNetChallengeLogin, MSGBOX_DEFAULT
+diff --git a/data/specials.inc b/data/specials.inc
+index 8caa065..20b4723 100644
+--- a/data/specials.inc
++++ b/data/specials.inc
+@@ -545,3 +545,4 @@ gSpecials::
+ 	def_special PkbnNetChallengeMenu
+ 	def_special PkbnStartNetChallenge
+ 	def_special PkbnStartReplay
++	def_special PkbnChipTraderMenu
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index 2f78ebd..72fac4a 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -66,6 +66,7 @@ void PkbnFolder_Equip(u8 n);
+ void PkbnFolderEdit_Set(const u16 *moves, const u8 *letters, u8 count);
+ u8 PkbnFolder_PartyBattleMons(struct BattlePokemon *out);    // the party as BattlePokemon (species/moves/types)
+ void PkbnFolderEdit_Open(MainCallback exitCallback);          // the FOLDER screen (src/pkbn/folder_ui.c)
++void PkbnChipTrader_Open(MainCallback exitCallback);          // POC-19: BN6's Chip Trader (the PC)
+ void PkbnChipShelf_Open(MainCallback exitCallback);           // a Poké Mart's chip shelf (same screen, one page)
+ void PkbnDraw_ChipIcon(u16 *fb, s32 x, s32 y, u16 move, bool8 dim);   // 22x16 BN-style icon (grid_draw.c)
+ void PkbnPack_GrantTM(u16 item, u16 count);
+diff --git a/src/field_specials.c b/src/field_specials.c
+index fc132f2..8bbef8c 100644
+--- a/src/field_specials.c
++++ b/src/field_specials.c
+@@ -959,8 +959,10 @@ void PkbnPcMenuRemap(void)
+ #ifdef PORTABLE
+     if (gSpecialVar_Result == 2)
+         gSpecialVar_Result = 10;
+-    else if (gSpecialVar_Result > 2 && gSpecialVar_Result != MULTI_B_PRESSED)
+-        gSpecialVar_Result--;
++    else if (gSpecialVar_Result == 3)
++        gSpecialVar_Result = 11;   // POC-19: CHIP TRADER
++    else if (gSpecialVar_Result > 3 && gSpecialVar_Result != MULTI_B_PRESSED)
++        gSpecialVar_Result -= 2;
+ #endif
+ }
+ 
+@@ -976,6 +978,30 @@ static void Task_OpenNetChallenge(u8 taskId)
+ }
+ #endif
+ 
++#ifdef PORTABLE
++static void Task_OpenChipTrader(u8 taskId)
++{
++    if (!gPaletteFade.active)
++    {
++        CleanupOverworldWindowsAndTilemaps();
++        PkbnChipTrader_Open(CB2_ReturnToFieldContinueScript);
++        DestroyTask(taskId);
++    }
++}
++#endif
++
++// POC-19: BN6's Chip Trader on the PC (src/pkbn/chip_trader.c, folder_ui.c).
++void PkbnChipTraderMenu(void)
++{
++#ifdef PORTABLE
++    LockPlayerFieldControls();
++    FadeScreen(FADE_TO_BLACK, 0);
++    CreateTask(Task_OpenChipTrader, 10);
++#else
++    ScriptContext_Enable();
++#endif
++}
++
+ // The challenge list; VAR_RESULT: the challenge picked, or 0xFF.
+ void PkbnNetChallengeMenu(void)
+ {
+diff --git a/src/pkbn/chip_trader.c b/src/pkbn/chip_trader.c
+new file mode 100644
+index 0000000..9c27bbe
+--- /dev/null
++++ b/src/pkbn/chip_trader.c
+@@ -0,0 +1,139 @@
++// POC-19: BN6's Chip Trader (Khaled's pick) - chips in, one random chip out. The screen is the FOLDER screen's PACK page
++// in trader mode (src/pkbn/folder_ui.c PkbnChipTrader_Open); the roll is here.
++//
++// BN6 (bn6f, read by a research pass):
++//  - "It's a Chip Trader. Insert 3 BtlChips?" / "Chip Trader Special! Insert 10 BtlChips?"
++//    (data/textscript/TextScriptChipTrader86C580C.s:6-7, 215-216). The chips put in don't affect the reward
++//    (sub_804A970, asm/asm03_2.s:7692; sub_804BD00, :8970): 3 or 10 in, one out.
++//  - The roll (sub_804BD00, :8970-9015): 75% / 25% between two groups of the trader's list by a per-chip flag
++//    (EVENT_1E20 + chip, meaning UNVERIFIED - here: chips you have had before / never had, by the Library); a rarity
++//    0-4 by weights ({0x70,0x60,0x18,0x10,0x08} for the first trader, byte_804B00C); the first non-empty rarity; one chip
++//    of it at random (sub_804BE88, :9139).
++//  - Redraw (chipTraderRedrawChance_804BEEC, :9171): rarity 3+ is rerolled flat over the whole list with a chance by the
++//    copies you own: 0 -> ~0, 1 -> 25%, 2 -> 50%, 3 -> 62.5%, 4+ -> 75% (off_804B048).
++//  - The code (sub_804BF18, :9288): 75% a code you don't own, 25% one you do ("75% new code 25% old code", :9331).
++// Ours (TUNE): BN6's list is per machine; here it is every chip move up to an MB cap that grows with badges, rarity by
++// MB, no Giga or Mega chips. The Special trader's weights aren't decoded (byte_804B011): ours lean rarer.
++#include <stdlib.h>
++#include "global.h"
++#include "random.h"
++#include "event_data.h"
++#include "constants/flags.h"
++#include "pkbn/chip_pack.h"
++#include "pkbn/folder.h"
++#include "pkbn/move_table.h"
++#include "pkbn/grid_internal.h"
++#include <stdio.h>
++
++#ifdef PORTABLE
++
++static const u8 sWeights[2][5] = {
++    { 0x70, 0x60, 0x18, 0x10, 0x08 },   // BN6 byte_804B00C (asm/asm03_2.s)
++    { 0x40, 0x50, 0x38, 0x20, 0x10 },   // the Special trader: ours (TUNE)
++};
++static const u8 sRedraw[5] = { 1, 64, 128, 160, 192 };   // /256, by copies owned (BN6 off_804B048)
++
++static u8 Badges(void)
++{
++    s32 b, n = 0;
++    for (b = 0; b < PKBN_LEADERS; b++)
++        n += FlagGet(FLAG_BADGE01_GET + b) ? 1 : 0;
++    return n;
++}
++
++// The Special trader (10 in) opens with the 5th badge (ours, TUNE; BN6 has its own machine).
++bool8 PkbnChipTrader_Special(void)
++{
++    return Badges() >= 5 || getenv("PKBN_TEST_TRADER_SP") != NULL;
++}
++
++u8 PkbnChipTrader_MBCap(bool8 special)
++{
++    return 24 + 6 * Badges() + (special ? 15 : 0);   // TUNE
++}
++
++static u8 Rarity(u16 mv)
++{
++    u8 mb = Chip_MB(mv);
++    return mb <= 12 ? 0 : mb <= 20 ? 1 : mb <= 30 ? 2 : mb <= 40 ? 3 : 4;
++}
++
++static bool8 InPool(u16 mv, u8 cap)
++{
++    return PkbnFolder_MoveIsChip(mv) && gPkbnMoveInfo[mv].laneCount && Chip_MB(mv) <= cap
++        && Chip_Class(mv) == CHIP_STANDARD;
++}
++
++static u8 WeightedPick(const u8 *w, u8 n)
++{
++    s32 i, sum = 0, r;
++    for (i = 0; i < n; i++)
++        sum += w[i];
++    r = Random() % (sum ? sum : 1);
++    for (i = 0; i < n; i++)
++        if ((r -= w[i]) < 0)
++            return i;
++    return n - 1;
++}
++
++// A random chip of the pool: from group (0: had before, 1: never had; -1: either), rarity (-1: any).
++static u16 PickMove(u8 cap, s32 group, s32 rarity)
++{
++    u16 mv, n = 0, k;
++    for (mv = 1; mv < MOVES_COUNT; mv++)
++        if (InPool(mv, cap) && (group < 0 || PkbnLibrary_Has(mv) == (group == 0)) && (rarity < 0 || Rarity(mv) == rarity))
++            n++;
++    if (n == 0)
++        return MOVE_NONE;
++    k = Random() % n;
++    for (mv = 1; mv < MOVES_COUNT; mv++)
++        if (InPool(mv, cap) && (group < 0 || PkbnLibrary_Has(mv) == (group == 0)) && (rarity < 0 || Rarity(mv) == rarity))
++            if (k-- == 0)
++                return mv;
++    return MOVE_NONE;
++}
++
++static u8 PickCode(u16 mv)
++{
++    const struct PkbnMoveInfo *in = &gPkbnMoveInfo[mv];
++    u8 fresh[4], old[4], nf = 0, no = 0, k;
++    for (k = 0; k < in->laneCount && k < 4; k++)
++    {
++        if (PkbnPack_Get(mv, in->lanes[k]))
++            old[no++] = in->lanes[k];
++        else
++            fresh[nf++] = in->lanes[k];
++    }
++    if (nf && (!no || Random() % 4 != 0))   // 75% a new code (BN6 byte_804B068 {0xC0, 0x40})
++        return fresh[Random() % nf];
++    return no ? old[Random() % no] : in->lanes[0];
++}
++
++bool8 PkbnChipTrader_Roll(bool8 special, u16 *outMove, u8 *outLetter)
++{
++    u8 cap = PkbnChipTrader_MBCap(special), r, k;
++    s32 group = Random() % 4 == 0 ? 1 : 0;   // BN6 dword_804B008 {0xC0, 0x40}
++    u16 mv = MOVE_NONE;
++    if (PickMove(cap, group, -1) == MOVE_NONE)
++        group = !group;
++    r = WeightedPick(sWeights[special ? 1 : 0], 5);
++    for (k = 0; k < 5 && mv == MOVE_NONE; k++)   // the first rarity that has chips, down then up
++        mv = PickMove(cap, group, r >= k ? r - k : k);
++    if (mv == MOVE_NONE)
++        mv = PickMove(cap, -1, -1);
++    if (mv == MOVE_NONE)
++        return FALSE;
++    if (Rarity(mv) >= 3)
++    {
++        u16 owned = PkbnPack_Total(mv);
++        if (Random() % 256 < sRedraw[owned > 4 ? 4 : owned])
++            mv = PickMove(cap, -1, -1);   // BN6: a flat pick over the whole list
++    }
++    *outMove = mv;
++    *outLetter = PickCode(mv);
++    printf("[pkbn] chip trader (%s): move %u code %u (MB %u, cap %u)\n", special ? "special" : "3", mv, *outLetter,
++           Chip_MB(mv), cap);
++    return TRUE;
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index 3709f86..73c42d0 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -89,9 +89,22 @@ static struct
+     u8 menuSel;
+     u16 map[MOVES_COUNT * 2];  // visible row -> row of the full list
+     u16 mapCount;
++    // POC-19: BN6's Chip Trader (src/pkbn/chip_trader.c): the PACK page, marking chips to put in
++    bool8 trader;
++    u8 need;                   // 3, or 10 for the Special trader
++    u8 mark[400];              // copies of each pack row marked
++    u8 marked;
++    u16 gotMove;
++    u8 gotLetter;
++    u16 gotT;                  // frames since the trade (the reveal)
+ } sF;
+ 
++bool8 PkbnChipTrader_Roll(bool8 special, u16 *outMove, u8 *outLetter);   // chip_trader.c
++bool8 PkbnChipTrader_Special(void);
++void PkbnDraw_ChipIcon(u16 *fb, s32 x, s32 y, u16 move, bool8 dim);   // grid_draw.c
++
+ static void DrawStyleMenu(u16 *fb);
++static u8 FreeCopies(u16 row);
+ static u16 Raw(u16 row);
+ 
+ static s32 Text(u16 *fb, s32 x, s32 y, const char *s, u16 col)
+@@ -626,6 +639,15 @@ static void DrawTabs(u16 *fb)
+     static const char *const names[PAGE_COUNT] = { "FOLDER", "PACK", "CANDY", "PARTNER", "LIBRARY" };
+     s32 i, x = 4;
+     char line[32];
++    if (sF.trader)
++    {
++        Pkbn_DrawEmText(fb, 6, 0, sF.need == 10 ? "CHIP TRADER SP" : "CHIP TRADER", PKBN_FONT_NORMAL, RGB(31, 26, 6),
++                        RGB(2, 2, 5));
++        snprintf(line, sizeof(line), "%u/%u", sF.marked, sF.need);
++        Text(fb, CW - 4 - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), 4, line,
++             sF.marked == sF.need ? RGB(31, 26, 6) : RGB(31, 31, 31));
++        return;
++    }
+     if (sF.shelfMode)
+     {
+         Pkbn_DrawEmText(fb, 6, 0, "CHIP SHELF", PKBN_FONT_NORMAL, RGB(31, 26, 6), RGB(2, 2, 5));
+@@ -723,6 +745,13 @@ static void DrawList(u16 *fb)
+             u8 have = PkbnPack_Get(mv, letter), used = InFolder(mv, letter);
+             dim = !PartyCanUse(mv);
+             snprintf(qty, sizeof(qty), "%u/%u", used, have);
++            if (sF.trader)
++            {
++                // POC-19 Chip Trader: marked / free (owned and not in the folder)
++                snprintf(qty, sizeof(qty), "%u/%u", sF.mark[Raw(row)], FreeCopies(Raw(row)));
++                dim = FALSE;
++                col = sF.mark[Raw(row)] ? RGB(31, 26, 6) : FreeCopies(Raw(row)) ? RGB(31, 31, 31) : RGB(16, 18, 22);
++            }
+             snprintf(right, sizeof(right), "%u/%u", InFolder(mv, -1), Chip_CopyCap(mv));
+             if (used >= have)
+                 col = RGB(16, 18, 22);
+@@ -810,6 +839,41 @@ static void DrawPanel(u16 *fb)
+     struct PkbnImage icon;
+     Pkbn_FillRect(fb, x - 2, 22, CW - x, 128, RGB(3, 5, 12));
+     Pkbn_FrameRect(fb, x - 2, 22, CW - x, 128, RGB(8, 12, 22));
++    if (sF.trader && sF.gotT)
++    {
++        // POC-19: the traded chip comes out - its icon, twice the size, revealed a row at a time, then its name
++        static u16 sIcon[22 * 16];
++        s32 i, j, rows = sF.gotT / 3;
++        u16 tc = Vfx_TypeColor(gBattleMoves[sF.gotMove].type);
++        if (sF.gotT == 1)
++        {
++            static u16 sTmp[PKBN_CANVAS_W * 16];
++            PkbnDraw_ChipIcon(sTmp, 0, 0, sF.gotMove, FALSE);
++            for (j = 0; j < 16; j++)
++                for (i = 0; i < 22; i++)
++                    sIcon[j * 22 + i] = sTmp[j * PKBN_CANVAS_W + i];
++        }
++        if (sF.gotT < 200)
++        {
++            sF.gotT++;
++            if (sF.gotT % 6 == 0 && sF.gotT / 3 <= 32)
++                PlaySE(SE_BALL_TRAY_BALL);
++            if (sF.gotT == 32 * 3 + 2)
++                PlaySE(SE_RG_POKE_JUMP_SUCCESS);
++        }
++        Pkbn_FillRect(fb, x + 26, 40, 48, 36, Gfx_Blend(tc, RGB(0, 0, 0), 9));
++        for (j = 0; j < 32 && j < rows; j++)
++            for (i = 0; i < 44; i++)
++                Pkbn_FillRect(fb, x + 28 + i, 42 + j, 1, 1, sIcon[(j / 2) * 22 + i / 2] ? sIcon[(j / 2) * 22 + i / 2] : Gfx_Blend(tc, RGB(0, 0, 0), 9));
++        if (rows >= 32)
++        {
++            MoveName(nm, sizeof(nm), sF.gotMove);
++            snprintf(line, sizeof(line), "%s %c", nm, PkbnFolder_LetterChar(sF.gotLetter));
++            Pkbn_DrawEmText(fb, x + 50 - Pkbn_EmTextWidth(line, PKBN_FONT_NORMAL) / 2, 84, line, PKBN_FONT_NORMAL,
++                            RGB(31, 31, 31), RGB(2, 2, 5));
++        }
++        return;
++    }
+     if (n == 0)
+         return;
+     RowChip(sF.cursor[sF.page], &mv, &letter);
+@@ -888,7 +952,9 @@ static void DrawHints(u16 *fb)
+     Pkbn_FillRect(fb, 0, CH - 24, CW, 24, RGB(1, 2, 5));
+     if (sF.noteTimer)
+         Text(fb, 4, CH - 24, sF.note, RGB(31, 26, 6));
+-    Text(fb, 4, CH - 13, hints[sF.page], RGB(16, 18, 24));
++    Text(fb, 4, CH - 13, sF.trader ? (PkbnChipTrader_Special() ? "A:IN  START:TRADE  SELECT:3/10  B:DONE"
++                                                                 : "A:IN  START:TRADE  B:DONE") : hints[sF.page],
++         RGB(16, 18, 24));
+ }
+ 
+ // ---- POC-19: the FOLDER lesson (Khaled's pick: learn by doing, like NaviCust's). One line, then pulsing buttons:
+@@ -1240,11 +1306,77 @@ static void DrawStyleMenu(u16 *fb)
+     }
+ }
+ 
++// ---- POC-19: Chip Trader (BN6) ----------------------------------------------------------------------------------
++static u8 FreeCopies(u16 row)
++{
++    u16 mv = sF.pack[row].move;
++    u8 l = sF.pack[row].letter, have = PkbnPack_Get(mv, l), used = sF.edited ? InFolder(mv, l) : 0;
++    return have > used ? have - used : 0;   // (an auto-built folder just builds from what's left)
++}
++
++static void DoTrade(void)
++{
++    u16 i, mv;
++    u8 l;
++    for (i = 0; i < sF.packCount; i++)
++        if (sF.mark[i])
++            PkbnPack_Add(sF.pack[i].move, sF.pack[i].letter, -(s32)sF.mark[i]);
++    if (!PkbnChipTrader_Roll(sF.need == 10, &mv, &l))
++        return;
++    PkbnPack_Add(mv, l, 1);
++    sF.gotMove = mv, sF.gotLetter = l, sF.gotT = 1;
++    memset(sF.mark, 0, sizeof(sF.mark));
++    sF.marked = 0;
++    BuildPack();
++    PlaySE(SE_BALL_TRAY_ENTER);   // BN6: "Click-k-k-k...THUNK!"
++}
++
++static bool8 TraderInput(u16 keys, u16 *cur, u16 n)
++{
++    if (sF.gotT)
++    {
++        if (keys & (A_BUTTON | B_BUTTON | START_BUTTON))
++            sF.gotT = 0, PlaySE(SE_SELECT);   // (the next trade)
++        return TRUE;
++    }
++    keys &= ~(L_BUTTON | R_BUTTON);
++    if ((keys & A_BUTTON) && n)
++    {
++        u16 r = Raw(*cur);
++        if (sF.mark[r] < FreeCopies(r) && sF.marked < sF.need)
++            sF.mark[r]++, sF.marked++, PlaySE(SE_SELECT);
++        else if (sF.mark[r])
++            sF.marked -= sF.mark[r], sF.mark[r] = 0, PlaySE(SE_RG_BAG_CURSOR);
++        else
++            PlaySE(SE_FAILURE);
++        return TRUE;
++    }
++    if ((keys & SELECT_BUTTON) && PkbnChipTrader_Special())
++    {
++        sF.need = sF.need == 3 ? 10 : 3;
++        memset(sF.mark, 0, sizeof(sF.mark));
++        sF.marked = 0;
++        PlaySE(SE_SELECT);
++        return TRUE;
++    }
++    if (keys & START_BUTTON)
++    {
++        if (sF.marked == sF.need)
++            DoTrade();
++        else
++            PlaySE(SE_FAILURE);
++        return TRUE;
++    }
++    return FALSE;   // moving, filters, B: as on the PACK page
++}
++
+ static void HandleInput(u16 keys)
+ {
+     u16 n, *cur = &sF.cursor[sF.page];
+     RebuildMap();
+     n = RowCount();
++    if (sF.trader && TraderInput(keys, cur, n))
++        return;
+     if (sF.menu)
+     {
+         if (keys & DPAD_UP)
+@@ -1407,6 +1539,16 @@ void PkbnChipShelf_Open(MainCallback exitCallback)
+     SetMainCallback2(CB2_Folder);
+ }
+ 
++void PkbnChipTrader_Open(MainCallback exitCallback)
++{
++    OpenCommon(exitCallback);
++    sF.trader = TRUE;
++    sF.need = 3;
++    sF.page = PAGE_PACK;
++    gPkbnCanvasOverlay = Draw;
++    SetMainCallback2(CB2_Folder);
++}
++
+ void PkbnFolderEdit_Open(MainCallback exitCallback)
+ {
+     OpenCommon(exitCallback);
+diff --git a/src/script_menu.c b/src/script_menu.c
+index 3321f8c..4689fa0 100644
+--- a/src/script_menu.c
++++ b/src/script_menu.c
+@@ -327,6 +327,7 @@ bool16 ScriptMenu_CreatePCMultichoice(void)
+ 
+ #ifdef PORTABLE
+ static const u8 sText_PkbnNetChallenge[] = _("NET CHALLENGE");
++static const u8 sText_PkbnChipTrader[] = _("CHIP TRADER");   // POC-19
+ #endif
+ 
+ static void CreatePCMultichoice(void)
+@@ -351,7 +352,8 @@ static void CreatePCMultichoice(void)
+ 
+ #ifdef PORTABLE
+     pixelWidth = DisplayTextAndGetWidth(sText_PkbnNetChallenge, pixelWidth);
+-    netRows = 1;   // pkbn POC-14: NET CHALLENGE (PkbnPcMenuRemap turns it into 10)
++    pixelWidth = DisplayTextAndGetWidth(sText_PkbnChipTrader, pixelWidth);
++    netRows = 2;   // pkbn POC-14: NET CHALLENGE (PkbnPcMenuRemap turns it into 10); POC-19: CHIP TRADER (11)
+ #endif
+     width = ConvertPixelWidthToTileWidth(pixelWidth);
+ 
+@@ -373,6 +375,7 @@ static void CreatePCMultichoice(void)
+     }
+ #ifdef PORTABLE
+     AddTextPrinterParameterized(windowId, FONT_NORMAL, sText_PkbnNetChallenge, x, 33, TEXT_SKIP_DRAW, NULL);
++    AddTextPrinterParameterized(windowId, FONT_NORMAL, sText_PkbnChipTrader, x, 49, TEXT_SKIP_DRAW, NULL);
+ #endif
+ 
+     // Change PC name if player has met Lanette
+-- 
+2.43.0
+

@@ -1,0 +1,284 @@
+From 05a3b041cc4bf399b25609b47768dde74dce1dca Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 7 Oct 2026 02:23:25 +0300
+Subject: [PATCH 74/80] POC-19d: BN6's Regular Chip - pick one per folder
+ (SELECT > REGULAR), it's in every first hand; MB limit grows with badges;
+ save v8
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/chip_pack.h     |  5 +++-
+ include/pkbn/grid_internal.h |  1 +
+ src/pkbn/folder.c            | 10 +++++++
+ src/pkbn/folder_ui.c         | 57 +++++++++++++++++++++++++++++++-----
+ src/pkbn/grid_battle.c       | 39 ++++++++++++++++++++++++
+ src/pkbn/pkbn_save.c         | 30 ++++++++++++++++++-
+ 6 files changed, 133 insertions(+), 9 deletions(-)
+
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index 79de0c4..2f78ebd 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -38,7 +38,10 @@ void PkbnPack_SetGranted(u16 move);
+ // Self-tests: the pre-POC-10 folder order (party slot, move slot, copy) so scripted picks keep their meaning.
+ void PkbnFolder_SortForTests(struct Folder *folder, const struct BattlePokemon *party, u8 partyCount);
+ u8 PkbnFolderEdit_Get(u16 *moves, u8 *letters);            // the equipped folder; 0 = auto-build
+-u8 PkbnFolder_Equipped(void);                               // 0-2
++u8 PkbnFolder_Equipped(void);
++bool8 PkbnFolder_Regular(u8 folder, u16 *move, u8 *letter);   // POC-19: BN6's Regular Chip
++void PkbnFolder_SetRegular(u8 folder, u16 move, u8 letter);
++u8 PkbnFolder_RegularMB(void);                                 // the biggest chip that can be Regular                               // 0-2
+ // POC-14 (src/pkbn/pkbn_save.c)
+ bool8 PkbnLibrary_Has(u16 move);
+ u8 PkbnLibrary_Paid(void);
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index b8d7a2d..cdad1f1 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -238,6 +238,7 @@ struct GridBattle
+     u8 cinemaT;                // POC-17b: frames the fight waits for a big move's cut-in (the pictures keep moving)
+     bool8 lowHp;               // POC-17c: the low-HP alarm is on
+     u8 runHold;                // POC-18: frames SELECT has been held (running needs RUN_HOLD_FRAMES)
++    bool8 regDealt;            // POC-19: the Regular Chip has been dealt (first hand only)
+     bool8 firstBattle;         // POC-18: Birch's rescue (BATTLE_TYPE_FIRST_BATTLE), on the grid as the first lesson
+     u8 chipReadyT;             // POC-18: frames until chips and the buster work after Custom (CHIP_READY_FRAMES)
+     bool8 omega;               // POC-16d: an Ω Leader rematch (tier-6 AI, levels +5)
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index 31307ac..6ad43e7 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -548,6 +548,16 @@ bool8 PkbnFolder_CanAppend(const struct Folder *folder, const u8 *queue, u8 queu
+ static const u8 sGymTypes[PKBN_LEADERS] = { TYPE_ROCK, TYPE_FIGHTING, TYPE_ELECTRIC, TYPE_FIRE, TYPE_NORMAL,
+                                             TYPE_FLYING, TYPE_PSYCHIC, TYPE_WATER };
+ 
++// POC-19: how big (MB) a Regular Chip may be. BN6 has a limit that RegUP programs raise ("RegUP",
++// bn6f data/textscript/TextScript873D9FC.s); here it grows with badges instead (TUNE): 20 MB, +5 per badge.
++u8 PkbnFolder_RegularMB(void)
++{
++    s32 b, n = 0;
++    for (b = 0; b < PKBN_LEADERS; b++)
++        n += FlagGet(FLAG_BADGE01_GET + b) ? 1 : 0;
++    return (u8)(20 + 5 * n);
++}
++
+ s8 PkbnFolder_NextGym(void)
+ {
+     s32 b;
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index ab42327..30fc36f 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -779,6 +779,17 @@ static void DrawList(u16 *fb)
+             Text(fb, LIST_X + 84, y - 2, c, RGB(31, 26, 6));
+         }
+         Text(fb, LIST_X + 96, y - 2, qty, dim ? RGB(14, 14, 16) : col);
++        if (sF.page == PAGE_FOLDER)
++        {
++            u16 rm;
++            u8 rl;
++            if (PkbnFolder_Regular(PkbnFolder_Equipped(), &rm, &rl) && rm == mv && rl == letter)
++            {
++                // POC-19: BN6 marks the Regular Chip "REG"
++                Pkbn_FillRect(fb, LIST_X + 108, y + 1, 19, 8, RGB(31, 12, 8));
++                Text(fb, LIST_X + 109, y - 2, "REG", RGB(31, 31, 31));
++            }
++        }
+         Text(fb, PANEL_X - 8 - Pkbn_EmTextWidth(right, PKBN_FONT_SMALL), y - 2, right, dim ? RGB(14, 14, 16) : rcol);
+     }
+     if (n == 0)
+@@ -1047,7 +1058,36 @@ static void CycleCode(void)
+ }
+ 
+ // POC-16c: the FOLDER page's SELECT menu: how to build the folder you're editing (src/pkbn/folder.c)
+-static const char *const sStyleNames[FOLDER_STYLE_COUNT] = { "BALANCED", "VS NEXT GYM", "PA HUNTER", "ONE CODE" };
++static const char *const sStyleNames[FOLDER_STYLE_COUNT + 1] = { "BALANCED", "VS NEXT GYM", "PA HUNTER", "ONE CODE",
++                                                                  "REGULAR" };   // POC-19: BN6's Regular Chip
++#define MENU_ITEMS (FOLDER_STYLE_COUNT + 1)
++
++// POC-19: the highlighted chip becomes this folder's Regular Chip (again: no Regular Chip). Too big (MB): refused.
++static void ToggleRegular(void)
++{
++    u16 mv, rm;
++    u8 l, rl, f = PkbnFolder_Equipped();
++    char line[32];
++    if (RowCount() == 0)
++        return;
++    RowChip(sF.cursor[PAGE_FOLDER], &mv, &l);
++    if (PkbnFolder_Regular(f, &rm, &rl) && rm == mv && rl == l)
++    {
++        PkbnFolder_SetRegular(f, MOVE_NONE, 0);
++        PlaySE(SE_SELECT);
++        return;
++    }
++    if (Chip_MB(mv) > PkbnFolder_RegularMB())
++    {
++        snprintf(line, sizeof(line), "REG: %u MB MAX", PkbnFolder_RegularMB());
++        Note(line);
++        PlaySE(SE_FAILURE);
++        return;
++    }
++    PkbnFolder_SetRegular(f, mv, l);
++    PlaySE(SE_EXP_MAX);
++    printf("[pkbn] regular chip: folder %u move %u letter %u\n", f, mv, l);
++}
+ 
+ static void BuildWithStyle(u8 style)
+ {
+@@ -1086,9 +1126,9 @@ static void DrawStyleMenu(u16 *fb)
+     s32 i, x = LIST_X + 6, y = LIST_Y + 2, w = PANEL_X - LIST_X - 16;
+     if (!sF.menu)
+         return;
+-    Pkbn_FillRect(fb, x, y, w, 6 + FOLDER_STYLE_COUNT * 13, RGB(2, 4, 12));
+-    Pkbn_FrameRect(fb, x, y, w, 6 + FOLDER_STYLE_COUNT * 13, RGB(31, 26, 6));
+-    for (i = 0; i < FOLDER_STYLE_COUNT; i++)
++    Pkbn_FillRect(fb, x, y, w, 6 + MENU_ITEMS * 13, RGB(2, 4, 12));
++    Pkbn_FrameRect(fb, x, y, w, 6 + MENU_ITEMS * 13, RGB(31, 26, 6));
++    for (i = 0; i < MENU_ITEMS; i++)
+     {
+         s32 ry = y + 3 + i * 13;
+         if (i == sF.menuSel)
+@@ -1105,13 +1145,16 @@ static void HandleInput(u16 keys)
+     if (sF.menu)
+     {
+         if (keys & DPAD_UP)
+-            sF.menuSel = (sF.menuSel + FOLDER_STYLE_COUNT - 1) % FOLDER_STYLE_COUNT, PlaySE(SE_SELECT);
++            sF.menuSel = (sF.menuSel + MENU_ITEMS - 1) % MENU_ITEMS, PlaySE(SE_SELECT);
+         if (keys & DPAD_DOWN)
+-            sF.menuSel = (sF.menuSel + 1) % FOLDER_STYLE_COUNT, PlaySE(SE_SELECT);
++            sF.menuSel = (sF.menuSel + 1) % MENU_ITEMS, PlaySE(SE_SELECT);
+         if (keys & A_BUTTON)
+         {
+             sF.menu = FALSE;
+-            BuildWithStyle(sF.menuSel);
++            if (sF.menuSel == FOLDER_STYLE_COUNT)
++                ToggleRegular();
++            else
++                BuildWithStyle(sF.menuSel);
+         }
+         if (keys & (B_BUTTON | SELECT_BUTTON))
+             sF.menu = FALSE, PlaySE(SE_SELECT);
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 91491da..b3ab3cb 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -595,6 +595,44 @@ static void GuaranteePlayable(void)
+         }
+ }
+ 
++// POC-19: BN6's Regular Chip - the folder's chosen chip is in the first hand of every battle (PkbnFolder_Regular).
++static void DealRegular(void)
++{
++    u16 rm;
++    u8 rl;
++    s32 i, p;
++    if (sB.regDealt || sB.challenge)
++        return;
++    sB.regDealt = TRUE;
++    if (!PkbnFolder_Regular(PkbnFolder_Equipped(), &rm, &rl))
++        return;
++    for (i = 0; i < sB.handCount; i++)
++        if (sB.folder.chips[sB.hand[i]].move == rm && sB.folder.chips[sB.hand[i]].letter == rl)
++        {
++            PKBN_LOG("regular chip already in hand: move %u", rm);
++            return;   // dealt already
++        }
++    for (p = 0; p < sB.folder.pileCount; p++)
++    {
++        u8 idx = sB.folder.pile[p];
++        if (sB.folder.chips[idx].move != rm || sB.folder.chips[idx].letter != rl || !ChipAlive(idx))
++            continue;
++        if (sB.handCount < sB.handSize)
++        {
++            sB.hand[sB.handCount++] = idx;
++            memmove(&sB.folder.pile[p], &sB.folder.pile[p + 1], sB.folder.pileCount - p - 1);
++            sB.folder.pileCount--;
++        }
++        else
++        {
++            sB.folder.pile[p] = sB.hand[0];
++            sB.hand[0] = idx;
++        }
++        PKBN_LOG("regular chip dealt: move %u", rm);
++        return;
++    }
++}
++
+ static void RefillHand(void)
+ {
+     u8 keep[HAND_MAX];
+@@ -651,6 +689,7 @@ static void RefillHand(void)
+         }
+         sB.hand[sB.handCount++] = idx;
+     }
++    DealRegular();         // POC-19
+     GuaranteePlayable();   // POC-19
+     // POC-12: the folder is used up and nothing left in the hand works for whoever is in -> Struggle.
+     if (sB.folder.pileCount == 0 && !(sB.folder.discardCount && sB.folder.count < FOLDER_RESHUFFLE_BELOW)
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index cd6f6af..c8fadc9 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -29,7 +29,8 @@
+ #define PKBN_SAVE_BAK     Platform_DataPath("pkbn.sav.bak")
+ #define PKBN_SAVE_BAD     Platform_DataPath("pkbn.sav.bad")
+ extern const char *Platform_DataPath(const char *file);
+-#define PKBN_SAVE_VERSION 7   // v7 (POC-18): lessons seen;
++#define PKBN_SAVE_VERSION 8   // v8 (POC-19): Regular Chips;
++                              // v7 v7 (POC-18): lessons seen;
+                               // v2 (POC-10): chip pack, grants, candy, folder; v3 (POC-11): partner chips;
+                               // v4 (POC-13): folders 2 and 3 and which one is equipped;
+                               // v5 (POC-14): chip library, Leader chips and rematch records, challenges, programs;
+@@ -77,8 +78,14 @@ struct PkbnSaveFile
+     // ---- v7 (POC-18) ----
+     u8 tutorialSeen;                          // lessons already given (TUT_* bits, include/pkbn/tutorial.h)
+     u8 pad7[3];
++    // ---- v8 (POC-19) ----
++    u16 regMove[PKBN_FOLDERS];                // BN6's Regular Chip per folder (MOVE_NONE = none)
++    u8 regLetter[PKBN_FOLDERS];
++    u8 pad8;
+ };
+ 
++#define V7_SIZE offsetof(struct PkbnSaveFile, regMove)
++
+ #define V6_SIZE offsetof(struct PkbnSaveFile, tutorialSeen)
+ 
+ #define V5_SIZE offsetof(struct PkbnSaveFile, leaderOmega)
+@@ -178,6 +185,8 @@ void PkbnSave_Read(void)
+         memset((u8 *)&tmp + V5_SIZE, 0, sizeof(tmp) - V5_SIZE); // v5 -> v6: no Ω wins yet
+     else if (tmp.version == 6)
+         memset((u8 *)&tmp + V6_SIZE, 0, sizeof(tmp) - V6_SIZE); // v6 -> v7
++    else if (tmp.version == 7)
++        memset((u8 *)&tmp + V7_SIZE, 0, sizeof(tmp) - V7_SIZE); // v7 -> v8: no Regular Chips
+     if (tmp.version < 7)
+         tmp.tutorialSeen = 0xFF;   // a game already under way: no lessons, and NaviCust stays open as it was
+     if (tmp.version < 5)
+@@ -602,6 +611,25 @@ bool8 PkbnProgram_GrantByName(const char *name, u8 n)
+     return TRUE;
+ }
+ 
++// POC-19: BN6's Regular Chip, one per folder ("Choose a chip to use as a Regular Chip!", bn6f
++// data/textscript/compressed/CompText86CEE84.s)
++bool8 PkbnFolder_Regular(u8 folder, u16 *move, u8 *letter)
++{
++    if (folder >= PKBN_FOLDERS || sSave.regMove[folder] == MOVE_NONE)
++        return FALSE;
++    *move = sSave.regMove[folder];
++    *letter = sSave.regLetter[folder];
++    return TRUE;
++}
++
++void PkbnFolder_SetRegular(u8 folder, u16 move, u8 letter)
++{
++    if (folder >= PKBN_FOLDERS)
++        return;
++    sSave.regMove[folder] = move;
++    sSave.regLetter[folder] = letter;
++}
++
+ // POC-18: lessons (src/pkbn/tutorial.c)
+ bool8 PkbnTutorial_Seen(u8 bits)
+ {
+-- 
+2.43.0
+

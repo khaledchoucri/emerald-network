@@ -50,6 +50,7 @@ done
 #    They are never committed (CLAUDE.md rule 6); include/pkbn/bn6_gfx_data.h is gitignored by our patches.
 echo "==> Extracting BN6 effect sprites from upstream/bn6f"
 python3 "$PROJECT_DIR/tools/gen_bn6_gfx.py" "$PROJECT_DIR/upstream/bn6f" "$HOST_DIR/include/pkbn/bn6_gfx_data.h"
+python3 "$PROJECT_DIR/tools/gen_bn6_results.py" "$PROJECT_DIR/upstream/bn6f" "$HOST_DIR/include/pkbn/bn6_results_data.h"   # POC-19: BN6's results window
 
 # 4. Build
 # Linux and Windows builds share build/pc64, so objects from one can't be linked into the other (mingw then fails

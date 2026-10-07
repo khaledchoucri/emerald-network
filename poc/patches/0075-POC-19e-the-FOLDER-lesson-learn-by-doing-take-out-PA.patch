@@ -1,0 +1,236 @@
+From 4a0ae93578f2973f57da61edc98451e51ee1077a Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 7 Oct 2026 02:25:59 +0300
+Subject: [PATCH 75/80] POC-19e: the FOLDER lesson - learn by doing (take out,
+ PACK, put in, back, done); SELECT and START pulse on the second visit
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/tutorial.h |   8 +--
+ src/pkbn/folder_ui.c    | 110 ++++++++++++++++++++++++++++++++++++++++
+ src/pkbn/pkbn_save.c    |  15 +++---
+ 3 files changed, 124 insertions(+), 9 deletions(-)
+
+diff --git a/include/pkbn/tutorial.h b/include/pkbn/tutorial.h
+index f9e5523..3210eeb 100644
+--- a/include/pkbn/tutorial.h
++++ b/include/pkbn/tutorial.h
+@@ -12,7 +12,9 @@
+ #define TUT_SWITCH    (1 << 3)   // first battle with two Pokémon able to fight
+ #define TUT_COUNTER   (1 << 4)   // first counter chance
+ #define TUT_NAVICUST  (1 << 5)   // first time in NAVICUST
+-#define TUT_NAVI_OPEN (1 << 7)   // a save from before POC-18: NAVICUST stays open without the Stone Badge
++#define TUT_FOLDER    (1 << 6)   // POC-19: first time in FOLDER
++#define TUT_NAVI_OPEN (1 << 7)
++#define TUT_FOLDER2   (1 << 8)   // POC-19: second time in FOLDER (SELECT and START)   // a save from before POC-18: NAVICUST stays open without the Stone Badge
+ 
+ // What a line points at (drawn by grid_draw.c)
+ enum { TT_NONE, TT_HAND, TT_INFO, TT_FOE_HP, TT_OK, TT_PLAYER, TT_GAUGE, TT_HEAD, TT_BALL, TT_SW, TT_FOE };
+@@ -20,8 +22,8 @@ enum { TT_NONE, TT_HAND, TT_INFO, TT_FOE_HP, TT_OK, TT_PLAYER, TT_GAUGE, TT_HEAD
+ // Events the battle reports
+ enum { TEV_CUSTOM_OPEN, TEV_CUSTOM_OK, TEV_STEP, TEV_BUSTER, TEV_CHIP_USED };
+ 
+-bool8 PkbnTutorial_Seen(u8 bits);      // pkbn_save.c
+-void PkbnTutorial_SetSeen(u8 bits);
++bool8 PkbnTutorial_Seen(u16 bits);     // pkbn_save.c
++void PkbnTutorial_SetSeen(u16 bits);
+ 
+ bool8 Tut_Enabled(void);                // FALSE in replays and self-tests (PKBN_TEST_TUTORIAL=1 turns it on there)
+ void Tut_BattleBegin(bool8 firstBattle);
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index 30fc36f..3709f86 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -26,6 +26,7 @@
+ #include "money.h"
+ #include "constants/items.h"
+ #include "constants/songs.h"
++#include "pkbn/tutorial.h"
+ #include "pkbn/chip_pack.h"
+ #include "pkbn/navicust.h"
+ #include "pkbn/move_table.h"
+@@ -890,6 +891,107 @@ static void DrawHints(u16 *fb)
+     Text(fb, 4, CH - 13, hints[sF.page], RGB(16, 18, 24));
+ }
+ 
++// ---- POC-19: the FOLDER lesson (Khaled's pick: learn by doing, like NaviCust's). One line, then pulsing buttons:
++// A to take a chip out, R to the PACK page, A to put one in, L back to FOLDER, B to save. The second visit pulses SELECT (ready-made
++// folders and the Regular Chip) and START (Folder 1/2/3). Our design.
++enum { FL_NONE, FL_LINE, FL_TAKE, FL_PACK, FL_ADD, FL_BACK, FL_DONE, FL_SECOND };
++static u8 sLesson;
++static u8 sLessonCount;
++
++static void KeyCap(u16 *fb, s32 x, s32 y, const char *label)
++{
++    s32 w = Pkbn_EmTextWidth(label, PKBN_FONT_SMALL) + 8, bob = (s32)((sF.t / 6) % 4 == 3 ? 1 : 0);
++    u16 c = Gfx_Blend(RGB(31, 26, 6), RGB(31, 31, 31), (u8)((sF.t / 2) % 16 < 8 ? (sF.t / 2) % 8 : 8 - (sF.t / 2) % 8));
++    Draw_Box(fb, x, y - bob, w, 12, RGB(6, 5, 1), c, 16);
++    Text(fb, x + 4, y - 3 - bob, label, c);
++}
++
++static void DrawLesson(u16 *fb)
++{
++    switch (sLesson)
++    {
++    case FL_LINE:
++        Draw_Box(fb, 8, CH - 40, CW - 16, 34, RGB(29, 30, 31), RGB(6, 9, 16), 16);
++        Pkbn_DrawEmText(fb, 15, CH - 38, "Your chips go in your FOLDER.", PKBN_FONT_SMALL, RGB(6, 7, 9), RGB(22, 23, 25));
++        Pkbn_DrawEmText(fb, 15, CH - 28, "Build it yourself!", PKBN_FONT_SMALL, RGB(6, 7, 9), RGB(22, 23, 25));
++        if ((sF.t / 16) & 1)
++            Pkbn_FillRect(fb, CW - 20, CH - 15, 5, 1, RGB(31, 8, 6)), Pkbn_FillRect(fb, CW - 19, CH - 14, 3, 1, RGB(31, 8, 6)),
++            Pkbn_FillRect(fb, CW - 18, CH - 13, 1, 1, RGB(31, 8, 6));
++        break;
++    case FL_TAKE:
++        KeyCap(fb, PANEL_X - 8, LIST_Y + (sF.cursor[PAGE_FOLDER] - sF.top[PAGE_FOLDER]) * ROW_H, "A");
++        break;
++    case FL_PACK:
++        KeyCap(fb, 182, 6, "R");
++        break;
++    case FL_ADD:
++        KeyCap(fb, PANEL_X - 8, LIST_Y + (sF.cursor[PAGE_PACK] - sF.top[PAGE_PACK]) * ROW_H, "A");
++        break;
++    case FL_BACK:
++        KeyCap(fb, 182, 6, "L");
++        break;
++    case FL_DONE:
++        KeyCap(fb, CW - 26, CH - 26, "B");
++        break;
++    case FL_SECOND:
++        KeyCap(fb, 64, CH - 26, "SELECT");
++        KeyCap(fb, 112, CH - 26, "START");
++        break;
++    }
++}
++
++static void LessonFrame(u16 *keys)
++{
++    switch (sLesson)
++    {
++    case FL_LINE:
++        if (*keys & A_BUTTON)
++        {
++            PlaySE(SE_SELECT);
++            sLesson = sF.fCount ? FL_TAKE : FL_PACK;
++            sLessonCount = sF.fCount;
++        }
++        *keys = 0;
++        break;
++    case FL_TAKE:
++        *keys &= ~(B_BUTTON | L_BUTTON | R_BUTTON | START_BUTTON | SELECT_BUTTON);
++        if (sF.fCount < sLessonCount)
++            sLesson = FL_PACK, sLessonCount = sF.fCount;
++        break;
++    case FL_PACK:
++        *keys &= ~(B_BUTTON | L_BUTTON | START_BUTTON | SELECT_BUTTON | A_BUTTON);
++        if (sF.page == PAGE_PACK)
++            sLesson = FL_ADD;
++        break;
++    case FL_ADD:
++        *keys &= ~(B_BUTTON | START_BUTTON | SELECT_BUTTON);
++        if (sF.fCount > sLessonCount)
++            sLesson = FL_BACK;
++        else if (sF.page != PAGE_PACK)
++            sLesson = FL_PACK;
++        break;
++    case FL_BACK:
++        *keys &= ~(B_BUTTON | START_BUTTON | SELECT_BUTTON);
++        if (sF.page == PAGE_FOLDER)
++            sLesson = FL_DONE;
++        break;
++    case FL_DONE:
++        if (*keys & B_BUTTON)
++        {
++            sLesson = FL_NONE;
++            PkbnTutorial_SetSeen(TUT_FOLDER);
++        }
++        break;
++    case FL_SECOND:
++        if (*keys & (SELECT_BUTTON | START_BUTTON | B_BUTTON))
++        {
++            sLesson = FL_NONE;
++            PkbnTutorial_SetSeen(TUT_FOLDER2);
++        }
++        break;
++    }
++}
++
+ static void Draw(u16 *fb)
+ {
+     s32 i;
+@@ -904,6 +1006,7 @@ static void Draw(u16 *fb)
+     DrawStyleMenu(fb);
+     DrawPanel(fb);
+     DrawHints(fb);
++    DrawLesson(fb);   // POC-19
+ }
+ 
+ // ---- input -----------------------------------------------------------------------------------------------------
+@@ -1287,6 +1390,8 @@ static void CB2_Folder(void)
+                 sKeys++;
+         }
+     }
++    if (sLesson)
++        LessonFrame(&keys);   // POC-19
+     HandleInput(keys);
+ }
+ 
+@@ -1305,6 +1410,11 @@ void PkbnChipShelf_Open(MainCallback exitCallback)
+ void PkbnFolderEdit_Open(MainCallback exitCallback)
+ {
+     OpenCommon(exitCallback);
++    sLesson = FL_NONE;
++    if (Tut_Enabled() && !PkbnTutorial_Seen(TUT_FOLDER))
++        sLesson = FL_LINE;
++    else if (Tut_Enabled() && !PkbnTutorial_Seen(TUT_FOLDER2))
++        sLesson = FL_SECOND;
+     gPkbnCanvasOverlay = Draw;
+     SetMainCallback2(CB2_Folder);
+ }
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index c8fadc9..63b1455 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -77,7 +77,8 @@ struct PkbnSaveFile
+     u16 leaderOmegaBest[PKBN_LEADERS];        // best Ω win time (0 = none)
+     // ---- v7 (POC-18) ----
+     u8 tutorialSeen;                          // lessons already given (TUT_* bits, include/pkbn/tutorial.h)
+-    u8 pad7[3];
++    u8 tutorialSeen2;                         // POC-19: more lesson bits (TUT_* >= 1 << 8)
++    u8 pad7[2];
+     // ---- v8 (POC-19) ----
+     u16 regMove[PKBN_FOLDERS];                // BN6's Regular Chip per folder (MOVE_NONE = none)
+     u8 regLetter[PKBN_FOLDERS];
+@@ -188,7 +189,7 @@ void PkbnSave_Read(void)
+     else if (tmp.version == 7)
+         memset((u8 *)&tmp + V7_SIZE, 0, sizeof(tmp) - V7_SIZE); // v7 -> v8: no Regular Chips
+     if (tmp.version < 7)
+-        tmp.tutorialSeen = 0xFF;   // a game already under way: no lessons, and NaviCust stays open as it was
++        tmp.tutorialSeen = tmp.tutorialSeen2 = 0xFF;   // a game already under way: no lessons, and NaviCust stays open as it was
+     if (tmp.version < 5)
+     {
+         u16 mv;
+@@ -631,14 +632,16 @@ void PkbnFolder_SetRegular(u8 folder, u16 move, u8 letter)
+ }
+ 
+ // POC-18: lessons (src/pkbn/tutorial.c)
+-bool8 PkbnTutorial_Seen(u8 bits)
++bool8 PkbnTutorial_Seen(u16 bits)
+ {
+-    return (sSave.tutorialSeen & bits) == bits;
++    u16 seen = sSave.tutorialSeen | (sSave.tutorialSeen2 << 8);
++    return (seen & bits) == bits;
+ }
+ 
+-void PkbnTutorial_SetSeen(u8 bits)
++void PkbnTutorial_SetSeen(u16 bits)
+ {
+-    sSave.tutorialSeen |= bits;
++    sSave.tutorialSeen |= bits & 0xFF;
++    sSave.tutorialSeen2 |= bits >> 8;
+ }
+ 
+ #endif // PORTABLE
+-- 
+2.43.0
+

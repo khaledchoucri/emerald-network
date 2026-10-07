@@ -1,0 +1,143 @@
+From 86db566962d3296c197729a48ff1fcb367ccb42e Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 7 Oct 2026 13:22:55 +0300
+Subject: [PATCH 80/80] POC-19g: late-game balance pass - the test bot switches
+ after two idle Customs and picks the replacement the foe hurts least; version
+ 0.19
+
+(The foe's hard stop on stat moves past +2, bombs flying 40 frames instead of 30, the bot's two-step dodge and
+PKBN_DEBUG_DMG went in with POC-19j's commit.)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/version.h |  2 +-
+ src/pkbn/bot.c         | 72 +++++++++++++++++++++++++++++++++++++++---
+ 2 files changed, 69 insertions(+), 5 deletions(-)
+
+diff --git a/include/pkbn/version.h b/include/pkbn/version.h
+index fe1a624..8cb7e4d 100644
+--- a/include/pkbn/version.h
++++ b/include/pkbn/version.h
+@@ -1,5 +1,5 @@
+ #ifndef GUARD_PKBN_VERSION_H
+ #define GUARD_PKBN_VERSION_H
+ // POC-18: the build friends are playing, shown on the title screen and in the window title, so bug reports say which.
+-#define PKBN_VERSION "0.18"
++#define PKBN_VERSION "0.19"
+ #endif
+diff --git a/src/pkbn/bot.c b/src/pkbn/bot.c
+index 09576b6..0f8e52b 100644
+--- a/src/pkbn/bot.c
++++ b/src/pkbn/bot.c
+@@ -14,6 +14,7 @@
+ #include "pkbn/leader.h"
+ #include "constants/battle_move_effects.h"
+ #include "main.h"
++#include "battle_main.h"
+ 
+ #ifdef PORTABLE
+ 
+@@ -117,15 +118,76 @@ static u8 BestBench(void)
+     return best;
+ }
+ 
++// x10 multiplier of an attack type on a Pokémon's types (gTypeEffectiveness; Foresight marker skipped).
++static u16 TypeMul(u8 type, const struct BattlePokemon *bm)
++{
++    s32 i;
++    u16 m = 10;
++    for (i = 0; TYPE_EFFECT_ATK_TYPE(i) != TYPE_ENDTABLE; i += 3)
++    {
++        if (TYPE_EFFECT_ATK_TYPE(i) == TYPE_FORESIGHT || TYPE_EFFECT_ATK_TYPE(i) != type)
++            continue;
++        if (TYPE_EFFECT_DEF_TYPE(i) == bm->types[0] || (TYPE_EFFECT_DEF_TYPE(i) == bm->types[1] && bm->types[0] != bm->types[1]))
++            m = m * TYPE_EFFECT_MULTIPLIER(i) / 10;
++    }
++    return m;
++}
++
++// POC-19g: the next Pokémon after a faint - the one the foe's moves hurt least, then the one with most chips
++// (Juan: the bot sent Blaziken into Whiscash's Earthquake with Pelipper on the bench).
++static u8 BestReplacement(void)
++{
++    const struct Fighter *e = &sB.f[SIDE_ENEMY];
++    s32 i, k, best = 0xFF, bestScore = -0x7FFF;
++    for (i = 0; i < sB.partyCount; i++)
++    {
++        s32 worst = 0, sc;
++        if (i == sB.active || !PartyAlive(i))
++            continue;
++        for (k = 0; k < MAX_MON_MOVES; k++)
++        {
++            u16 mv = e->bm.moves[k];
++            s32 m;
++            if (mv == MOVE_NONE || gBattleMoves[mv].power == 0)
++                continue;
++            m = TypeMul(gBattleMoves[mv].type, &sB.party[i].bm);
++            if (gBattleMoves[mv].type == e->bm.types[0] || gBattleMoves[mv].type == e->bm.types[1])
++                m = m * 15 / 10;
++            if (m > worst)
++                worst = m;
++        }
++        sc = -worst * 4 + ChipsLeftFor(i);
++        if (sc > bestScore)
++            bestScore = sc, best = i;
++    }
++    return best;
++}
++
+ void PkbnBot_Pick(u16 *pressed)
+ {
+-    u8 want = BestBench();
++    u8 want = sB.pickPurpose == PICK_FAINT ? BestReplacement() : BestBench();
+     if (want != 0xFF && sB.pickPurpose != PICK_BATON && sB.pickOptions[sB.pickCursor] != want)
+         *pressed = DPAD_DOWN;
+     else
+         *pressed = A_BUTTON;
+ }
+ 
++// Customs in a row where the bot found nothing worth picking (counted once per turn).
++static u8 sIdle;
++static u32 sIdleTurn = 0xFFFFFFFF;
++static u8 IdleCustoms(void)
++{
++    return sIdle;
++}
++
++static void NoteCustom(bool8 idle)
++{
++    if (sIdleTurn == sB.turn)
++        return;
++    sIdleTurn = sB.turn;
++    sIdle = idle ? sIdle + 1 : 0;
++}
++
+ void PkbnBot_Custom(u16 *pressed)
+ {
+     s32 i, best = -1, bestScore = 0;
+@@ -143,9 +205,10 @@ void PkbnBot_Custom(u16 *pressed)
+         *pressed = dummy ? DPAD_UP : PkbnGrid_CursorKeyToward(0);
+         return;
+     }
+-    // switch when the Pokémon in has no chips left and a benched one does (SW, then OK)
+-    if (PickedCount() == 0 && !sB.wildPicked && ChipsLeftFor(sB.active) == 0 && BestBench() != 0xFF
+-     && PkbnGrid_HandSelectable(sB.handCount))
++    // switch when the Pokémon in has no chips left and a benched one does (SW, then OK) - or when it has had nothing
++    // worth using for two Customs running (Drake: Swampert's Ground chips against Altaria, 11 idle turns)
++    if (PickedCount() == 0 && !sB.wildPicked && (ChipsLeftFor(sB.active) == 0 || IdleCustoms() >= 2)
++     && BestBench() != 0xFF && PkbnGrid_HandSelectable(sB.handCount))
+     {
+         *pressed = sB.cursor == sB.handCount ? A_BUTTON : PkbnGrid_CursorKeyToward(sB.handCount);
+         return;
+@@ -162,6 +225,7 @@ void PkbnBot_Custom(u16 *pressed)
+         }
+     if (best < 0)
+     {
++        NoteCustom(PickedCount() == 0 && !sB.wildPicked);
+         *pressed = START_BUTTON;
+         return;
+     }
+-- 
+2.43.0
+

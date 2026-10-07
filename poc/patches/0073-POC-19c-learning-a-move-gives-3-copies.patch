@@ -1,0 +1,41 @@
+From e0121729f207c6c1b9a8be16d9fc8214ee7be32a Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 7 Oct 2026 02:20:08 +0300
+Subject: [PATCH 73/80] POC-19c: learning a move gives 3 copies
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/pkbn_save.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index d538365..cd6f6af 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -327,6 +327,7 @@ void PkbnPack_SetGranted(u16 move)
+         sSave.granted[move / 8] |= 1 << (move % 8);
+ }
+ 
++#define LEARN_COPIES 3   // POC-19 (TUNE)
+ static void GrantLearned(u16 move)
+ {
+     if (move == MOVE_NONE || move >= MOVES_COUNT || !PkbnFolder_MoveIsChip(move))
+@@ -334,7 +335,13 @@ static void GrantLearned(u16 move)
+     if (sSave.granted[move / 8] & (1 << (move % 8)))
+         return;
+     sSave.granted[move / 8] |= 1 << (move % 8);
+-    PkbnPack_Add(move, gPkbnMoveInfo[move].lanes[0], 1); // design 08 §11.4: learning gives 1 copy, first code
++    // POC-19 (Khaled: "learning a move should always give 3 copies"; was 1 - design 08 §11.4): the move's first codes in
++    // order (lanes: one letter per copy, src/pkbn/move_table.c), wrapping when it has fewer than 3
++    {
++        u8 k, n = gPkbnMoveInfo[move].laneCount ? gPkbnMoveInfo[move].laneCount : 1;
++        for (k = 0; k < LEARN_COPIES; k++)
++            PkbnPack_Add(move, gPkbnMoveInfo[move].lanes[k % n], 1);
++    }
+ }
+ 
+ // "Learning a move gives one copy": every move any owned Pokémon knows, once per move. Scanning instead of
+-- 
+2.43.0
+

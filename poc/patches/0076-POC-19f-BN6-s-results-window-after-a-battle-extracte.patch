@@ -1,0 +1,750 @@
+From 89bbae9e95eb8b171e739301237b70b796900fa9 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 7 Oct 2026 02:34:24 +0300
+Subject: [PATCH 76/80] POC-19f: BN6's results window after a battle -
+ extracted at build time; time, Busting Level, tile-by-tile reward reveal; the
+ battle stays behind the post-battle text
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ .gitignore             |   1 +
+ include/pkbn/busting.h |   4 +
+ include/pkbn/results.h |  15 ++
+ src/pkbn/busting.c     |  13 ++
+ src/pkbn/grid_battle.c |   3 +
+ src/pkbn/post_battle.c | 113 ++++++++++----
+ src/pkbn/results.c     | 341 +++++++++++++++++++++++++++++++++++++++++
+ 7 files changed, 464 insertions(+), 26 deletions(-)
+ create mode 100644 include/pkbn/results.h
+ create mode 100644 src/pkbn/results.c
+
+diff --git a/.gitignore b/.gitignore
+index 17d8f32..910b06e 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -46,6 +46,7 @@ prefabs.json
+ /pokeemerald-*.png
+ /pokeemerald_modern-*.png
+ include/pkbn/bn6_gfx_data.h
++include/pkbn/bn6_results_data.h
+ pkbn_replay.bin
+ pkbn_playlog.jsonl
+ pkbn_log.txt
+diff --git a/include/pkbn/busting.h b/include/pkbn/busting.h
+index e5e2094..a5ef766 100644
+--- a/include/pkbn/busting.h
++++ b/include/pkbn/busting.h
+@@ -30,6 +30,10 @@ void Busting_NoteFaint(void);
+ void Busting_NoteThrow(void);
+ void Busting_NoteDelete(void);
+ u8 Busting_Level(void);                              // 1..11 (11 = S); logs both clocks
++// POC-19: what the last Busting / Capture reward was, for BN6's results window (src/pkbn/results.c)
++enum { RW_NONE, RW_CHIP, RW_MONEY, RW_HP, RW_CANDY, RW_CHIPS };
++struct PkbnReward { u8 kind; u8 letter; u8 copies; u8 type; u16 move; u32 amount; };
++extern struct PkbnReward gPkbnReward;
+ void Busting_Reward(u8 level, char *msg, u32 size);  // grants it
+ void Busting_ScaleExp(u8 level);
+ u8 Capture_Grade(void);
+diff --git a/include/pkbn/results.h b/include/pkbn/results.h
+new file mode 100644
+index 0000000..47ae6e8
+--- /dev/null
++++ b/include/pkbn/results.h
+@@ -0,0 +1,15 @@
++#ifndef GUARD_PKBN_RESULTS_H
++#define GUARD_PKBN_RESULTS_H
++// POC-19: BN6's results window (src/pkbn/results.c). The reward comes from gPkbnReward (include/pkbn/busting.h).
++#include "global.h"
++
++enum { RESULTS_RESULT, RESULTS_WINNER, RESULTS_LOSER };   // BN6's three windows
++
++bool8 Results_Available(void);   // FALSE when the build has no BN6 data (include/pkbn/bn6_results_data.h)
++void Results_Begin(u8 window, u16 frames, u8 level, bool8 capture);
++bool8 Results_Frame(u16 newKeys, bool8 autopilot);   // TRUE when done
++bool8 Results_Active(void);
++void Results_Draw(u16 *fb);      // on the 264x176 canvas
++
++extern u16 gPkbnBattleSnapshot[];   // the last battle frame (src/pkbn/grid_battle.c), behind the post-battle screens
++#endif
+diff --git a/src/pkbn/busting.c b/src/pkbn/busting.c
+index 6a16553..7e503db 100644
+--- a/src/pkbn/busting.c
++++ b/src/pkbn/busting.c
+@@ -270,8 +270,11 @@ static void ChipName(char *dst, u32 size, u16 move, u8 letter)
+     snprintf(dst, size, "%s %c", nm, PkbnFolder_LetterChar(letter));
+ }
+ 
++struct PkbnReward gPkbnReward;
++
+ static void GiveChip(u16 move, u8 letter, char *msg, u32 size)
+ {
++    gPkbnReward.kind = RW_CHIP, gPkbnReward.move = move, gPkbnReward.letter = letter, gPkbnReward.copies = 1;
+     char nm[24];
+     struct PkbnNaviStats lead;
+     Navi_LeadStats(&lead);
+@@ -280,6 +283,7 @@ static void GiveChip(u16 move, u8 letter, char *msg, u32 size)
+     {
+         // POC-16d: BN6's Collect ("Get more chips frm enmy") on the lead Pokémon: one more copy
+         PkbnPack_Add(move, letter, 2);
++        gPkbnReward.copies = 2;
+         snprintf(msg, size, "GOT 2 CHIPS: %s!", nm);
+         return;
+     }
+@@ -330,6 +334,7 @@ void Busting_Reward(u8 level, char *msg, u32 size)
+     lvl = GetMonData(enemy, MON_DATA_LEVEL);
+     PickMoves(enemy, &m1, &m2);
+ 
++    memset(&gPkbnReward, 0, sizeof(gPkbnReward));
+     tier = sTierTable[level][Random() % 16];
+     entry = 2 * tier + (Random() & 1) + (lowHP ? 10 : 0);
+     kind = sRewardList[entry];
+@@ -348,6 +353,7 @@ void Busting_Reward(u8 level, char *msg, u32 size)
+         if (AmuletCoin())
+             money *= 2;
+         AddMoney(&gSaveBlock1Ptr->money, money);
++        gPkbnReward.kind = RW_MONEY, gPkbnReward.amount = money;
+         snprintf(msg, size, "GOT $%u!", (unsigned)money);
+         break;
+     }
+@@ -359,6 +365,7 @@ void Busting_Reward(u8 level, char *msg, u32 size)
+         u32 v = nhp;
+         if (hp)
+             SetMonData(mine, MON_DATA_HP, &v);
++        gPkbnReward.kind = RW_HP, gPkbnReward.amount = nhp - hp;
+         snprintf(msg, size, "RECOVERED %u HP!", (unsigned)(nhp - hp));
+         break;
+     }
+@@ -452,6 +459,7 @@ void Capture_Reward(u8 grade, char *msg, u32 size, bool8 canPick)
+     PickMoves(mon, &m1, &m2);
+     msg[0] = '\0';
+     memset(&gCapturePick, 0, sizeof(gCapturePick));
++    memset(&gPkbnReward, 0, sizeof(gPkbnReward));
+     if (ball == ITEM_MASTER_BALL && canPick)
+     {
+         for (i = 0; i < MAX_MON_MOVES; i++)
+@@ -463,6 +471,7 @@ void Capture_Reward(u8 grade, char *msg, u32 size, bool8 canPick)
+                 gCapturePick.copies[gCapturePick.count++] = 1;
+             }
+         }
++        gPkbnReward.kind = RW_CHIPS, gPkbnReward.move = gCapturePick.move[0];
+         snprintf(msg, size, "CHIPS OF EVERY MOVE!");
+     }
+     else if (ball == ITEM_ULTRA_BALL && canPick && tier >= 3 && m1 != MOVE_NONE)
+@@ -470,6 +479,7 @@ void Capture_Reward(u8 grade, char *msg, u32 size, bool8 canPick)
+         gCapturePick.move[0] = tier == 4 ? m2 : m1;
+         gCapturePick.copies[0] = 1;
+         gCapturePick.count = 1;
++        gPkbnReward.kind = RW_CHIPS, gPkbnReward.move = gCapturePick.move[0];
+         snprintf(msg, size, "A CHIP OF ITS MOVE!");
+     }
+     else if (ball == ITEM_MASTER_BALL)
+@@ -482,6 +492,7 @@ void Capture_Reward(u8 grade, char *msg, u32 size, bool8 canPick)
+             if (PkbnFolder_MoveIsChip(mv))
+                 PkbnPack_Add(mv, ChosenLane(mv), 1), n++;
+         }
++        gPkbnReward.kind = RW_CHIPS, gPkbnReward.move = GetMonData(mon, MON_DATA_MOVE1), gPkbnReward.copies = n;
+         snprintf(msg, size, n == 1 ? "MASTER BALL: GOT A CHIP OF ITS MOVE!" : "MASTER BALL: GOT %u CHIPS OF ITS MOVES!", n);
+     }
+     else if (tier >= 3 && m1 != MOVE_NONE)
+@@ -490,6 +501,7 @@ void Capture_Reward(u8 grade, char *msg, u32 size, bool8 canPick)
+         u8 lane = BallLane(ball, mv, &copies);
+         char nm[24];
+         PkbnPack_Add(mv, lane, copies);
++        gPkbnReward.kind = RW_CHIP, gPkbnReward.move = mv, gPkbnReward.letter = lane, gPkbnReward.copies = copies;
+         ChipName(nm, sizeof(nm), mv, lane);
+         if (copies > 1)
+             snprintf(msg, size, "GOT %u CHIPS: %s!", copies, nm);
+@@ -502,6 +514,7 @@ void Capture_Reward(u8 grade, char *msg, u32 size, bool8 canPick)
+         u8 type = gSpeciesInfo[GetMonData(mon, MON_DATA_SPECIES)].types[0];
+         char t[16];
+         PkbnCandy_Add(type, tier + 1);
++        gPkbnReward.kind = RW_CANDY, gPkbnReward.type = type, gPkbnReward.amount = tier + 1;
+         Pkbn_GameStringToAscii(t, gTypeNames[type], sizeof(t));
+         snprintf(msg, size, "GOT %u MORE %s CANDY!", tier + 1, t);
+     }
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index b3ab3cb..60c784f 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -520,9 +520,12 @@ static void LoadEnemy(struct Pokemon *mon)
+     }
+ }
+ 
++u16 gPkbnBattleSnapshot[PKBN_CANVAS_W * PKBN_CANVAS_H];   // POC-19: behind the post-battle screens
++
+ static void Overlay(u16 *fb)
+ {
+     Draw_Overlay(fb);
++    memcpy(gPkbnBattleSnapshot, fb, sizeof(gPkbnBattleSnapshot));
+ }
+ 
+ // Hand size: BN's 5, + Custom programs, - the custom bug (BN6 sub_802A40C: from turn N on, the draw count drops
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index d91ddd1..9e28735 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -40,6 +40,8 @@
+ #include "constants/trainers.h"
+ #include "pkbn/battle_stub.h"
+ #include "pkbn/render.h"
++#include "pkbn/results.h"
++#include "pkbn/gfx.h"
+ #include "pkbn/chip_pack.h"
+ #include "pkbn/move_table.h"
+ #include "pkbn/playlog.h"
+@@ -72,6 +74,7 @@ enum
+     PB_CODE_PICK,     // Ultra / Master Ball: the player picks the chip's code (POC-11)
+     PB_CLEAR_GRADE_NICK,
+     PB_LEADER,        // Leader chip and rematch record (POC-14)
++    PB_RESULTS,       // POC-19: BN6's results window
+ };
+ 
+ struct PostBattle
+@@ -106,7 +109,9 @@ static void StepCodePick(void);
+ 
+ // ---- text ----------------------------------------------------------------------------------------
+ 
+-static char sLeaderMsg[2][56];   // POC-14: Leader chip / record lines for PB_LEADER
++static char sLeaderMsg[2][56];
++static u8 sResultsStep;        // POC-19: PB_BUSTING or PB_CAPTURE, while the results window runs
++static bool8 sResultsShown;   // POC-14: Leader chip / record lines for PB_LEADER
+ 
+ // POC-16d: BN6's AutoHeal ("HP recv after battle"): after a win, each Pokémon running it gets back part of its max HP.
+ static void AutoHeal(void)
+@@ -132,6 +137,7 @@ static void AutoHeal(void)
+     }
+ }
+ 
++#define TEXT_W 236   // POC-19: the text box's inner width (canvas pixels)
+ static void Say(u8 next, const char *fmt, ...)
+ {
+     char buf[256];
+@@ -140,21 +146,31 @@ static void Say(u8 next, const char *fmt, ...)
+     va_start(ap, fmt);
+     vsnprintf(buf, sizeof(buf), fmt, ap);
+     va_end(ap);
+-    // word-wrap to 56 columns, 4 lines max
++    // word-wrap to the text box (POC-19: Emerald's font, by pixel width), 4 lines max
+     sPB.lineCount = 0;
+     len = strlen(buf);
+     while (start < len && sPB.lineCount < 4)
+     {
+-        u32 end = start + 56;
+-        if (end >= len)
+-            end = len;
+-        else
++        u32 end = len, b;
++        char tmp[96];
++        u32 n = len - start < sizeof(tmp) - 1 ? len - start : sizeof(tmp) - 1;
++        memcpy(tmp, buf + start, n);
++        tmp[n] = '\0';
++        if (Pkbn_EmTextWidth(tmp, PKBN_FONT_SMALL) > TEXT_W)
+         {
+-            u32 b = end;
+-            while (b > start && buf[b] != ' ')
+-                b--;
+-            if (b > start)
+-                end = b;
++            // the longest run of words that fits
++            for (b = start + 1; b <= len; b++)
++            {
++                u32 m = b - start < sizeof(tmp) - 1 ? b - start : sizeof(tmp) - 1;
++                memcpy(tmp, buf + start, m);
++                tmp[m] = '\0';
++                if (Pkbn_EmTextWidth(tmp, PKBN_FONT_SMALL) > TEXT_W)
++                    break;
++                if (b == len || buf[b] == ' ')
++                    end = b;
++            }
++            if (end == len)
++                end = b - 1 > start ? b - 1 : start + 1;
+         }
+         memcpy(sPB.lines[sPB.lineCount], buf + start, end - start);
+         sPB.lines[sPB.lineCount][end - start] = '\0';
+@@ -209,10 +225,21 @@ static void PlayerName(char *dst, u32 size)
+ #define COL_TEXT PKBN_RGB(31, 31, 31)
+ #define COL_HINT PKBN_RGB(31, 26, 4)
+ 
++// POC-19 (Khaled: "the black screen is really off-putting"): the last battle frame stays behind, dimmed; BN6's
++// results window slides over it (src/pkbn/results.c); the rest is Emerald's text box, white with a dark rim.
+ static void Overlay(u16 *fb)
+ {
+     s32 i;
+-    Pkbn_FillRect(fb, 0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, COL_BG);
++    const s32 W = PKBN_CANVAS_W, H = PKBN_CANVAS_H, bx = 6, bh = 48, by = H - bh - 4;
++    for (i = 0; i < W * H; i++)
++        fb[i] = ((gPkbnBattleSnapshot[i] & 0x7BDE) >> 1) | 0x8000;   // the battle, at half brightness
++    if (Results_Active())
++    {
++        Results_Draw(fb);
++        if (gPkbnPostBattleDump != NULL)
++            gPkbnPostBattleDump(fb);
++        return;
++    }
+     // party strip: whoever the current step is about
+     if (sPB.slot < PARTY_SIZE && GetMonData(&gPlayerParty[sPB.slot], MON_DATA_SPECIES) != SPECIES_NONE)
+     {
+@@ -227,40 +254,52 @@ static void Overlay(u16 *fb)
+         }
+         if (sPB.step >= PB_EXP_NEXT && sPB.step <= PB_SUMMARY_RETURN)
+         {
+-            Pkbn_BlitIcon(fb, sIcon, 104, 30, FALSE, 0);
++            Pkbn_FillRect(fb, W / 2 - 60, 40, 120, 52, PKBN_RGB(3, 5, 12));
++            Pkbn_FrameRect(fb, W / 2 - 60, 40, 120, 52, PKBN_RGB(20, 24, 31));
++            Pkbn_BlitIcon(fb, sIcon, W / 2 - 16, 42, FALSE, 0);
+             MonName(name, sizeof(name), sPB.slot);
+-            snprintf(line, sizeof(line), "%s  LV. %u", name, (unsigned)GetMonData(&gPlayerParty[sPB.slot], MON_DATA_LEVEL));
+-            Pkbn_DrawText(fb, (DISPLAY_WIDTH - Pkbn_TextWidth(line, 1)) / 2, 66, line, COL_TEXT, 1);
++            snprintf(line, sizeof(line), "%s  Lv%u", name, (unsigned)GetMonData(&gPlayerParty[sPB.slot], MON_DATA_LEVEL));
++            Pkbn_DrawEmText(fb, (W - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL)) / 2, 74, line, PKBN_FONT_SMALL, COL_TEXT,
++                            PKBN_RGB(4, 4, 8));
+         }
+     }
+     if (sPB.bigGrade[0] && (sPB.step == PB_TEXT || sPB.step == PB_BUSTING || sPB.step == PB_CAPTURE))
+     {
+-        // BN6-style result: the level in big type above the text box
++        // (only when the build has no BN6 results window)
+         const char *label = sPB.bigCapture ? "CAPTURE GRADE" : "BUSTING LEVEL";
+-        Pkbn_DrawText(fb, (DISPLAY_WIDTH - Pkbn_TextWidth(label, 1)) / 2, 18, label, COL_HINT, 1);
+-        Pkbn_DrawText(fb, (DISPLAY_WIDTH - Pkbn_TextWidth(sPB.bigGrade, 4)) / 2, 34, sPB.bigGrade,
++        Pkbn_DrawText(fb, (W - Pkbn_TextWidth(label, 1)) / 2, 30, label, COL_HINT, 1);
++        Pkbn_DrawText(fb, (W - Pkbn_TextWidth(sPB.bigGrade, 4)) / 2, 46, sPB.bigGrade,
+                       sPB.bigGrade[0] == 'S' ? COL_HINT : COL_TEXT, 4);
+     }
+-    Pkbn_FillRect(fb, 4, 100, 232, 52, COL_BOX);
+-    Pkbn_FrameRect(fb, 4, 100, 232, 52, COL_EDGE);
++    // Emerald's message box
++    Pkbn_FillRect(fb, bx, by, W - 2 * bx, bh, PKBN_RGB(29, 30, 31));
++    Pkbn_FrameRect(fb, bx, by, W - 2 * bx, bh, PKBN_RGB(6, 9, 16));
++    Pkbn_FrameRect(fb, bx + 1, by + 1, W - 2 * bx - 2, bh - 2, PKBN_RGB(16, 20, 28));
+     for (i = 0; i < sPB.lineCount; i++)
+-        Pkbn_DrawText(fb, 10, 106 + i * 9, sPB.lines[i], COL_TEXT, 1);
++        Pkbn_DrawEmText(fb, bx + 7, by + 2 + i * 11, sPB.lines[i], PKBN_FONT_SMALL, PKBN_RGB(6, 7, 9), PKBN_RGB(22, 23, 25));
+     if (sPB.prompt)
+-        Pkbn_DrawText(fb, 150, 143, "A:YES  B:NO", COL_HINT, 1);
++        Pkbn_DrawEmText(fb, W - bx - 8 - Pkbn_EmTextWidth("A:YES  B:NO", PKBN_FONT_SMALL), by + bh - 13, "A:YES  B:NO",
++                        PKBN_FONT_SMALL, PKBN_RGB(31, 8, 6), PKBN_RGB(22, 23, 25));
+     else if ((gMain.vblankCounter1 / 16) & 1)
+-        Pkbn_DrawText(fb, 226, 143, ">", COL_HINT, 1);
++    {
++        s32 ax = W - bx - 12, ay = by + bh - 9;
++        Pkbn_FillRect(fb, ax, ay, 5, 1, PKBN_RGB(31, 8, 6));
++        Pkbn_FillRect(fb, ax + 1, ay + 1, 3, 1, PKBN_RGB(31, 8, 6));
++        Pkbn_FillRect(fb, ax + 2, ay + 2, 1, 1, PKBN_RGB(31, 8, 6));
++    }
+     if (gPkbnPostBattleDump != NULL)
+         gPkbnPostBattleDump(fb);
+ }
+ 
+ static void ShowOverlay(void)
+ {
+-    gPkbnFrameOverlay = Overlay;
++    gPkbnFrameOverlay = NULL;
++    gPkbnCanvasOverlay = Overlay;   // POC-19: the whole canvas (the battle frame behind)
+ }
+ 
+ static void HideOverlay(void)
+ {
+-    gPkbnFrameOverlay = NULL;
++    gPkbnCanvasOverlay = NULL;
+ }
+ 
+ // ---- steps -----------------------------------------------------------------------------------------
+@@ -661,7 +700,7 @@ static void CB2_PkbnPostBattle(void)
+     bool8 yes;
+     char name[16], move[16];
+ 
+-    if (gPkbnFrameOverlay != Overlay && sPB.step != PB_EXIT)
++    if (gPkbnCanvasOverlay != Overlay && sPB.step != PB_EXIT)
+         ShowOverlay(); // back from the naming / summary / evolution screens
+ 
+     switch (sPB.step)
+@@ -712,6 +751,16 @@ static void CB2_PkbnPostBattle(void)
+             else
+                 snprintf(lv, sizeof(lv), "%u", level);
+             sPart = 1;
++            if (Results_Available())
++            {
++                // POC-19: BN6's results window (WINNER! for Ω and NET CHALLENGE wins, as BN6 does for NetBattles)
++                sResultsStep = sPB.step;
++                Results_Begin(capture ? RESULTS_RESULT : (sB.omega || sB.challenge) ? RESULTS_WINNER : RESULTS_RESULT,
++                              sB.bust.fightFrames ? sB.bust.fightFrames : sB.frame, level, capture);
++                printf("[pkbn-post] results window: level %s, reward %s\n", lv, sMsg);
++                sPB.step = PB_RESULTS;
++                break;
++            }
+             snprintf(sPB.bigGrade, sizeof(sPB.bigGrade), "%s", lv);
+             sPB.bigCapture = capture;
+             Say(sPB.step, capture ? "CAPTURE GRADE %s!" : "BUSTING LEVEL %s!", lv);
+@@ -728,8 +777,20 @@ static void CB2_PkbnPostBattle(void)
+             sPB.pickIdx = 0;
+             sPB.pickLane = 0;
+         }
++        if (sResultsShown)
++        {
++            sResultsShown = FALSE;
++            sPB.step = sPB.next;   // the window showed the reward: no line for it
++        }
+         break;
+     }
++    case PB_RESULTS:
++        if (Results_Frame(gMain.newKeys, sPB.autopilot))
++        {
++            sResultsShown = TRUE;
++            sPB.step = sResultsStep;   // back to the Busting / Capture step's second part
++        }
++        break;
+     case PB_CODE_PICK:
+         StepCodePick();
+         break;
+diff --git a/src/pkbn/results.c b/src/pkbn/results.c
+new file mode 100644
+index 0000000..8193ced
+--- /dev/null
++++ b/src/pkbn/results.c
+@@ -0,0 +1,341 @@
++// POC-19: BN6's results window after a battle (Khaled: "Post battle reward screen needs to look nicer... Maybe we can use
++// the one from BN"). include/pkbn/results.h.
++//
++// Grounding (bn6f, read by a research pass and checked by rendering the data):
++//  - sub_802BD60 / sub_802C34E (asm/asm03_0.s:11516, 12353): a 24x18-tile window in BG 3, chosen from three tilesets and
++//    tilemaps (RESULT, WINNER!, LOSER), slid in from tile column -30 by 2 tiles a frame (sub_802BE36, :11618).
++//  - The delete time as BCD m:ss:hh at window columns 14, 16-17, 19-20 (sub_802C4E8, :12558), the Busting Level next to
++//    its label (sub_802C6EC, :12830; 11 shows as S).
++//  - The reward picture (7x6 tiles at window tile 14,10) is revealed one tile a frame in a shuffled order
++//    (ShuffleByteList_PrimaryRNG, sub_802BF6C / sub_802C044, :11809-11960), a tick every 4th tile, then a 30-frame
++//    pause and the reward's name (sub_802C0A4, :11976); A moves on (sub_802BF0C).
++//  - Zenny and HP rewards use BN6's own pictures; a chip uses its chip picture (ours: Vfx_DrawChipArt).
++// Sounds: BN6's results sounds (0x7E, 0x95, 0x96) aren't in this game's sound table; Emerald's are used (ours).
++#include "pkbn/grid_vfx.h"   // first: it pulls in <stdlib.h> before global.h's macros
++#include "global.h"
++#include "main.h"
++#include "sound.h"
++#include "random.h"
++#include "data.h"
++#include "constants/songs.h"
++#include "pkbn/grid_internal.h"
++#include "pkbn/busting.h"
++#include "pkbn/results.h"
++#include "pkbn/render.h"
++#include "pkbn/gfx.h"
++#include "pkbn/folder.h"
++void PkbnDraw_ChipIcon(u16 *fb, s32 x, s32 y, u16 move, bool8 dim);   // grid_draw.c
++#include <stdio.h>
++#include <string.h>
++
++#ifdef PORTABLE
++
++#if __has_include("pkbn/bn6_results_data.h")
++#include "pkbn/bn6_results_data.h"
++#define HAVE_BN6_RESULTS 1
++#else
++#define HAVE_BN6_RESULTS 0
++#endif
++
++#define WIN_W 24
++#define WIN_H 18
++#define PIC_X 14   // the reward picture, in window tiles
++#define PIC_Y 10
++#define PIC_W 7
++#define PIC_H 6
++
++enum { RS_SLIDE, RS_REVEAL, RS_PAUSE, RS_NAME, RS_DONE };
++
++static struct
++{
++    bool8 on;
++    u8 window, level, state, revealed, order[PIC_W * PIC_H];
++    bool8 capture;
++    u16 frames, t, x;
++    u16 map[WIN_W * WIN_H];
++    u16 pic[PIC_W * 8 * PIC_H * 8];   // the reward picture, drawn once
++    bool8 picOpaque[PIC_W * 8 * PIC_H * 8];
++    char name[32];
++} sR;
++
++bool8 Results_Available(void)
++{
++    return HAVE_BN6_RESULTS;
++}
++
++#if HAVE_BN6_RESULTS
++static const u8 *const sTiles[3] = { sBn6ResTiles0, sBn6ResTiles1, sBn6ResTiles2 };
++static const u16 *const sMaps[3] = { sBn6ResMap0, sBn6ResMap1, sBn6ResMap2 };
++static const u32 sTileBytes[3] = { sizeof(sBn6ResTiles0), sizeof(sBn6ResTiles1), sizeof(sBn6ResTiles2) };
++
++// One 8x8 tile of the window's VRAM: tiles from 1 (the window), from 0xA0 (digits); 0 = empty.
++static const u8 *TileData(u16 ti)
++{
++    if (ti >= 1 && (u32)(ti - 1) * 32 + 32 <= sTileBytes[sR.window])
++        return &sTiles[sR.window][(ti - 1) * 32];
++    if (ti >= 0xA0 && (u32)(ti - 0xA0) * 32 + 32 <= sizeof(sBn6ResDigits))
++        return &sBn6ResDigits[(ti - 0xA0) * 32];
++    return NULL;
++}
++
++static void PutDigit(s32 col, s32 row, u8 glyph)   // glyph 0-9, or 11 = "S"
++{
++    if (col < 0 || col >= WIN_W || row < 0 || row + 1 >= WIN_H)
++        return;
++    sR.map[row * WIN_W + col] = 0x9000 | (0xA0 + 2 * glyph);
++    sR.map[(row + 1) * WIN_W + col] = 0x9000 | (0xA0 + 2 * glyph + 1);
++}
++#endif
++
++static void DrawPicture(void)
++{
++    // the reward picture into sR.pic (56x48), drawn once on a scratch canvas
++    static u16 sScratch[PKBN_CANVAS_W * PKBN_CANVAS_H];
++    s32 x, y;
++    const u16 bg = PKBN_RGB(5, 5, 5);
++    for (x = 0; x < PKBN_CANVAS_W * PKBN_CANVAS_H; x++)
++        sScratch[x] = bg;
++    memset(sR.picOpaque, 0, sizeof(sR.picOpaque));
++    Pkbn_SetTarget(PKBN_CANVAS_W, PKBN_CANVAS_H);
++    switch (gPkbnReward.kind)
++    {
++    case RW_CHIP:
++    case RW_CHIPS:
++        if (gPkbnReward.move)
++        {
++            // the chip's icon (the one in the Custom screen's slots), twice the size, on its type's colour fading down
++            u16 tc = Vfx_TypeColor(gBattleMoves[gPkbnReward.move].type);
++            s32 i, j;
++            PkbnDraw_ChipIcon(sScratch, 200, 0, gPkbnReward.move, FALSE);
++            for (y = 0; y < PIC_H * 8; y++)
++                Pkbn_FillRect(sScratch, 100, 60 + y, PIC_W * 8, 1,
++                              Gfx_Blend(Gfx_Blend(tc, PKBN_RGB(0, 0, 0), 8), PKBN_RGB(0, 0, 0), (u8)(y * 10 / (PIC_H * 8))));
++            for (j = 0; j < 16 * 2; j++)
++                for (i = 0; i < 22 * 2; i++)
++                    sScratch[(60 + 8 + j) * PKBN_CANVAS_W + 100 + 6 + i] = sScratch[(j / 2) * PKBN_CANVAS_W + 200 + i / 2];
++        }
++        break;
++#if HAVE_BN6_RESULTS
++    case RW_MONEY:
++    case RW_HP:
++    {
++        // BN6's zenny / HP pictures: 7x6 tiles, 4bpp, row-major
++        const u8 *t = gPkbnReward.kind == RW_MONEY ? sBn6ResZenny : sBn6ResHP;
++        const u16 *p = gPkbnReward.kind == RW_MONEY ? sBn6ResZennyPal : sBn6ResHPPal;
++        s32 k;
++        for (k = 0; k < PIC_W * PIC_H; k++)
++            for (y = 0; y < 8; y++)
++                for (x = 0; x < 8; x++)
++                {
++                    u8 b = t[k * 32 + y * 4 + x / 2], c = (x & 1) ? b >> 4 : b & 15;
++                    sScratch[((k / PIC_W) * 8 + y) * PKBN_CANVAS_W + (k % PIC_W) * 8 + x] = c ? (p[c] | 0x8000) : bg;
++                }
++        break;
++    }
++#endif
++    case RW_CANDY:
++        Gfx_Ellipse(sScratch, 28, 24, 14, 12, Vfx_TypeColor(gPkbnReward.type), 16);
++        Gfx_Ellipse(sScratch, 24, 20, 4, 3, PKBN_RGB(31, 31, 31), 10);
++        break;
++    }
++    {
++        // chip art was drawn around (128, 90); the zenny / HP / candy pictures at (0, 0)
++        bool8 art = gPkbnReward.kind == RW_CHIP || gPkbnReward.kind == RW_CHIPS;
++        s32 sx = art ? 100 : 0, sy = art ? 60 : 0;
++        for (y = 0; y < PIC_H * 8; y++)
++            for (x = 0; x < PIC_W * 8; x++)
++                sR.pic[y * PIC_W * 8 + x] = sScratch[(sy + y) * PKBN_CANVAS_W + sx + x];
++    }
++}
++
++void Results_Begin(u8 window, u16 frames, u8 level, bool8 capture)
++{
++    s32 i, cs, sec, min;
++    memset(&sR, 0, sizeof(sR));
++    if (!HAVE_BN6_RESULTS)
++        return;
++    sR.on = TRUE;
++    sR.window = window > 2 ? 0 : window;
++    sR.level = level;
++    sR.capture = capture;
++    sR.frames = frames;
++    sR.state = RS_SLIDE;
++#if HAVE_BN6_RESULTS
++    memcpy(sR.map, sMaps[sR.window], sizeof(sR.map));
++    if (sR.window != RESULTS_LOSER)
++    {
++        // the delete time (capped at 9:59:99 like BN6's 0x95999), then the level
++        cs = frames * 100 / 60;
++        if (cs > 9 * 6000 + 5999)
++            cs = 9 * 6000 + 5999;
++        min = cs / 6000, sec = (cs / 100) % 60, cs %= 100;
++        PutDigit(14, 4, min);
++        PutDigit(16, 4, sec / 10), PutDigit(17, 4, sec % 10);
++        PutDigit(19, 4, cs / 10), PutDigit(20, 4, cs % 10);
++        if (level >= 11)
++            PutDigit(20, 6, 11);
++        else if (level >= 10)
++            PutDigit(19, 6, level / 10), PutDigit(20, 6, level % 10);
++        else
++            PutDigit(20, 6, level);
++    }
++#endif
++    for (i = 0; i < PIC_W * PIC_H; i++)
++        sR.order[i] = i;
++    for (i = PIC_W * PIC_H - 1; i > 0; i--)   // BN6: ShuffleByteList_PrimaryRNG
++    {
++        u8 j = Random() % (i + 1), tmp = sR.order[i];
++        sR.order[i] = sR.order[j], sR.order[j] = tmp;
++    }
++    DrawPicture();
++    switch (gPkbnReward.kind)
++    {
++    case RW_CHIP:
++    {
++        char nm[MOVE_NAME_LENGTH + 1];
++        Pkbn_GameStringToAscii(nm, gMoveNames[gPkbnReward.move], sizeof(nm));
++        snprintf(sR.name, sizeof(sR.name), "%s %c%s", nm, PkbnFolder_LetterChar(gPkbnReward.letter),
++                 gPkbnReward.copies > 1 ? " x2" : "");
++        if (gPkbnReward.copies > 2)
++            snprintf(sR.name, sizeof(sR.name), "%s %c x%u", nm, PkbnFolder_LetterChar(gPkbnReward.letter), gPkbnReward.copies);
++        break;
++    }
++    case RW_CHIPS:
++    {
++        char nm[MOVE_NAME_LENGTH + 1];
++        Pkbn_GameStringToAscii(nm, gMoveNames[gPkbnReward.move], sizeof(nm));
++        snprintf(sR.name, sizeof(sR.name), "%s...", nm);
++        break;
++    }
++    case RW_MONEY:
++        snprintf(sR.name, sizeof(sR.name), "$%u", (unsigned)gPkbnReward.amount);   // (BN6 zenny picture, Emerald money)
++        break;
++    case RW_HP:
++        snprintf(sR.name, sizeof(sR.name), "HP +%u", (unsigned)gPkbnReward.amount);
++        break;
++    case RW_CANDY:
++    {
++        char t[16];
++        Pkbn_GameStringToAscii(t, gTypeNames[gPkbnReward.type], sizeof(t));
++        snprintf(sR.name, sizeof(sR.name), "%s CANDY x%u", t, (unsigned)gPkbnReward.amount);
++        break;
++    }
++    }
++    sR.x = 0;
++}
++
++bool8 Results_Active(void)
++{
++    return sR.on;
++}
++
++// TRUE once the player has seen it all (A after the name). autopilot: no A needed.
++bool8 Results_Frame(u16 newKeys, bool8 autopilot)
++{
++    if (!sR.on)
++        return TRUE;
++    sR.t++;
++    switch (sR.state)
++    {
++    case RS_SLIDE:
++        // BN6: from column -30, 2 tiles a frame (asm/asm03_0.s:11618)
++        if (sR.t >= 16)
++        {
++            sR.state = gPkbnReward.kind == RW_NONE ? RS_NAME : RS_REVEAL;
++            sR.t = 0;
++            PlaySE(SE_PIN);
++        }
++        break;
++    case RS_REVEAL:
++        sR.revealed = sR.t > PIC_W * PIC_H ? PIC_W * PIC_H : sR.t;
++        if ((sR.t & 3) == 0 && sR.revealed < PIC_W * PIC_H)
++            PlaySE(SE_BALL_TRAY_BALL);   // a tick every 4th tile (BN6 plays 0x7E)
++        if (sR.revealed >= PIC_W * PIC_H)
++            sR.state = RS_PAUSE, sR.t = 0;
++        if (newKeys & A_BUTTON)
++            sR.revealed = PIC_W * PIC_H, sR.state = RS_PAUSE, sR.t = 29;   // A hurries it
++        break;
++    case RS_PAUSE:
++        if (sR.t >= 30)   // BN6: 30 frames, then the name
++        {
++            sR.state = RS_NAME, sR.t = 0;
++            PlaySE(gPkbnReward.kind == RW_CHIP || gPkbnReward.kind == RW_CHIPS ? SE_RG_POKE_JUMP_SUCCESS : SE_SHOP);
++        }
++        break;
++    case RS_NAME:
++        if ((newKeys & A_BUTTON) || (autopilot && sR.t > 20))
++        {
++            sR.state = RS_DONE;
++            PlaySE(SE_SELECT);
++        }
++        break;
++    case RS_DONE:
++        sR.on = FALSE;
++        return TRUE;
++    }
++    return FALSE;
++}
++
++void Results_Draw(u16 *fb)
++{
++#if HAVE_BN6_RESULTS
++    s32 ox, oy = (PKBN_CANVAS_H - WIN_H * 8) / 2, tx, ty, x, y, target = (PKBN_CANVAS_W - WIN_W * 8) / 2;
++    if (!sR.on)
++        return;
++    ox = sR.state == RS_SLIDE ? -WIN_W * 8 + (target + WIN_W * 8) * (sR.t + 1) / 16 : target;
++    if (ox > target)
++        ox = target;
++    for (ty = 0; ty < WIN_H; ty++)
++        for (tx = 0; tx < WIN_W; tx++)
++        {
++            u16 e = sR.map[ty * WIN_W + tx];
++            const u8 *t = TileData(e & 0x3FF);
++            u8 pal = (e >> 12) - 9;
++            if (t == NULL || pal > 2)
++                continue;
++            for (y = 0; y < 8; y++)
++                for (x = 0; x < 8; x++)
++                {
++                    s32 sx = (e & 0x400) ? 7 - x : x, sy = (e & 0x800) ? 7 - y : y;
++                    u8 b = t[sy * 4 + sx / 2], c = (sx & 1) ? b >> 4 : b & 15;
++                    s32 X = ox + tx * 8 + x, Y = oy + ty * 8 + y;
++                    if (c && X >= 0 && X < PKBN_CANVAS_W && Y >= 0 && Y < PKBN_CANVAS_H)
++                        fb[Y * PKBN_CANVAS_W + X] = sBn6ResPal[pal * 16 + c] | 0x8000;
++                }
++        }
++    if (sR.capture)
++    {
++        // our label over "Busting LV." (BN6 has no capture grade)
++        Pkbn_FillRect(fb, ox + 3 * 8, oy + 6 * 8, 11 * 8, 14, PKBN_RGB(11, 14, 21));   // (the band's blue)
++        Pkbn_DrawEmText(fb, ox + 3 * 8 + 2, oy + 6 * 8 - 1, "Capture GR.", PKBN_FONT_NORMAL, PKBN_RGB(31, 31, 31),
++                        PKBN_RGB(4, 6, 12));
++    }
++    if (sR.state >= RS_REVEAL)
++    {
++        s32 k;
++        for (k = 0; k < (sR.state == RS_REVEAL ? sR.revealed : PIC_W * PIC_H); k++)
++        {
++            u8 cell = sR.order[k];
++            s32 cx = (cell % PIC_W) * 8, cy = (cell / PIC_W) * 8;
++            for (y = 0; y < 8; y++)
++                for (x = 0; x < 8; x++)
++                    fb[(oy + PIC_Y * 8 + cy + y) * PKBN_CANVAS_W + ox + PIC_X * 8 + cx + x] = sR.pic[(cy + y) * PIC_W * 8 + cx + x];
++        }
++    }
++    if (sR.state >= RS_NAME && sR.name[0])
++    {
++        Pkbn_DrawEmText(fb, ox + 2 * 8 + 3, oy + 12 * 8 + 1, sR.name, PKBN_FONT_NORMAL, PKBN_RGB(31, 31, 31), PKBN_RGB(6, 6, 9));
++        if ((sR.t / 16) & 1)
++        {
++            s32 ax = ox + WIN_W * 8 - 14, ay = oy + WIN_H * 8 - 14;
++            Pkbn_FillRect(fb, ax, ay, 5, 1, PKBN_RGB(31, 8, 6));
++            Pkbn_FillRect(fb, ax + 1, ay + 1, 3, 1, PKBN_RGB(31, 8, 6));
++            Pkbn_FillRect(fb, ax + 2, ay + 2, 1, 1, PKBN_RGB(31, 8, 6));
++        }
++    }
++#else
++    (void)fb;
++#endif
++}
++
++#endif // PORTABLE
+-- 
+2.43.0
+

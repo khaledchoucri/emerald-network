@@ -1,0 +1,459 @@
+From 5b965eb983a665faf669a202bc3f1cee4446604d Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 7 Oct 2026 13:07:23 +0300
+Subject: [PATCH 79/80] POC-19j: Beast Out - beating or catching a legendary
+ boss opens it; SELECT on the Custom screen: 3 turns of chips x1.3, rush to a
+ panel the chip reaches from, double-rate buster; tired after, Beast Over if
+ pushed
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/chip_pack.h     |   2 +
+ include/pkbn/grid_battle.h   |   2 +
+ include/pkbn/grid_internal.h |   8 ++-
+ include/pkbn/tutorial.h      |   3 +-
+ src/pkbn/bot.c               |  14 +++++
+ src/pkbn/grid_battle.c       | 105 ++++++++++++++++++++++++++++++++++-
+ src/pkbn/grid_draw.c         |  24 ++++++++
+ src/pkbn/grid_moves.c        |   6 ++
+ src/pkbn/pkbn_save.c         |  14 ++++-
+ src/pkbn/selftest.c          |   6 ++
+ src/pkbn/tutorial.c          |   8 +++
+ 11 files changed, 187 insertions(+), 5 deletions(-)
+
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index 72fac4a..8791079 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -41,6 +41,8 @@ u8 PkbnFolderEdit_Get(u16 *moves, u8 *letters);            // the equipped folde
+ u8 PkbnFolder_Equipped(void);
+ bool8 PkbnFolder_Regular(u8 folder, u16 *move, u8 *letter);   // POC-19: BN6's Regular Chip
+ void PkbnFolder_SetRegular(u8 folder, u16 move, u8 letter);
++bool8 PkbnBeast_Unlocked(void);   // POC-19j
++void PkbnBeast_Note(u8 boss);
+ u8 PkbnFolder_RegularMB(void);                                 // the biggest chip that can be Regular                               // 0-2
+ // POC-14 (src/pkbn/pkbn_save.c)
+ bool8 PkbnLibrary_Has(u16 move);
+diff --git a/include/pkbn/grid_battle.h b/include/pkbn/grid_battle.h
+index 74c7736..a73dfb3 100644
+--- a/include/pkbn/grid_battle.h
++++ b/include/pkbn/grid_battle.h
+@@ -37,5 +37,7 @@ extern void (*gPkbnPostBattleDump)(u16 *fb); // self-tests: frame dumps of the p
+ // POC-19i: Cross (self-tests)
+ bool8 PkbnGrid_CrossAvailable(void);
+ bool8 PkbnGrid_CrossOpen(void);
++bool8 PkbnGrid_BeastAvailable(void);
++bool8 PkbnGrid_BeastArmed(void);
+ 
+ #endif // GUARD_PKBN_GRID_BATTLE_H
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 5a8dbfb..d0faddf 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -53,7 +53,7 @@
+ #define CHIP_READY_FRAMES    30   // TUNE (POC-18): after Custom closes, nothing fires for this long
+ #define ENEMY_TELEGRAPH      36   // TUNE: warning before an enemy's direct attack lands
+ #define GRENADE_RANGE        3    // BN6 MiniBomb "Throws a MiniBomb 3sq ahead"
+-#define GRENADE_FLIGHT       30   // TUNE
++#define GRENADE_FLIGHT       40   // TUNE (POC-19g: 30 -> 40, a plus-shaped blast on you needs two steps to leave)
+ #define LOCKON_FRAMES        40   // TUNE
+ #define TIMESTOP_FRAMES      48   // TUNE
+ #define RUN_HOLD_FRAMES      30   // TUNE (POC-18): hold SELECT this long to run
+@@ -245,6 +245,10 @@ struct GridBattle
+     bool8 crossUsed;           // POC-19i: once per battle
+     u8 crossCursor, crossCount;
+     u8 crossOpts[6];
++    u8 beastTurns;             // POC-19j: Beast Out - Customs left (0 = not out)
++    bool8 beastArmed;          // SELECT on the Custom screen: out when it closes
++    bool8 beastTired;          // a Beast Out ran its course this battle
++    bool8 beastOver;           // this one was pushed while tired: BEAST OVER when it ends
+     bool8 firstBattle;         // POC-18: Birch's rescue (BATTLE_TYPE_FIRST_BATTLE), on the grid as the first lesson
+     u8 chipReadyT;             // POC-18: frames until chips and the buster work after Custom (CHIP_READY_FRAMES)
+     bool8 omega;               // POC-16d: an Ω Leader rematch (tier-6 AI, levels +5)
+@@ -448,5 +452,7 @@ bool8 PkbnGrid_CrossUnlocked(void);
+ bool8 PkbnGrid_CrossAvailable(void);
+ u8 PkbnGrid_CrossTypeOf(u8 slot);
+ void PkbnGrid_EndCross(bool8 broken);
++// POC-19j: Beast Out (grid_battle.c)
++bool8 PkbnGrid_BeastAvailable(void);
+ 
+ #endif // GUARD_PKBN_GRID_INTERNAL_H
+diff --git a/include/pkbn/tutorial.h b/include/pkbn/tutorial.h
+index 87b453c..0436a87 100644
+--- a/include/pkbn/tutorial.h
++++ b/include/pkbn/tutorial.h
+@@ -15,10 +15,11 @@
+ #define TUT_FOLDER    (1 << 6)   // POC-19: first time in FOLDER
+ #define TUT_NAVI_OPEN (1 << 7)
+ #define TUT_CROSS     (1 << 9)   // POC-19i: first Custom where Cross can be used
++#define TUT_BEAST     (1 << 10)  // POC-19j: first Custom where Beast Out can be used
+ #define TUT_FOLDER2   (1 << 8)   // POC-19: second time in FOLDER (SELECT and START)   // a save from before POC-18: NAVICUST stays open without the Stone Badge
+ 
+ // What a line points at (drawn by grid_draw.c)
+-enum { TT_NONE, TT_HAND, TT_INFO, TT_FOE_HP, TT_OK, TT_PLAYER, TT_GAUGE, TT_HEAD, TT_BALL, TT_SW, TT_FOE, TT_CROSS };
++enum { TT_NONE, TT_HAND, TT_INFO, TT_FOE_HP, TT_OK, TT_PLAYER, TT_GAUGE, TT_HEAD, TT_BALL, TT_SW, TT_FOE, TT_CROSS, TT_BEAST };
+ 
+ // Events the battle reports
+ enum { TEV_CUSTOM_OPEN, TEV_CUSTOM_OK, TEV_STEP, TEV_BUSTER, TEV_CHIP_USED };
+diff --git a/src/pkbn/bot.c b/src/pkbn/bot.c
+index 60f858a..09576b6 100644
+--- a/src/pkbn/bot.c
++++ b/src/pkbn/bot.c
+@@ -232,12 +232,26 @@ void PkbnBot_Fight(u16 *held, u16 *pressed)
+     {
+         static const s8 sDir[4][2] = { {0, -1}, {0, 1}, {-1, 0}, {1, 0} };
+         s32 d;
++        s32 d2;
+         for (d = 0; d < 4; d++)
+             if (Safe(p->x + sDir[d][0], p->y + sDir[d][1]))
+             {
+                 *held = sDir[d][1] < 0 ? DPAD_UP : sDir[d][1] > 0 ? DPAD_DOWN : sDir[d][0] < 0 ? DPAD_LEFT : DPAD_RIGHT;
+                 return;
+             }
++        // POC-19g: no safe neighbour (a blast centred on us) - head for one two steps away
++        for (d = 0; d < 4; d++)
++        {
++            s8 nx = p->x + sDir[d][0], ny = p->y + sDir[d][1];
++            if (!Field_CanStand(SIDE_PLAYER, nx, ny))
++                continue;
++            for (d2 = 0; d2 < 4; d2++)
++                if (Safe(nx + sDir[d2][0], ny + sDir[d2][1]) && (nx + sDir[d2][0] != p->x || ny + sDir[d2][1] != p->y))
++                {
++                    *held = sDir[d][1] < 0 ? DPAD_UP : sDir[d][1] > 0 ? DPAD_DOWN : sDir[d][0] < 0 ? DPAD_LEFT : DPAD_RIGHT;
++                    return;
++                }
++        }
+     }
+     if (sB.queueCount > 0)
+     {
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 89afe83..8db2d59 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -740,8 +740,10 @@ static void RefillHand(void)
+ }
+ 
+ static void OpenCustomInner(void);
++static void BeastTurn(void);
+ static void OpenCustom(void)
+ {
++    BeastTurn();   // POC-19j
+     OpenCustomInner();
+     Tut_Event(TEV_CUSTOM_OPEN);   // POC-18
+ }
+@@ -1293,6 +1295,8 @@ static void EndBattle(u8 outcome, const char *text)
+     if (sB.challenge && outcome == B_OUTCOME_LOST)
+         outcome = B_OUTCOME_RAN;   // a NET CHALLENGE is a simulation: losing it costs nothing (no whiteout)
+     sB.outcome = outcome;
++    if (sB.boss && !sB.challenge && (outcome == B_OUTCOME_WON || outcome == B_OUTCOME_CAUGHT))
++        PkbnBeast_Note(sB.boss - 1);   // POC-19j: a legendary boss beaten or caught opens Beast Out
+     strncpy(sB.banner, text, sizeof(sB.banner) - 1);
+     sB.state = ST_END;
+     sB.timer = 90;
+@@ -1529,6 +1533,91 @@ u8 PkbnGrid_CursorNext(void)
+     return sB.cursor;
+ }
+ 
++// ---- POC-19j: Beast Out (Khaled's pick: BN6's Beast Out, the legendary bosses' reward) ------------------------------
++// BN6: the Cybeast button on the Custom screen; SetBeastOutCounterTo3 (asm/asm00_2.s:11743) - it lasts 3 turns,
++// one off per Custom; while out, elementless non-dimming chips +30, chips home in on the target, tapping B
++// rapid-fires the buster; when the counter ends MegaMan is tired, and going out again while tired ends in Beast Over
++// (bn6f data/textscript/TextScriptDadCybeastTut.s).
++// Ours (TUNE): opens once a legendary boss is beaten or caught. SELECT on the Custom screen arms it, OK lets it out:
++// 3 Customs of chips x1.3 (every chip: we have no elementless chips), a chip that can't reach the target jumps you to
++// a panel where it does, buster at twice the rate. Out again while tired = BEAST OVER when it ends: 1/4 max HP lost
++// and a second's stun.
++bool8 PkbnGrid_BeastAvailable(void)
++{
++    return PkbnBeast_Unlocked() && !sB.firstBattle && sB.beastTurns == 0;
++}
++
++bool8 PkbnGrid_BeastArmed(void)
++{
++    return sB.beastArmed;
++}
++
++static void BeastOut(void)
++{
++    struct Fighter *p = &sB.f[SIDE_PLAYER];
++    sB.beastArmed = FALSE;
++    sB.beastTurns = 3;
++    sB.beastOver = sB.beastTired;
++    p->hurtFlash = 30;
++    Flash("BEAST OUT!", 60);
++    PlaySE(SE_M_DRAGON_RAGE);
++    PKBN_LOG("BEAST OUT: %s (%s)", p->name, sB.beastOver ? "tired - beast over next" : "3 turns");
++}
++
++// Each Custom the counter goes down; at 0 the Pokémon is tired (or goes Beast Over).
++static void BeastTurn(void)
++{
++    struct Fighter *p = &sB.f[SIDE_PLAYER];
++    if (sB.beastTurns == 0 || --sB.beastTurns)
++        return;
++    if (sB.beastOver)
++    {
++        u16 loss = p->bm.maxHP / 4;
++        p->bm.hp = p->bm.hp > loss ? p->bm.hp - loss : 1;
++        p->stun = 60;
++        p->hurtFlash = 20;
++        Flash("BEAST OVER!", 60);
++        PlaySE(SE_M_SELF_DESTRUCT);
++        PKBN_LOG("BEAST OVER: %s loses %u HP", p->name, loss);
++        sB.beastOver = FALSE;
++    }
++    else
++        PKBN_LOG("beast out ended: %s is tired", p->name);
++    sB.beastTired = TRUE;
++}
++
++// While out: a chip that can't reach the target from here jumps you to the nearest panel it reaches it from.
++static void BeastRush(void)
++{
++    struct Fighter *p = &sB.f[SIDE_PLAYER];
++    const struct Fighter *t = &sB.f[SIDE_ENEMY];
++    const struct FolderChip *ch;
++    u8 q = sB.queue[0], kind;
++    s32 r, c, best = 99, bx = -1, by = -1;
++    if (!sB.beastTurns || !sB.queueCount || q == FOLDER_QUEUE_WILD || q >= QUEUE_PA_BASE)
++        return;
++    ch = &sB.folder.chips[q];
++    if (ch->owner != CHIP_SHARED && ch->owner != sB.active)
++        return;
++    kind = Moves_KindOf(ch->move);
++    if (Moves_IsPositionFree(kind) || Moves_WouldHit(kind, ch->move, p->x, p->y, t->x, t->y))
++        return;
++    for (r = 0; r < GRID_ROWS; r++)
++        for (c = 0; c < PLAYER_COLS; c++)
++            if (Field_CanStand(SIDE_PLAYER, c, r) && Moves_WouldHit(kind, ch->move, c, r, t->x, t->y))
++            {
++                s32 d = abs(c - p->x) + abs(r - p->y);
++                if (d < best)
++                    best = d, bx = c, by = r;
++            }
++    if (bx < 0)
++        return;
++    p->x = bx;
++    p->y = by;
++    PlaySE(SE_M_DOUBLE_TEAM);
++    PKBN_LOG("beast rush to (%d,%d)", (int)bx, (int)by);
++}
++
+ // ---- POC-19i: Cross (Khaled's pick: BN6's Cross, adapted) ----------------------------------------------------------
+ // BN6: on the Custom screen Up opens the Cross window (CrossSelect); "Activating once lets you stay linked during a
+ // battle"; a hit of the element the Cross is weak to does double damage and ends it (bn6f
+@@ -1641,6 +1730,12 @@ static void UpdateCustom(void)
+         UpdateCrossWindow(keys);
+         return;
+     }
++    if ((keys & SELECT_BUTTON) && (sB.beastArmed || PkbnGrid_BeastAvailable()))
++    {
++        sB.beastArmed = !sB.beastArmed;   // POC-19j: out when the Custom screen closes
++        PlaySE(sB.beastArmed ? SE_PIN : SE_SELECT);
++        return;
++    }
+     if ((keys & DPAD_UP) && PkbnGrid_CrossAvailable())
+     {
+         s8 row;
+@@ -1766,6 +1861,8 @@ static void UpdateCustom(void)
+         // POC-18 (Khaled: no firing the instant Custom closes): CHIP_READY_FRAMES before anything fires, for the
+         // foes too
+         sB.chipReadyT = CHIP_READY_FRAMES;
++        if (sB.beastArmed)
++            BeastOut();   // POC-19j
+         Tut_Event(TEV_CUSTOM_OK);
+         {
+             u8 k;
+@@ -2130,6 +2227,7 @@ static void UpdatePlayer(void)
+     if ((keys & A_BUTTON) && sB.queueCount > 0)
+     {
+         TargetForPlayer();
++        BeastRush();   // POC-19j
+         UseNextChip();
+         Tut_Event(TEV_CHIP_USED);
+     }
+@@ -2139,6 +2237,8 @@ static void UpdatePlayer(void)
+         Moves_ApplyBuster(SIDE_PLAYER);
+         // Speed+ programs: 3 frames quicker per level (BN6 buster speed 1-5; TUNE)
+         sB.busterCd = BUSTER_COOLDOWN - 3 * ((p->navi.busterSpeed ? p->navi.busterSpeed : 1) - 1);
++        if (sB.beastTurns)
++            sB.busterCd /= 2;   // POC-19j: Beast Out rapid fire
+         Tut_Event(TEV_BUSTER);
+     }
+ }
+@@ -2169,13 +2269,14 @@ static bool8 PickEnemyMove(u8 *outSlot)
+             continue;
+         if (kind == GK_STATS)
+         {
+-            // TUNE: stop stacking stages past +/-2
++            // TUNE: stop stacking stages past +/-2 (POC-19g: always - a real-time foe acts ~3x per Custom, and Juan's
++            // Whiscash took its Sp. Def to +6 before the player's second Custom)
+             s32 st;
+             bool8 maxed = FALSE;
+             for (st = STAT_ATK; st < NUM_BATTLE_STATS; st++)
+                 if (e->bm.statStages[st] >= DEFAULT_STAT_STAGE + 2 || p->bm.statStages[st] <= DEFAULT_STAT_STAGE - 2)
+                     maxed = TRUE;
+-            if (maxed && (Random() & 1))
++            if (maxed)
+                 continue;
+         }
+         if (kind == GK_WEATHER && sB.weatherTurns)
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 93b89ed..cd8e30c 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -869,6 +869,12 @@ static void DrawFighter(u16 *fb, u8 side)
+     {
+         flags |= GFX_TINT; color = COL_STATUS; amt = 8;
+     }
++    else if (side == SIDE_PLAYER && sB.beastTurns)
++    {
++        // POC-19j: out - a hot red flicker
++        flags |= GFX_TINT; color = (sTick & 4) ? RGB(31, 6, 2) : RGB(31, 20, 4); amt = (u8)(5 + ((sTick / 3) & 1));
++        dx += (sTick & 8) ? ((sTick & 1) ? 1 : 0) : 0;
++    }
+     else if (f->crossType)
+     {
+         // POC-19i: crossed - the partner's type glows through (a slow pulse)
+@@ -1039,6 +1045,14 @@ static void DrawPlayerHud(u16 *fb)
+         struct PkbnImage icon = Gfx_TypeIcon(f->crossType - 1);   // POC-19i: the crossed type
+         Gfx_Draw(fb, &icon, x + (tag ? Pkbn_EmTextWidth(tag, PKBN_FONT_SMALL) + 8 : 3), 2, 0, 0, 0);
+     }
++    if (sB.beastTurns)
++    {
++        // POC-19j: the Beast Out counter, BN6's 3-2-1, by the HP box
++        char n[4];
++        Draw_Box(fb, 2, 26, 22, 12, RGB(20, 3, 2), (sTick & 8) ? RGB(31, 24, 8) : RGB(31, 8, 4), 13);
++        snprintf(n, sizeof(n), "%u", sB.beastTurns);
++        TextBig(fb, 9, 23, n, COL_WHITE);
++    }
+     DrawPartyBalls(fb, 54, 13);
+     DrawStages(fb, 54 + sB.partyCount * 8 + 2, 9, f);
+ }
+@@ -1692,6 +1706,15 @@ static void DrawCustomScreen(u16 *fb)
+     {
+         DrawChipArt(fb, t);
+         DrawChipInfo(fb);
++        if (sB.beastArmed || PkbnGrid_BeastAvailable())
++        {
++            // POC-19j: SELECT arms Beast Out - a tab on the art box's top-left edge, red and shaking when armed
++            s32 jx = sB.beastArmed ? ((t & 2) ? 1 : -1) : 0;
++            s32 bw = Pkbn_EmTextWidth(sB.beastArmed ? "BEAST!" : "SEL:BEAST", PKBN_FONT_SMALL) + 7;
++            Draw_Box(fb, ART_X + 2 + jx, ART_Y - 1, bw, 11, sB.beastArmed ? RGB(26, 4, 2) : RGB(10, 3, 2),
++                     sB.beastArmed ? RGB(31, 24, 8) : RGB(24, 8, 4), 16);
++            Text(fb, ART_X + 5 + jx, ART_Y - 4, sB.beastArmed ? "BEAST!" : "SEL:BEAST", sB.beastArmed ? COL_GAUGE_FULL : COL_WHITE);
++        }
+         if (PkbnGrid_CrossAvailable() && sB.cursor < HAND_SIZE && sB.cursor < sB.handCount)
+         {
+             // POC-19i: Up from the top row opens the Cross window - a tab on the art box's top edge
+@@ -2266,6 +2289,7 @@ static void TutTargetRect(u8 target, s32 *x, s32 *y, s32 *w, s32 *h)
+     case TT_HAND:  *x = 4; *y = SLOTS_Y - 2; *w = HAND_SIZE * SLOT_W + 2; *h = SLOT_H + 4; break;
+     case TT_INFO:  *x = 2; *y = 12; *w = CUS_W - 4; *h = 88; break;
+     case TT_OK:    *x = 4 + (extra + 1 + ballW) * SLOT_W; *y = ROW2_Y - 2; *w = SLOT_W + 2; *h = SLOT_H + 4; break;
++    case TT_BEAST: *x = ART_X; *y = ART_Y - 3; *w = Pkbn_EmTextWidth("SEL:BEAST", PKBN_FONT_SMALL) + 11; *h = 14; break;
+     case TT_CROSS: *x = ART_X + ART_W - 42; *y = ART_Y - 3; *w = 42; *h = 14; break;
+     case TT_SW:    *x = 4 + extra * SLOT_W; *y = ROW2_Y - 2; *w = SLOT_W + 2; *h = SLOT_H + 4; break;
+     case TT_BALL:  *x = 4 + (extra + 1) * SLOT_W; *y = ROW2_Y - 2; *w = SLOT_W * ballW + 2; *h = SLOT_H + 4; break;
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index ca355d3..69d710c 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -701,6 +701,10 @@ static s32 CalcHitDamage(struct Attack *a, u8 defSide, u16 *eff, bool8 *crit)
+     }
+ 
+     dmg = CalculateBaseDamage(&atk, &def, a->move, 0, power, type, atkSide, defSide);
++    if (getenv("PKBN_DEBUG_DMG"))
++        printf("[dmg] move %u pow %u type %u L%u atk %u/%u def %u/%u base %d abil %u/%u item %u/%u wx %x side %x/%x st %d/%d\n", a->move, power, type, atk.level,
++               atk.attack, atk.spAttack, def.defense, def.spDefense, (int)dmg, atk.ability, def.ability, atk.item, def.item,
++               gBattleWeather, gSideStatuses[0], gSideStatuses[1], atk.statStages[STAT_SPATK], def.statStages[STAT_SPDEF]);
+     dmg = dmg * gCritMultiplier * gBattleScripting.dmgMultiplier;
+     if ((a->info.flags & 0x40) && type == TYPE_ELECTRIC) // Charge captured at launch (bit 6)
+         dmg *= 2;
+@@ -764,6 +768,8 @@ static s32 CalcHitDamage(struct Attack *a, u8 defSide, u16 *eff, bool8 *crit)
+     // TUNE); a super-effective hit on the crossed type x2 and the Cross ends (BN6: "double damage" and unlinked).
+     if (a->side == SIDE_PLAYER && sB.f[SIDE_PLAYER].crossType == type + 1 && !a->pa)
+         dmg = dmg * 15 / 10;
++    if (a->side == SIDE_PLAYER && sB.beastTurns && !a->pa)
++        dmg = dmg * 13 / 10;   // POC-19j: Beast Out (BN6 +30 attack on elementless chips; TUNE)
+     if (defSide == SIDE_PLAYER && sB.f[SIDE_PLAYER].crossType && dmg > 0)
+     {
+         struct BattlePokemon ct = def;
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index b2900de..7302346 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -82,7 +82,7 @@ struct PkbnSaveFile
+     // ---- v8 (POC-19) ----
+     u16 regMove[PKBN_FOLDERS];                // BN6's Regular Chip per folder (MOVE_NONE = none)
+     u8 regLetter[PKBN_FOLDERS];
+-    u8 pad8;
++    u8 beastBosses;                           // POC-19j: legendary bosses beaten or caught (bit per boss) - Beast Out
+ };
+ 
+ #define V7_SIZE offsetof(struct PkbnSaveFile, regMove)
+@@ -631,6 +631,18 @@ void PkbnFolder_SetRegular(u8 folder, u16 move, u8 letter)
+     sSave.regLetter[folder] = letter;
+ }
+ 
++// POC-19j: Beast Out opens once a legendary boss is beaten or caught (src/pkbn/grid_battle.c)
++bool8 PkbnBeast_Unlocked(void)
++{
++    return sSave.beastBosses != 0 || getenv("PKBN_TEST_BEAST") != NULL;
++}
++
++void PkbnBeast_Note(u8 boss)
++{
++    if (boss < 8)
++        sSave.beastBosses |= 1 << boss;
++}
++
+ // POC-18: lessons (src/pkbn/tutorial.c)
+ bool8 PkbnTutorial_Seen(u16 bits)
+ {
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index 12fa9ee..4e52b13 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -167,6 +167,12 @@ static void Autopilot(void)
+             if (edge) sPicksDone = FALSE;
+             break;
+         }
++        // POC-19j: PKBN_TEST_BEAST=1 - SELECT arms Beast Out on every Custom it can (a second one goes Beast Over)
++        if (getenv("PKBN_TEST_BEAST") != NULL && !PkbnGrid_BeastArmed() && PkbnGrid_BeastAvailable())
++        {
++            pressed = SELECT_BUTTON;
++            break;
++        }
+         // POC-19i: PKBN_TEST_CROSS=1 - Up opens the Cross window on the first Custom, A takes the first partner
+         if (getenv("PKBN_TEST_CROSS") != NULL && !SmartBot() && (PkbnGrid_CrossOpen() || PkbnGrid_CrossAvailable()))
+         {
+diff --git a/src/pkbn/tutorial.c b/src/pkbn/tutorial.c
+index 1d031ef..4126ec4 100644
+--- a/src/pkbn/tutorial.c
++++ b/src/pkbn/tutorial.c
+@@ -72,6 +72,12 @@ static const struct TutLine sCross[] = {
+     { "You get its type and its chips. A hit that beats that type breaks it!", TT_CROSS, W_A },
+ };
+ 
++// POC-19j: Beast Out (BN6 TextScriptDadCybeastTut.s)
++static const struct TutLine sBeast[] = {
++    { "That legendary's power is yours now. SELECT lets it out!", TT_BEAST, W_A },
++    { "3 turns of fury - then it's tired. Push it again and it goes BEAST OVER!", TT_BEAST, W_A },
++};
++
+ static const struct TutLine sCounter[] = {   // BN6 TextScriptBattleTutFullSynchro: Counter
+     { "Now! It's about to strike. Hit it while it's busy!", TT_FOE, W_A },
+     { "That's a COUNTER: it's stunned, and your next chip hits twice as hard.", TT_FOE, W_A },
+@@ -277,6 +283,8 @@ void Tut_Event(u8 ev)
+             Start(sCatch, ARRAY_COUNT(sCatch), TUT_CATCH);
+         else if (!PkbnTutorial_Seen(TUT_SWITCH) && CanSwitch())
+             Start(sSwitch, ARRAY_COUNT(sSwitch), TUT_SWITCH);
++        else if (!PkbnTutorial_Seen(TUT_BEAST) && PkbnGrid_BeastAvailable())
++            Start(sBeast, ARRAY_COUNT(sBeast), TUT_BEAST);
+         else if (!PkbnTutorial_Seen(TUT_CROSS) && PkbnGrid_CrossAvailable())
+             Start(sCross, ARRAY_COUNT(sCross), TUT_CROSS);
+         return;
+-- 
+2.43.0
+

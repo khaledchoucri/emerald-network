@@ -67,6 +67,9 @@ bt leader_chip "285:40:57/341/55/33,288:3:45" "LEADER CHIP V" PKBN_BOT=smart PKB
 OWPARTY="285:40:57/89/58/182|309:8:45/55" run net_challenge 2:2:10:2 \
     "W200,U,W20,A,Y,A,Y,W30,D,W20,D,W20,A,W60,Y,A,W90,W1600,P,A,W60,A,W60,A,W60,A,W60,A,W100,P,W10,Q" \
     "net challenge 0 cleared" PKBN_OW_AUTOBATTLE=1 PKBN_BOT=smart PKBN_TEST_CHALLENGE_KEYS="A"
+# POC-19: the CHIP TRADER on the PC - 3 chips in (3 GROWL rows marked), 1 random chip out (BN6's roll)
+run chip_trader 2:2:10:2 "W200,U,W20,A,Y,A,Y,W30,D,W20,D,W20,D,W20,A,W90,P,W300,P,W10,Q" "chip trader (3): move" \
+    PKBN_TEST_FOLDER_KEYS="........,A,.,D,.,A,.,D,.,A,....,S,......"
 # POC-14: a legendary fought as a BN boss (Kyogre's tide phase), and a NET CHALLENGE as a self-test (DEEP CURRENT)
 bt boss_kyogre "279:70:348/337/89/98|338:70:85/242/98/44,404:45" "boss phase: KYOGRE CALLS THE TIDE" PKBN_BOT=smart PKBN_TEST_LEGENDARY=1
 bt challenge_deep_current "285:70:57/89/58/182|279:70:348/337/89/98,74:5" "net challenge 7: DEEP CURRENT" PKBN_BOT=smart PKBN_TEST_CHALLENGE=7
@@ -95,7 +98,7 @@ bt shield_program "285:30:57/89/58/182,288:3:45" "B+back program 1" PKBN_TEST_NC
 bt omega_kyogre "257:90:299/24/7/89|282:90:94/85/247/104,74:5" "KYOGRE, tier 5, 1 at once, 0 s, rules 3" PKBN_BOT=smart PKBN_TEST_CHALLENGE=21
 # POC-17d: the place shapes the field - Fiery Path is lava; Route 120's grass burns away under Combusken's Ember
 run field_lava 24:14:10:10 "W200,G288:20,W60,P,W200,P,W400,P,W10,Q" "place field: map 180e" PKBN_OW_AUTOBATTLE=1
-run field_grass 0:35:10:10 "W200,G288:20,W60,P,W200,P,W400,P,W10,Q" "panel react: type 10" PKBN_OW_AUTOBATTLE=1
+run field_grass 0:35:10:10 "W200,G288:20,W60,P,W200,P,W1200,P,W10,Q" "panel react: type 10" PKBN_OW_AUTOBATTLE=1
 # POC-18: Birch's rescue on the grid teaches the basics (the bot follows the lesson); the first wild battle with balls
 # teaches the ball slot
 bt rescue_lesson "283:5:33/45" "lesson 1 done" PKBN_TEST_FIRST_BATTLE=1 PKBN_TEST_TUTORIAL=1

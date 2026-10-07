@@ -1,0 +1,650 @@
+From 64eab8bbe4f4c16daa4b37d0e5708a84b2153e7b Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 7 Oct 2026 12:53:37 +0300
+Subject: [PATCH 78/80] =?UTF-8?q?POC-19i:=20Cross=20-=20Up=20on=20the=20Cu?=
+ =?UTF-8?q?stom=20screen=20crosses=20with=20a=20benched=20Pok=C3=A9mon:=20?=
+ =?UTF-8?q?its=20type=20(x1.5,=20buster=20+1),=20its=20chips;=20a=20super-?=
+ =?UTF-8?q?effective=20hit=20on=20that=20type=20does=20x2=20and=20breaks?=
+ =?UTF-8?q?=20it.=20Test=20bot=20switches=20and=20crosses=20when=20its=20c?=
+ =?UTF-8?q?hips=20run=20out?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/bot.h           |   1 +
+ include/pkbn/folder.h        |  10 +++
+ include/pkbn/grid_battle.h   |   4 ++
+ include/pkbn/grid_internal.h |  12 ++++
+ include/pkbn/tutorial.h      |   3 +-
+ src/pkbn/bot.c               |  65 ++++++++++++++++++-
+ src/pkbn/folder.c            |  15 ++++-
+ src/pkbn/grid_battle.c       | 120 +++++++++++++++++++++++++++++++++++
+ src/pkbn/grid_draw.c         |  54 +++++++++++++++-
+ src/pkbn/grid_moves.c        |  19 +++++-
+ src/pkbn/pkbn_save.c         |   2 +
+ src/pkbn/selftest.c          |  17 +++++
+ src/pkbn/tutorial.c          |  19 ++++--
+ 13 files changed, 328 insertions(+), 13 deletions(-)
+
+diff --git a/include/pkbn/bot.h b/include/pkbn/bot.h
+index eb40a7b..8f2df43 100644
+--- a/include/pkbn/bot.h
++++ b/include/pkbn/bot.h
+@@ -4,4 +4,5 @@
+ #include "global.h"
+ void PkbnBot_Custom(u16 *pressed);
+ void PkbnBot_Fight(u16 *held, u16 *pressed);
++void PkbnBot_Pick(u16 *pressed);
+ #endif // GUARD_PKBN_BOT_H
+diff --git a/include/pkbn/folder.h b/include/pkbn/folder.h
+index 1fe9679..50b10e5 100644
+--- a/include/pkbn/folder.h
++++ b/include/pkbn/folder.h
+@@ -51,6 +51,16 @@ struct Folder
+ 
+ #define FOLDER_QUEUE_WILD 0xFF
+ 
++// POC-19i: Cross (src/pkbn/grid_battle.c) - Chip_CanUse lets the crossed Pokémon use its partner's chips.
++struct PkbnCrossLink
++{
++    u16 userSpecies;
++    u32 userPid;
++    u16 partnerSpecies;
++    u16 partnerMoves[4];
++};
++extern struct PkbnCrossLink gPkbnCross;
++
+ // party[i].species == 0 for empty slots.
+ void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party, u8 partyCount);
+ bool8 PkbnFolder_Draw(struct Folder *folder, u8 *outIdx);
+diff --git a/include/pkbn/grid_battle.h b/include/pkbn/grid_battle.h
+index cee75bc..74c7736 100644
+--- a/include/pkbn/grid_battle.h
++++ b/include/pkbn/grid_battle.h
+@@ -34,4 +34,8 @@ u8 PkbnGrid_CursorNext(void);
+ bool8 PkbnGrid_CustomOkShown(void);
+ 
+ extern void (*gPkbnPostBattleDump)(u16 *fb); // self-tests: frame dumps of the post-battle screen
++// POC-19i: Cross (self-tests)
++bool8 PkbnGrid_CrossAvailable(void);
++bool8 PkbnGrid_CrossOpen(void);
++
+ #endif // GUARD_PKBN_GRID_BATTLE_H
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index cdad1f1..5a8dbfb 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -143,6 +143,8 @@ struct Fighter
+     u32 lastHitFrame;
+     u16 lastPhysDamage;
+     u8 typeOverride;     // Conversion
++    u8 crossType;        // POC-19i: Cross - the partner's type + 1 (0 = no Cross)
++    u8 crossSlot;        // POC-19i: the party slot crossed with
+     s8 slideDx, slideDy; // sliding on ice
+     u16 icon[2][32 * 32];
+     struct PkbnMonPic pic;
+@@ -239,6 +241,10 @@ struct GridBattle
+     bool8 lowHp;               // POC-17c: the low-HP alarm is on
+     u8 runHold;                // POC-18: frames SELECT has been held (running needs RUN_HOLD_FRAMES)
+     bool8 regDealt;            // POC-19: the Regular Chip has been dealt (first hand only)
++    bool8 crossOpen;           // POC-19i: the Cross window is open on the Custom screen
++    bool8 crossUsed;           // POC-19i: once per battle
++    u8 crossCursor, crossCount;
++    u8 crossOpts[6];
+     bool8 firstBattle;         // POC-18: Birch's rescue (BATTLE_TYPE_FIRST_BATTLE), on the grid as the first lesson
+     u8 chipReadyT;             // POC-18: frames until chips and the buster work after Custom (CHIP_READY_FRAMES)
+     bool8 omega;               // POC-16d: an Ω Leader rematch (tier-6 AI, levels +5)
+@@ -437,4 +443,10 @@ void Draw_Overlay(u16 *fb);
+ // post_battle.c
+ void PkbnPostBattle_Start(void);
+ 
++// POC-19i: Cross (grid_battle.c)
++bool8 PkbnGrid_CrossUnlocked(void);
++bool8 PkbnGrid_CrossAvailable(void);
++u8 PkbnGrid_CrossTypeOf(u8 slot);
++void PkbnGrid_EndCross(bool8 broken);
++
+ #endif // GUARD_PKBN_GRID_INTERNAL_H
+diff --git a/include/pkbn/tutorial.h b/include/pkbn/tutorial.h
+index 3210eeb..87b453c 100644
+--- a/include/pkbn/tutorial.h
++++ b/include/pkbn/tutorial.h
+@@ -14,10 +14,11 @@
+ #define TUT_NAVICUST  (1 << 5)   // first time in NAVICUST
+ #define TUT_FOLDER    (1 << 6)   // POC-19: first time in FOLDER
+ #define TUT_NAVI_OPEN (1 << 7)
++#define TUT_CROSS     (1 << 9)   // POC-19i: first Custom where Cross can be used
+ #define TUT_FOLDER2   (1 << 8)   // POC-19: second time in FOLDER (SELECT and START)   // a save from before POC-18: NAVICUST stays open without the Stone Badge
+ 
+ // What a line points at (drawn by grid_draw.c)
+-enum { TT_NONE, TT_HAND, TT_INFO, TT_FOE_HP, TT_OK, TT_PLAYER, TT_GAUGE, TT_HEAD, TT_BALL, TT_SW, TT_FOE };
++enum { TT_NONE, TT_HAND, TT_INFO, TT_FOE_HP, TT_OK, TT_PLAYER, TT_GAUGE, TT_HEAD, TT_BALL, TT_SW, TT_FOE, TT_CROSS };
+ 
+ // Events the battle reports
+ enum { TEV_CUSTOM_OPEN, TEV_CUSTOM_OK, TEV_STEP, TEV_BUSTER, TEV_CHIP_USED };
+diff --git a/src/pkbn/bot.c b/src/pkbn/bot.c
+index a803823..60f858a 100644
+--- a/src/pkbn/bot.c
++++ b/src/pkbn/bot.c
+@@ -57,7 +57,7 @@ static s32 ChipScore(u8 handPos)
+         return (gBattleMoves[mv].effect == EFFECT_RESTORE_HP || gBattleMoves[mv].effect == EFFECT_REST)
+              ? (me->bm.hp * 2 < me->bm.maxHP ? 45 : 0) : 8;
+     case GK_BARRIER:
+-        return 12;
++        return me->barrier ? 0 : 12;   // POC-19g: not a second one on top
+     case GK_PANEL:
+     case GK_CALL:
+         return 10;
+@@ -83,10 +83,73 @@ static u8 PickedCount(void)
+     return n;
+ }
+ 
++// POC-19g: chips left (hand + draw pile) that party slot `who` can use. Copies are stamina (Khaled's note 8), so a
++// player whose Pokémon has used its chips switches to one that still has some - the bot did not, and busted for
++// half the fight (Norman: Swampert's last chip on turn 8 of 20).
++static u8 ChipsLeftFor(u8 who)
++{
++    const struct BattlePokemon *bm = who == sB.active ? &sB.f[SIDE_PLAYER].bm : &sB.party[who].bm;
++    s32 i, n = 0;
++    for (i = 0; i < sB.folder.pileCount; i++)
++    {
++        const struct FolderChip *c = &sB.folder.chips[sB.folder.pile[i]];
++        n += c->owner == CHIP_SHARED && Chip_CanUse(bm, c->move);
++    }
++    for (i = 0; i < sB.handCount; i++)
++    {
++        const struct FolderChip *c = &sB.folder.chips[sB.hand[i]];
++        n += sB.hand[i] != FOLDER_STRUGGLE && c->owner == CHIP_SHARED && Chip_CanUse(bm, c->move);
++    }
++    return n;
++}
++
++// The benched Pokémon with the most chips left (0xFF: none has any).
++static u8 BestBench(void)
++{
++    s32 i, best = 0xFF, bestN = 0;
++    for (i = 0; i < sB.partyCount; i++)
++        if (i != sB.active && PartyAlive(i))
++        {
++            s32 n = ChipsLeftFor(i);
++            if (n > bestN)
++                best = i, bestN = n;
++        }
++    return best;
++}
++
++void PkbnBot_Pick(u16 *pressed)
++{
++    u8 want = BestBench();
++    if (want != 0xFF && sB.pickPurpose != PICK_BATON && sB.pickOptions[sB.pickCursor] != want)
++        *pressed = DPAD_DOWN;
++    else
++        *pressed = A_BUTTON;
++}
++
+ void PkbnBot_Custom(u16 *pressed)
+ {
+     s32 i, best = -1, bestScore = 0;
+     Foe_Select(Foe_PlayerTarget());
++    // POC-19i: Cross with the benched Pokémon that has the most chips once ours run low (its chips become ours)
++    if (sB.crossOpen)
++    {
++        u8 want = BestBench();
++        *pressed = (want == 0xFF || sB.crossOpts[sB.crossCursor] == want) ? A_BUTTON : DPAD_RIGHT;
++        return;
++    }
++    if (PickedCount() == 0 && PkbnGrid_CrossAvailable() && ChipsLeftFor(sB.active) <= 3 && BestBench() != 0xFF)
++    {
++        s8 dummy = sB.cursor < HAND_SIZE && sB.cursor < sB.handCount;
++        *pressed = dummy ? DPAD_UP : PkbnGrid_CursorKeyToward(0);
++        return;
++    }
++    // switch when the Pokémon in has no chips left and a benched one does (SW, then OK)
++    if (PickedCount() == 0 && !sB.wildPicked && ChipsLeftFor(sB.active) == 0 && BestBench() != 0xFF
++     && PkbnGrid_HandSelectable(sB.handCount))
++    {
++        *pressed = sB.cursor == sB.handCount ? A_BUTTON : PkbnGrid_CursorKeyToward(sB.handCount);
++        return;
++    }
+     if (PickedCount() < BOT_MAX_PICKS)
+         for (i = 0; i < sB.handCount; i++)
+         {
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index 6ad43e7..26a7b11 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -128,6 +128,10 @@ bool8 Chip_SpeciesCanLearn(u16 species, u16 move)
+     return (gPkbnCanLearn[species][move / 8] >> (move % 8)) & 1;
+ }
+ 
++// POC-19i: Cross - the Pokémon in (species + personality) also uses the chips its Cross partner could use
++// (src/pkbn/grid_battle.c ApplyCross sets this; species 0 = no Cross).
++struct PkbnCrossLink gPkbnCross;
++
+ bool8 Chip_CanUse(const struct BattlePokemon *bm, u16 move)
+ {
+     s32 i;
+@@ -138,7 +142,16 @@ bool8 Chip_CanUse(const struct BattlePokemon *bm, u16 move)
+     for (i = 0; i < MAX_MON_MOVES; i++)
+         if (bm->moves[i] == move)
+             return TRUE;
+-    return Chip_SpeciesCanLearn(bm->species, move);
++    if (Chip_SpeciesCanLearn(bm->species, move))
++        return TRUE;
++    if (gPkbnCross.partnerSpecies && bm->species == gPkbnCross.userSpecies && bm->personality == gPkbnCross.userPid)
++    {
++        for (i = 0; i < MAX_MON_MOVES; i++)
++            if (gPkbnCross.partnerMoves[i] == move)
++                return TRUE;
++        return Chip_SpeciesCanLearn(gPkbnCross.partnerSpecies, move);
++    }
++    return FALSE;
+ }
+ 
+ // ---- Partner chips (POC-11) ------------------------------------------------------------------------------------
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 60c784f..89afe83 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -244,6 +244,7 @@ static void DoSwitch(u8 target, bool8 keepStages)
+         sB.f[SIDE_PLAYER].bm.statStages[i] = DEFAULT_STAT_STAGE;
+     if (sB.f[SIDE_PLAYER].bm.ability == ABILITY_NATURAL_CURE && sB.f[SIDE_PLAYER].bm.hp)
+         sB.f[SIDE_PLAYER].bm.status1 = 0;   // Natural Cure: cured on switching out (battle_script_commands.c:9616)
++    PkbnGrid_EndCross(FALSE);   // POC-19i: the Cross leaves with the Pokémon
+     SyncActiveToParty();
+     LoadActiveFromParty(target);
+     if (keepStages)
+@@ -930,6 +931,7 @@ static void Begin(void)
+     s32 lead = -1;
+ 
+     memset(&sB, 0, sizeof(sB));
++    memset(&gPkbnCross, 0, sizeof(gPkbnCross));   // POC-19i
+     Busting_Reset();
+     PlayLog_Reset();
+ 
+@@ -1527,11 +1529,129 @@ u8 PkbnGrid_CursorNext(void)
+     return sB.cursor;
+ }
+ 
++// ---- POC-19i: Cross (Khaled's pick: BN6's Cross, adapted) ----------------------------------------------------------
++// BN6: on the Custom screen Up opens the Cross window (CrossSelect); "Activating once lets you stay linked during a
++// battle"; a hit of the element the Cross is weak to does double damage and ends it (bn6f
++// data/textscript/TextScriptShukoCrossTut.s; CompText86D0614.s:527-958). Crosses add a matching-element chip bonus
++// (+50 attack for non-dimming chips of the Cross's element) and change the buster.
++// Ours (TUNE): you cross with a benched Pokémon - the one in takes its type for the battle: moves of that type x1.5,
++// the buster +1 level, it can use the partner's chips too (they share the folder: copies are stamina), and a
++// super-effective hit on that type does x2 and ends the Cross. Once per battle; it ends when the Pokémon leaves.
++// Unlocked with the Dynamo Badge (Wattson, the 3rd; TUNE).
++bool8 PkbnGrid_CrossUnlocked(void)
++{
++    return FlagGet(FLAG_BADGE03_GET) || getenv("PKBN_TEST_CROSS") != NULL;
++}
++
++bool8 PkbnGrid_CrossAvailable(void)
++{
++    s32 i;
++    if (!PkbnGrid_CrossUnlocked() || sB.crossUsed || sB.firstBattle || sB.f[SIDE_PLAYER].crossType)
++        return FALSE;
++    for (i = 0; i < sB.partyCount; i++)
++        if (i != sB.active && PartyAlive(i))
++            return TRUE;
++    return FALSE;
++}
++
++bool8 PkbnGrid_CrossOpen(void)
++{
++    return sB.crossOpen;
++}
++
++// The type a Cross with `slot` gives: the partner's first type the Pokémon in doesn't have (else its first).
++u8 PkbnGrid_CrossTypeOf(u8 slot)
++{
++    const struct BattlePokemon *me = &sB.f[SIDE_PLAYER].bm, *pt = &sB.party[slot].bm;
++    s32 k;
++    for (k = 0; k < 2; k++)
++        if (pt->types[k] != me->types[0] && pt->types[k] != me->types[1])
++            return pt->types[k];
++    return pt->types[0];
++}
++
++static void OpenCross(void)
++{
++    s32 i;
++    sB.crossCount = 0;
++    for (i = 0; i < sB.partyCount; i++)
++        if (i != sB.active && PartyAlive(i))
++            sB.crossOpts[sB.crossCount++] = i;
++    sB.crossCursor = 0;
++    sB.crossOpen = TRUE;
++    PlaySE(SE_WIN_OPEN);
++}
++
++static void ApplyCross(u8 slot)
++{
++    struct Fighter *p = &sB.f[SIDE_PLAYER];
++    p->crossType = PkbnGrid_CrossTypeOf(slot) + 1;
++    p->crossSlot = slot;
++    sB.crossUsed = TRUE;
++    gPkbnCross.userSpecies = p->bm.species;
++    gPkbnCross.userPid = p->bm.personality;
++    gPkbnCross.partnerSpecies = sB.party[slot].bm.species;
++    memcpy(gPkbnCross.partnerMoves, sB.party[slot].bm.moves, sizeof(gPkbnCross.partnerMoves));
++    p->hurtFlash = 24;
++    PlaySE(SE_M_DETECT);
++    PKBN_LOG("CROSS: %s takes %s's type %u", p->name, sB.party[slot].name, p->crossType - 1);
++}
++
++void PkbnGrid_EndCross(bool8 broken)
++{
++    struct Fighter *p = &sB.f[SIDE_PLAYER];
++    if (!p->crossType)
++        return;
++    p->crossType = 0;
++    memset(&gPkbnCross, 0, sizeof(gPkbnCross));
++    if (broken)
++    {
++        SetMsg("CROSS BROKE!", 50);
++        PlaySE(SE_M_BARRIER);
++        PKBN_LOG("CROSS broken: %s", p->name);
++    }
++}
++
++static void UpdateCrossWindow(u16 keys)
++{
++    if (keys & (DPAD_LEFT | DPAD_RIGHT))
++    {
++        sB.crossCursor = (sB.crossCursor + ((keys & DPAD_RIGHT) ? 1 : sB.crossCount - 1)) % sB.crossCount;
++        PlaySE(SE_SELECT);
++    }
++    else if (keys & A_BUTTON)
++    {
++        ApplyCross(sB.crossOpts[sB.crossCursor]);
++        sB.crossOpen = FALSE;
++    }
++    else if (keys & (B_BUTTON | DPAD_DOWN))
++    {
++        sB.crossOpen = FALSE;
++        PlaySE(SE_WIN_OPEN);
++    }
++}
++
+ static void UpdateCustom(void)
+ {
+     u16 keys = gMain.newKeys;
+     u8 itemRow = sB.handCount + 1;
+ 
++    if (sB.crossOpen)
++    {
++        UpdateCrossWindow(keys);
++        return;
++    }
++    if ((keys & DPAD_UP) && PkbnGrid_CrossAvailable())
++    {
++        s8 row;
++        s16 mid;
++        if (CustomCell(sB.cursor, &row, &mid) && row == 0)
++        {
++            OpenCross();
++            return;
++        }
++    }
++
+     if ((keys & L_BUTTON) && sB.cursor != itemRow)
+     {
+         // POC-18 (Khaled: run from the Custom menu): L escapes, as in BN6's Custom screen
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index ed28755..93b89ed 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -869,6 +869,12 @@ static void DrawFighter(u16 *fb, u8 side)
+     {
+         flags |= GFX_TINT; color = COL_STATUS; amt = 8;
+     }
++    else if (f->crossType)
++    {
++        // POC-19i: crossed - the partner's type glows through (a slow pulse)
++        u8 p = (u8)((sTick / 4) % 12);
++        flags |= GFX_TINT; color = Vfx_TypeColor(f->crossType - 1); amt = (u8)(2 + (p < 6 ? p : 11 - p) / 2);
++    }
+     else if (side == SIDE_ENEMY && sB.fullSynchro && (f->lockout || f->charging) && (sTick & 4))
+     {
+         flags |= GFX_TINT; color = COL_WHITE; amt = 10;   // BN6: in Full Synchro the enemy flashes when you can counter
+@@ -1028,6 +1034,11 @@ static void DrawPlayerHud(u16 *fb)
+         Draw_Box(fb, x + 2, 3, Pkbn_EmTextWidth(tag, PKBN_FONT_SMALL) + 4, 9, col, col, 16);
+         Text(fb, x + 4, 0, tag, COL_WHITE);
+     }
++    if (f->crossType)
++    {
++        struct PkbnImage icon = Gfx_TypeIcon(f->crossType - 1);   // POC-19i: the crossed type
++        Gfx_Draw(fb, &icon, x + (tag ? Pkbn_EmTextWidth(tag, PKBN_FONT_SMALL) + 8 : 3), 2, 0, 0, 0);
++    }
+     DrawPartyBalls(fb, 54, 13);
+     DrawStages(fb, 54 + sB.partyCount * 8 + 2, 9, f);
+ }
+@@ -1635,6 +1646,30 @@ static void DrawChosenColumn(u16 *fb, u32 t)
+     }
+ }
+ 
++// POC-19i: the Cross window over the art box - the Pokémon in + a benched one = the type it takes (no words).
++static void DrawCrossWindow(u16 *fb, u32 t)
++{
++    u8 slot = sB.crossOpts[sB.crossCursor], type = PkbnGrid_CrossTypeOf(slot);
++    const struct PartyMember *pm = &sB.party[slot];
++    struct PkbnImage icon = Gfx_TypeIcon(type);
++    s32 cx = ART_X + ART_W / 2, y = ART_Y + ART_H + 3;
++    DrawArtBackground(fb, Vfx_TypeColor(type), t);
++    Gfx_ClipRect(ART_X, ART_Y, ART_X + ART_W, ART_Y + ART_H);
++    Pkbn_BlitIcon(fb, sB.f[SIDE_PLAYER].icon[(t / 16) & 1], cx - 52, ART_Y + 8, FALSE, 0);
++    TextBig(fb, cx - 14, ART_Y + 14, "+", COL_WHITE);
++    Pkbn_BlitIcon(fb, pm->icon[(t / 8) & 1], cx + 2, ART_Y + 8, FALSE, 0);
++    if (sB.crossCount > 1)
++    {
++        s32 b = (t / 10) & 1;
++        Text(fb, cx - 4 - b, ART_Y + 36, "<", COL_WHITE);
++        Text(fb, cx + 36 + b, ART_Y + 36, ">", COL_WHITE);
++    }
++    Gfx_Draw(fb, &icon, cx + 2, ART_Y + 40, 0, 0, 0);
++    Gfx_ClipNone();
++    Gfx_Draw(fb, &icon, ART_X, y, 0, 0, 0);
++    TextBig(fb, ART_X + 35, y - 2, "CROSS", (t & 8) ? COL_GAUGE_FULL : COL_WHITE);
++}
++
+ static void DrawCustomScreen(u16 *fb)
+ {
+     char line[40];
+@@ -1651,8 +1686,20 @@ static void DrawCustomScreen(u16 *fb)
+     snprintf(line, sizeof(line), "FOLDER %u", sB.folder.pileCount);
+     Text(fb, CUS_W - 4 - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), 1, line, RGB(20, 24, 31));
+ 
+-    DrawChipArt(fb, t);
+-    DrawChipInfo(fb);
++    if (sB.crossOpen)
++        DrawCrossWindow(fb, t);
++    else
++    {
++        DrawChipArt(fb, t);
++        DrawChipInfo(fb);
++        if (PkbnGrid_CrossAvailable() && sB.cursor < HAND_SIZE && sB.cursor < sB.handCount)
++        {
++            // POC-19i: Up from the top row opens the Cross window - a tab on the art box's top edge
++            s32 bob = (t / 8) & 1;
++            Draw_Box(fb, ART_X + ART_W - 40, ART_Y - 1 - bob, 38, 11, RGB(16, 4, 20), RGB(28, 14, 31), 16);
++            Text(fb, ART_X + ART_W - 37, ART_Y - 4 - bob, "^CROSS", COL_WHITE);
++        }
++    }
+     if (sB.handCount == 0)
+         Text(fb, 8, SLOTS_Y + 6, "NO CHIPS", COL_DIM);
+     DrawSlots(fb, t);
+@@ -1661,7 +1708,7 @@ static void DrawCustomScreen(u16 *fb)
+         Draw_Box(fb, 10, SLOTS_Y + 6, 112, 14, RGB(16, 2, 2), COL_HP_LOW, 15);
+         TextCentered(fb, 66, SLOTS_Y + 5, "MUST RECHARGE!", COL_WHITE, FALSE);
+     }
+-    Text(fb, 4, CH - 11, "A:ADD  B:UNDO", COL_DIM);
++    Text(fb, 4, CH - 11, sB.crossOpen ? "A:OK  B:BACK" : "A:ADD  B:UNDO", COL_DIM);
+     DrawChosenColumn(fb, t);
+ }
+ 
+@@ -2219,6 +2266,7 @@ static void TutTargetRect(u8 target, s32 *x, s32 *y, s32 *w, s32 *h)
+     case TT_HAND:  *x = 4; *y = SLOTS_Y - 2; *w = HAND_SIZE * SLOT_W + 2; *h = SLOT_H + 4; break;
+     case TT_INFO:  *x = 2; *y = 12; *w = CUS_W - 4; *h = 88; break;
+     case TT_OK:    *x = 4 + (extra + 1 + ballW) * SLOT_W; *y = ROW2_Y - 2; *w = SLOT_W + 2; *h = SLOT_H + 4; break;
++    case TT_CROSS: *x = ART_X + ART_W - 42; *y = ART_Y - 3; *w = 42; *h = 14; break;
+     case TT_SW:    *x = 4 + extra * SLOT_W; *y = ROW2_Y - 2; *w = SLOT_W + 2; *h = SLOT_H + 4; break;
+     case TT_BALL:  *x = 4 + (extra + 1) * SLOT_W; *y = ROW2_Y - 2; *w = SLOT_W * ballW + 2; *h = SLOT_H + 4; break;
+     case TT_GAUGE: *x = 72; *y = 22; *w = 120; *h = 14; break;
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index dec5a57..ca355d3 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -760,6 +760,21 @@ static s32 CalcHitDamage(struct Attack *a, u8 defSide, u16 *eff, bool8 *crit)
+     // type programs (Charcoal & co.): +10% each, like Gen 3's type items (src/pokemon.c:3173)
+     if (AttackNavi(a) && AttackNavi(a)->typePct[type])
+         dmg = dmg * (100 + AttackNavi(a)->typePct[type]) / 100;
++    // POC-19i: Cross (src/pkbn/grid_battle.c) - the crossed type's moves x1.5 (BN6: +50 attack on matching chips;
++    // TUNE); a super-effective hit on the crossed type x2 and the Cross ends (BN6: "double damage" and unlinked).
++    if (a->side == SIDE_PLAYER && sB.f[SIDE_PLAYER].crossType == type + 1 && !a->pa)
++        dmg = dmg * 15 / 10;
++    if (defSide == SIDE_PLAYER && sB.f[SIDE_PLAYER].crossType && dmg > 0)
++    {
++        struct BattlePokemon ct = def;
++        s32 one = 10;
++        ct.types[0] = ct.types[1] = sB.f[SIDE_PLAYER].crossType - 1;
++        if (ApplyTypeChart(type, &ct, &one) > TYPE_MUL_NORMAL)
++        {
++            dmg *= 2;
++            PkbnGrid_EndCross(TRUE);
++        }
++    }
+     return dmg;
+ }
+ 
+@@ -1895,8 +1910,8 @@ void Moves_ApplyBuster(u8 side)
+     }
+     // Buster Attack (BN6 levels 1-5): damage x level. Charge (design): our buster fires while B is held, so instead of
+     // BN's hold-to-charge, every 8th / 6th / 5th / 4th shot at Charge 2 / 3 / 4 / 5 is a x10 charged shot.
+-    if (me->navi.busterAtk > 1)
+-        dmg *= me->navi.busterAtk;
++    if (me->navi.busterAtk > 1 || me->crossType)
++        dmg *= (me->navi.busterAtk ? me->navi.busterAtk : 1) + (me->crossType ? 1 : 0);   // POC-19i: Cross, +1 level
+     if (me->navi.busterCharge > 1)
+     {
+         static const u8 sEvery[6] = {0, 0, 8, 6, 5, 4};
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index 63b1455..b2900de 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -635,6 +635,8 @@ void PkbnFolder_SetRegular(u8 folder, u16 move, u8 letter)
+ bool8 PkbnTutorial_Seen(u16 bits)
+ {
+     u16 seen = sSave.tutorialSeen | (sSave.tutorialSeen2 << 8);
++    if (getenv("PKBN_TEST_SEEN") != NULL)
++        seen |= (u16)strtoul(getenv("PKBN_TEST_SEEN"), NULL, 16);   // self-tests: lessons already seen (hex mask)
+     return (seen & bits) == bits;
+ }
+ 
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index 2d70cc7..12fa9ee 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -167,6 +167,16 @@ static void Autopilot(void)
+             if (edge) sPicksDone = FALSE;
+             break;
+         }
++        // POC-19i: PKBN_TEST_CROSS=1 - Up opens the Cross window on the first Custom, A takes the first partner
++        if (getenv("PKBN_TEST_CROSS") != NULL && !SmartBot() && (PkbnGrid_CrossOpen() || PkbnGrid_CrossAvailable()))
++        {
++            static u8 sCrossLook;   // screenshots: the window stays up a moment, the cursor moves once
++            if (PkbnGrid_CrossOpen())
++                pressed = ++sCrossLook == 30 ? DPAD_RIGHT : sCrossLook == 60 ? DPAD_LEFT : sCrossLook >= 90 ? A_BUTTON : 0;
++            else
++                pressed = d.cursor < 5 ? DPAD_UP : PkbnGrid_CursorKeyToward(0);
++            break;
++        }
+         {
+             // POC-18: a lesson wants a particular slot
+             u8 want = Tut_WantedCursor();
+@@ -189,6 +199,13 @@ static void Autopilot(void)
+             pressed = START_BUTTON;
+         break;
+     case PKBN_GRID_PICK:
++        if (SmartBot())
++        {
++            PkbnBot_Pick(&pressed);
++            break;
++        }
++        pressed = A_BUTTON;
++        break;
+     case PKBN_GRID_OMEGA:   // POC-16d: the cursor starts on NORMAL (PKBN_TEST_OMEGA=1: on OMEGA)
+         pressed = A_BUTTON; // first option
+         break;
+diff --git a/src/pkbn/tutorial.c b/src/pkbn/tutorial.c
+index 10c63bb..1d031ef 100644
+--- a/src/pkbn/tutorial.c
++++ b/src/pkbn/tutorial.c
+@@ -66,6 +66,12 @@ static const struct TutLine sSwitch[] = {
+     { "Pick it like a chip. Nothing can follow it.", TT_SW, W_A },
+ };
+ 
++// POC-19i: Cross (BN6 TextScriptShukoCrossTut.s teaches it in a battle too)
++static const struct TutLine sCross[] = {
++    { "UP here CROSSES with a POKEMON on your bench.", TT_CROSS, W_A },
++    { "You get its type and its chips. A hit that beats that type breaks it!", TT_CROSS, W_A },
++};
++
+ static const struct TutLine sCounter[] = {   // BN6 TextScriptBattleTutFullSynchro: Counter
+     { "Now! It's about to strike. Hit it while it's busy!", TT_FOE, W_A },
+     { "That's a COUNTER: it's stunned, and your next chip hits twice as hard.", TT_FOE, W_A },
+@@ -75,7 +81,7 @@ static struct
+ {
+     const struct TutLine *lines;
+     u8 count, at;
+-    u8 bits;          // set as seen when the lesson ends
++    u16 bits;         // set as seen when the lesson ends
+     bool8 firstBattle;
+     bool8 basicsDone;
+     u8 pairLetter;    // the pair to pick in the rescue
+@@ -84,7 +90,8 @@ static struct
+     u16 nagT;
+     u8 waitT;         // a lesson starting in Custom waits for the window to slide in (grid_draw.c SLIDE_IN)
+     const struct TutLine *pending;
+-    u8 pendingCount, pendingBits;
++    u8 pendingCount;
++    u16 pendingBits;
+     u8 did;           // what the player has already done (a "do it" line is skipped if it's done)
+ } sT;
+ 
+@@ -97,8 +104,8 @@ bool8 Tut_Enabled(void)
+     return TRUE;
+ }
+ 
+-static void StartNow(const struct TutLine *lines, u8 count, u8 bits);
+-static void Start(const struct TutLine *lines, u8 count, u8 bits)
++static void StartNow(const struct TutLine *lines, u8 count, u16 bits);
++static void Start(const struct TutLine *lines, u8 count, u16 bits)
+ {
+     if (sB.state == ST_CUSTOM)
+     {
+@@ -109,7 +116,7 @@ static void Start(const struct TutLine *lines, u8 count, u8 bits)
+     StartNow(lines, count, bits);
+ }
+ 
+-static void StartNow(const struct TutLine *lines, u8 count, u8 bits)
++static void StartNow(const struct TutLine *lines, u8 count, u16 bits)
+ {
+     sT.lines = lines;
+     sT.count = count;
+@@ -270,6 +277,8 @@ void Tut_Event(u8 ev)
+             Start(sCatch, ARRAY_COUNT(sCatch), TUT_CATCH);
+         else if (!PkbnTutorial_Seen(TUT_SWITCH) && CanSwitch())
+             Start(sSwitch, ARRAY_COUNT(sSwitch), TUT_SWITCH);
++        else if (!PkbnTutorial_Seen(TUT_CROSS) && PkbnGrid_CrossAvailable())
++            Start(sCross, ARRAY_COUNT(sCross), TUT_CROSS);
+         return;
+     }
+     if (ev == TEV_STEP) sT.did |= 1 << W_MOVE;
+-- 
+2.43.0
+
