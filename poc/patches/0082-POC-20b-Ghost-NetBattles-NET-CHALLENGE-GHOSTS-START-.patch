@@ -1,0 +1,1013 @@
+From a263dadd9c00f2dc13d09171afa9a28cd59f512f Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 7 Oct 2026 14:53:17 +0300
+Subject: [PATCH 82/85] POC-20b: Ghost NetBattles - NET CHALLENGE > GHOSTS:
+ START copies your team (moves, nature, IVs, EVs, NaviCust, habits from the
+ play log) as a code, SELECT pastes a friend's, A fights it at tier 5 in its
+ trainer's style; records per ghost
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/ghost.h         |  53 +++++
+ include/pkbn/grid_internal.h |   2 +
+ src/field_specials.c         |  15 +-
+ src/pkbn/challenge_ui.c      | 175 +++++++++++++-
+ src/pkbn/ghost.c             | 433 +++++++++++++++++++++++++++++++++++
+ src/pkbn/grid_battle.c       |  29 ++-
+ src/pkbn/playlog.c           |  12 +
+ src/pkbn/post_battle.c       |   5 +-
+ src/pkbn/selftest.c          |  14 ++
+ src/platform/sdl2.c          |  27 +++
+ 10 files changed, 752 insertions(+), 13 deletions(-)
+ create mode 100644 include/pkbn/ghost.h
+ create mode 100644 src/pkbn/ghost.c
+
+diff --git a/include/pkbn/ghost.h b/include/pkbn/ghost.h
+new file mode 100644
+index 0000000..63414a6
+--- /dev/null
++++ b/include/pkbn/ghost.h
+@@ -0,0 +1,53 @@
++#ifndef GUARD_PKBN_GHOST_H
++#define GUARD_PKBN_GHOST_H
++// POC-20b: Ghost NetBattles (src/pkbn/ghost.c). Your party as a code a friend's game fights: species, level, moves,
++// nature, IVs, EVs, ability and NaviCust per Pokémon, plus a fighting style read from your play log.
++#include "global.h"
++#include "pkbn/navicust.h"
++#include "pkbn/challenge.h"
++
++#define GHOST_MAX_PARTS 8      // NaviCust programs carried per Pokémon (a 5x4 board rarely holds more)
++#define GHOST_LIST_MAX  16     // friends' ghosts kept in pkbn_ghosts.txt
++#define GHOST_CODE_MAX  640
++#define CHALLENGE_GHOST PKBN_CHALLENGE_COUNT   // the challenge index a ghost battle uses
++
++struct PkbnGhostMon
++{
++    u16 species;
++    u8 level;
++    u16 moves[MAX_MON_MOVES];
++    u8 nature, abilityNum;
++    u8 iv[NUM_STATS], ev[NUM_STATS];
++    u8 style;                  // STYLE_* (src/pkbn/grid_internal.h), from your habits
++    u8 partCount;
++    struct PkbnNaviPart parts[GHOST_MAX_PARTS];
++};
++
++struct PkbnGhost
++{
++    char name[8];              // the trainer's name, ASCII
++    u8 count;
++    struct PkbnGhostMon mon[PARTY_SIZE];
++    u32 hash;                  // of the code: its records key
++};
++
++bool8 PkbnGhost_Export(char *out, u32 size);                    // your party now, as a code
++bool8 PkbnGhost_Decode(const char *code, struct PkbnGhost *g);  // FALSE: not a ghost code
++u8 PkbnGhost_LoadList(struct PkbnGhost *out, u8 max);          // friends' ghosts in pkbn_ghosts.txt
++s32 PkbnGhost_Add(const char *code);   // 1 added, 0 already there, -1 not a ghost code, -2 the list is full
++bool8 PkbnGhost_Select(u8 listIndex);  // the ghost the next NET CHALLENGE battle fights
++void PkbnGhost_BuildParty(void);       // gEnemyParty and gPkbnGhostChallenge from the selected ghost
++const struct PkbnGhost *PkbnGhost_Active(void);
++void PkbnGhost_AfterWin(u32 frames, u8 bust, char *line1, char *line2, u32 size);
++// For grid_battle.c: the ghost's NaviCust and style for enemy party slot `slot`
++bool8 PkbnGhost_NaviFor(u8 slot, struct Pokemon *mon, struct PkbnNaviStats *out);
++u8 PkbnGhost_StyleFor(u8 slot);
++
++extern struct PkbnChallenge gPkbnGhostChallenge;
++#define PKBN_CHAL(i) (*((i) == CHALLENGE_GHOST ? &gPkbnGhostChallenge : &gPkbnChallenges[(i)]))
++
++// Platform (src/platform/sdl2.c)
++bool8 Platform_SetClipboard(const char *text);
++bool8 Platform_GetClipboard(char *out, u32 size);
++
++#endif // GUARD_PKBN_GHOST_H
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index b79bf7d..d27287d 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -169,6 +169,8 @@ struct PartyMember
+     u16 hpBonus;                 // HP+ programs: extra max HP for this battle (taken off again at the end)
+     bool8 enteredOnce;           // FirstBarrier / status bug apply on its first entry only
+     bool8 tangoDone;             // POC-16d: its Tango heal was used this battle
++    u32 colFrames[3];            // POC-20b habits for ghosts: fight frames in each of its columns
++    u16 melee, ranged, area;     // ... and chips used by reach
+ };
+ 
+ // An attack in flight / winding up / ticking.
+diff --git a/src/field_specials.c b/src/field_specials.c
+index 8bbef8c..58f20f8 100644
+--- a/src/field_specials.c
++++ b/src/field_specials.c
+@@ -67,6 +67,7 @@
+ #include "palette.h"
+ #include "pkbn/chip_pack.h"
+ #include "pkbn/challenge.h"
++#include "pkbn/ghost.h"
+ #include "pkbn/replay.h"
+ #include "battle_setup.h"
+ 
+@@ -1033,8 +1034,18 @@ void PkbnStartReplay(void)
+ void PkbnStartNetChallenge(void)
+ {
+ #ifdef PORTABLE
+-    PkbnChallenge_BuildParty(gSpecialVar_Result);
+-    gPkbnChallengeActive = gSpecialVar_Result + 1;
++    if (gSpecialVar_Result >= 0x80 && gSpecialVar_Result < 0x80 + GHOST_LIST_MAX)
++    {
++        // POC-20b: a friend's ghost (NET CHALLENGE > GHOSTS)
++        PkbnGhost_Select(gSpecialVar_Result - 0x80);
++        PkbnGhost_BuildParty();
++        gPkbnChallengeActive = CHALLENGE_GHOST + 1;
++    }
++    else
++    {
++        PkbnChallenge_BuildParty(gSpecialVar_Result);
++        gPkbnChallengeActive = gSpecialVar_Result + 1;
++    }
+     BattleSetup_StartPkbnChallenge();
+ #else
+     ScriptContext_Enable();
+diff --git a/src/pkbn/challenge_ui.c b/src/pkbn/challenge_ui.c
+index 510b18d..58a0552 100644
+--- a/src/pkbn/challenge_ui.c
++++ b/src/pkbn/challenge_ui.c
+@@ -14,6 +14,7 @@
+ #include "pkbn/chip_pack.h"
+ #include "pkbn/render.h"
+ #include "pkbn/gfx.h"
++#include "pkbn/ghost.h"
+ 
+ #ifdef PORTABLE
+ #include <stdio.h>
+@@ -35,9 +36,15 @@ static struct
+     u8 top;         // POC-16e: first row shown (the list scrolls)
+     u8 iconsFor;
+     bool8 replay;   // a recorded battle to watch (pkbn_replay.bin)
+-    u8 page;        // 0: challenges; 1: TIME ATTACK records (Gym Leader rematches)
++    u8 page;        // 0: challenges; 1: TIME ATTACK records (Gym Leader rematches); 2: GHOSTS (POC-20b)
+     u16 icons[PARTY_SIZE][32 * 32];
+     u32 t;
++    // POC-20b: GHOSTS
++    struct PkbnGhost ghosts[GHOST_LIST_MAX];
++    u8 ghostCount, gCursor, gIconsFor;
++    const char *note;
++    u16 noteT;
++    u16 noteCol;
+ } sC;
+ 
+ static const char *sKeys;
+@@ -218,6 +225,151 @@ static void DrawPanel(u16 *fb)
+     }
+ }
+ 
++// ---- POC-20b: GHOSTS ------------------------------------------------------------------------------------------------
++// Row 0 is your own ghost (START copies its code); the rest are friends' ghosts pasted with SELECT. A fights one.
++static void Leave(u16 result);
++
++static void GhostNote(const char *s, u16 col)
++{
++    sC.note = s, sC.noteT = 90, sC.noteCol = col;
++}
++
++static void LoadGhosts(void)
++{
++    sC.ghostCount = PkbnGhost_LoadList(sC.ghosts, GHOST_LIST_MAX);
++    sC.gIconsFor = 0xFF;
++}
++
++static void GhostIcons(void)
++{
++    u8 i;
++    if (sC.gIconsFor == sC.gCursor)
++        return;
++    sC.gIconsFor = sC.gCursor;
++    if (sC.gCursor == 0)
++    {
++        for (i = 0; i < PARTY_SIZE; i++)
++            if (GetMonData(&gPlayerParty[i], MON_DATA_SPECIES) && !GetMonData(&gPlayerParty[i], MON_DATA_IS_EGG))
++                Pkbn_DecodeMonIcon(sC.icons[i], GetMonData(&gPlayerParty[i], MON_DATA_SPECIES), 0, 0);
++            else
++                memset(sC.icons[i], 0, sizeof(sC.icons[i]));
++        return;
++    }
++    for (i = 0; i < PARTY_SIZE; i++)
++        if (i < sC.ghosts[sC.gCursor - 1].count)
++            Pkbn_DecodeMonIcon(sC.icons[i], sC.ghosts[sC.gCursor - 1].mon[i].species, 0, 0);
++        else
++            memset(sC.icons[i], 0, sizeof(sC.icons[i]));
++}
++
++static void DrawGhosts(u16 *fb)
++{
++    char line[40], t[16];
++    u8 i, n = sC.ghostCount + 1;
++    Pkbn_DrawEmText(fb, 6, 0, "GHOSTS", PKBN_FONT_NORMAL, RGB(22, 14, 31), RGB(2, 2, 5));
++    snprintf(line, sizeof(line), "%u", sC.ghostCount);
++    Text(fb, CW - 4 - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), 4, line, RGB(31, 31, 31));
++    for (i = 0; i < n && i < LIST_ROWS; i++)
++    {
++        s32 y = LIST_Y + i * ROW_H;
++        u16 frames;
++        u8 bust;
++        if (i == sC.gCursor)
++        {
++            Pkbn_FillRect(fb, LIST_X, y, PANEL_X - LIST_X - 4, ROW_H, RGB(10, 5, 20));
++            Pkbn_FrameRect(fb, LIST_X, y, PANEL_X - LIST_X - 4, ROW_H, RGB(22, 14, 31));
++        }
++        if (i == 0)
++        {
++            Text(fb, LIST_X + 12, y, "YOU", RGB(31, 26, 6));
++            continue;
++        }
++        Text(fb, LIST_X + 12, y, sC.ghosts[i - 1].name, RGB(31, 31, 31));
++        if (PkbnGhost_Best(sC.ghosts[i - 1].hash, &frames, &bust))
++        {
++            Text(fb, LIST_X + 3, y, "*", RGB(31, 26, 6));
++            TimeText(t, sizeof(t), frames);
++            Text(fb, PANEL_X - 50, y, t, RGB(8, 28, 31));
++        }
++    }
++    // the team
++    GhostIcons();
++    Pkbn_FillRect(fb, PANEL_X, LIST_Y - 2, CW - PANEL_X - 4, CH - LIST_Y - 24, RGB(4, 2, 10));
++    Pkbn_FrameRect(fb, PANEL_X, LIST_Y - 2, CW - PANEL_X - 4, CH - LIST_Y - 24, RGB(14, 8, 22));
++    for (i = 0; i < PARTY_SIZE; i++)
++        Pkbn_BlitIcon(fb, sC.icons[i], PANEL_X + 4 + (i % 3) * 34, LIST_Y - 6 + (i / 3) * 26, FALSE,
++                      sC.gCursor ? RGB(14, 10, 24) : 0);   // a friend's ghost is a ghost: tinted
++    if (sC.gCursor > 0)
++    {
++        u16 frames;
++        u8 bust;
++        const struct PkbnGhost *g = &sC.ghosts[sC.gCursor - 1];
++        s32 y = LIST_Y + 2 + 2 * 26;
++        for (i = 0; i < g->count; i++)
++        {
++            snprintf(line, sizeof(line), "Lv%u", g->mon[i].level);
++            Text(fb, PANEL_X + 4 + (i % 3) * 34, LIST_Y + 14 + (i / 3) * 26, line, RGB(20, 22, 28));
++        }
++        if (PkbnGhost_Best(g->hash, &frames, &bust))
++        {
++            TimeText(t, sizeof(t), frames);
++            snprintf(line, sizeof(line), "BEST %s", t);
++            Text(fb, PANEL_X + 4, y + 4, line, RGB(8, 28, 31));
++            snprintf(line, sizeof(line), bust >= 11 ? "BUSTING S" : "BUSTING %u", bust);
++            Text(fb, PANEL_X + 4, y + 16, line, RGB(31, 31, 31));
++        }
++    }
++    if (sC.noteT)
++    {
++        s32 w = Pkbn_EmTextWidth(sC.note, PKBN_FONT_SMALL);
++        sC.noteT--;
++        Pkbn_FillRect(fb, PANEL_X + 2, CH - 40, w + 8, 12, RGB(2, 2, 6));
++        Text(fb, PANEL_X + 6, CH - 41, sC.note, sC.noteCol);
++    }
++}
++
++static void GhostInput(u16 keys)
++{
++    u8 n = sC.ghostCount + 1;
++    if (keys & DPAD_UP)
++        sC.gCursor = sC.gCursor ? sC.gCursor - 1 : n - 1, PlaySE(SE_SELECT);
++    else if (keys & DPAD_DOWN)
++        sC.gCursor = (sC.gCursor + 1) % n, PlaySE(SE_SELECT);
++    else if (keys & START_BUTTON)
++    {
++        static char code[GHOST_CODE_MAX];
++        if (PkbnGhost_Export(code, sizeof(code)) && Platform_SetClipboard(code))
++            GhostNote("COPIED!", RGB(10, 31, 12)), PlaySE(SE_SUCCESS);
++        else
++            GhostNote("CAN'T COPY", RGB(31, 10, 8)), PlaySE(SE_FAILURE);
++    }
++    else if (keys & SELECT_BUTTON)
++    {
++        static char code[GHOST_CODE_MAX + 64];
++        s32 r = Platform_GetClipboard(code, sizeof(code)) ? PkbnGhost_Add(code) : -1;
++        if (r == 1)
++        {
++            LoadGhosts();
++            sC.gCursor = sC.ghostCount;
++            GhostNote("NEW GHOST!", RGB(10, 31, 12)), PlaySE(SE_SUCCESS);
++        }
++        else
++            GhostNote(r == 0 ? "ALREADY HERE" : r == -2 ? "LIST FULL" : "NO GHOST CODE", RGB(31, 10, 8)), PlaySE(SE_FAILURE);
++    }
++    else if (keys & A_BUTTON)
++    {
++        if (sC.gCursor == 0)
++        {
++            PlaySE(SE_FAILURE);
++            return;
++        }
++        PlaySE(SE_SELECT);
++        Leave(0x80 + sC.gCursor - 1);
++    }
++    else if (keys & B_BUTTON)
++        sC.page = 0, PlaySE(SE_SELECT);
++}
++
+ static void Draw(u16 *fb)
+ {
+     s32 i;
+@@ -229,12 +381,19 @@ static void Draw(u16 *fb)
+     if (sC.page == 1)
+     {
+         DrawRecords(fb);
+-        Text(fb, 4, CH - 13, "L/R:CHALLENGES  B:BACK", RGB(16, 18, 24));
++        Text(fb, 4, CH - 13, "L/R:PAGES  B:BACK", RGB(16, 18, 24));
++        return;
++    }
++    if (sC.page == 2)
++    {
++        DrawGhosts(fb);
++        Text(fb, 4, CH - 13, sC.gCursor ? "A:JACK IN  START:COPY YOURS  SELECT:PASTE" : "START:COPY YOURS  SELECT:PASTE",
++             RGB(16, 18, 24));
+         return;
+     }
+     DrawList(fb);
+     DrawPanel(fb);
+-    Text(fb, 4, CH - 13, PkbnChallenge_Unlocked(sC.cursor) ? "A:JACK IN  L/R:RECORDS" : "L/R:RECORDS", RGB(16, 18, 24));
++    Text(fb, 4, CH - 13, PkbnChallenge_Unlocked(sC.cursor) ? "A:JACK IN  L/R:PAGES" : "L/R:PAGES", RGB(16, 18, 24));
+     if (sC.replay)
+         Text(fb, CW - 4 - Pkbn_EmTextWidth("SELECT:REPLAY LAST BATTLE", PKBN_FONT_SMALL), CH - 13, "SELECT:REPLAY LAST BATTLE",
+              RGB(31, 20, 10));
+@@ -251,10 +410,17 @@ static void HandleInput(u16 keys)
+ {
+     if (keys & (L_BUTTON | R_BUTTON))
+     {
+-        sC.page ^= 1;
++        sC.page = (sC.page + ((keys & R_BUTTON) ? 1 : 2)) % 3;   // challenges, TIME ATTACK, GHOSTS
++        if (sC.page == 2)
++            LoadGhosts();
+         PlaySE(SE_SELECT);
+         return;
+     }
++    if (sC.page == 2)
++    {
++        GhostInput(keys);
++        return;
++    }
+     if (sC.page == 1)
+     {
+         if (keys & B_BUTTON)
+@@ -304,6 +470,7 @@ static void CB2_ChallengeMenu(void)
+             case 'A': keys = A_BUTTON; break;
+             case 'B': keys = B_BUTTON; break;
+             case 'E': keys = SELECT_BUTTON; break;
++            case 'S': keys = START_BUTTON; break;
+             case '<': keys = L_BUTTON; break;
+             case '>': keys = R_BUTTON; break;
+             }
+diff --git a/src/pkbn/ghost.c b/src/pkbn/ghost.c
+new file mode 100644
+index 0000000..8cafa08
+--- /dev/null
++++ b/src/pkbn/ghost.c
+@@ -0,0 +1,433 @@
++// POC-20b: Ghost NetBattles (Khaled's pick). include/pkbn/ghost.h.
++//
++// NET CHALLENGE > GHOSTS: START copies your ghost code to the clipboard, SELECT pastes a friend's, A fights it. A ghost
++// is your party as it is now - species, level, moves, nature, IVs, EVs, ability and NaviCust - plus a fighting style
++// per Pokémon read from your play log (where it stood, which reach of chips it used). The foe AI plays that style
++// (the wild styles of POC-13: BRUISER, SNIPER, TURRET...) at rival tier 5. Records only: best time and Busting Level
++// per ghost (pkbn.sav v9), shared on the Ghost League page.
++//
++// Code: "PKBN-" + Crockford base32 of the bytes below + a 16-bit check. Our format (TUNE):
++//   version, name[7], count, then per Pokémon: species u16, level, moves 4 x u16, nature, ability | style << 1,
++//   IVs 6 x 5 bits (4 bytes), EVs 6 bytes, part count, parts 3 bytes each (prog 7, colour 5, x+1 3, y+1 3, rot 2).
++#include "pkbn/grid_vfx.h"   // first: it pulls in <stdlib.h> before global.h's macros
++#include "global.h"
++#include "pokemon.h"
++#include "random.h"
++#include "string_util.h"
++#include "pkbn/grid_internal.h"
++#include "pkbn/ghost.h"
++#include "pkbn/chip_pack.h"
++#include "pkbn/render.h"
++
++#ifdef PORTABLE
++#include <stdio.h>
++#include <string.h>
++
++#define GHOST_VERSION 1
++#define GHOSTS_PATH Platform_DataPath("pkbn_ghosts.txt")
++#define PLAYLOG_PATH Platform_DataPath("pkbn_playlog.jsonl")
++extern const char *Platform_DataPath(const char *file);
++
++struct PkbnChallenge gPkbnGhostChallenge;
++static struct PkbnGhost sActive;
++static char sTitle[24];
++
++static const char sB32[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";   // Crockford base32
++
++static u32 Fnv(const u8 *p, u32 n)
++{
++    u32 h = 2166136261u, i;
++    for (i = 0; i < n; i++)
++        h = (h ^ p[i]) * 16777619u;
++    return h;
++}
++
++// ---- Habits -> a style (from the play log's "habits" arrays, POC-20b) ---------------------------------------------
++static u8 HabitStyle(u16 species)
++{
++    FILE *f = fopen(getenv("PKBN_PLAYLOG") ? getenv("PKBN_PLAYLOG") : PLAYLOG_PATH, "r");
++    static char line[8192];
++    u32 col[3] = {0, 0, 0}, melee = 0, ranged = 0, area = 0, total;
++    if (f == NULL)
++        return STYLE_BALANCED;
++    while (fgets(line, sizeof(line), f))
++    {
++        char *p = strstr(line, "\"habits\":[");
++        if (p == NULL)
++            continue;
++        p += 10;
++        while (*p == '[')
++        {
++            unsigned sp, c0, c1, c2, me, ra, ar;
++            if (sscanf(p, "[%u,%u,%u,%u,%u,%u,%u]", &sp, &c0, &c1, &c2, &me, &ra, &ar) == 7 && sp == species)
++            {
++                col[0] += c0, col[1] += c1, col[2] += c2;
++                melee += me, ranged += ra, area += ar;
++            }
++            p = strchr(p, ']');
++            if (p == NULL)
++                break;
++            p++;
++            if (*p == ',')
++                p++;
++        }
++    }
++    fclose(f);
++    total = col[0] + col[1] + col[2];
++    if (total < 600)
++        return STYLE_BALANCED;   // under 10 s of fighting on record: no habits yet (TUNE)
++    // TUNE: front column = harasser/bruiser, back = sniper/turret; the reach of the chips it used decides between them
++    if (area * 3 >= melee + ranged + area && area)
++        return STYLE_TURRET;
++    if (col[2] * 100 / total >= 40)
++        return melee >= ranged ? STYLE_BRUISER : STYLE_HARASSER;
++    if (col[0] * 100 / total >= 50)
++        return STYLE_SNIPER;
++    return STYLE_BALANCED;
++}
++
++// ---- Encoding ---------------------------------------------------------------------------------------------------
++static u32 Pack(const struct PkbnGhost *g, u8 *b)
++{
++    u32 n = 0;
++    u8 m, k;
++    b[n++] = GHOST_VERSION;
++    for (k = 0; k < 7; k++)
++        b[n++] = (u8)g->name[k];
++    b[n++] = g->count;
++    for (m = 0; m < g->count; m++)
++    {
++        const struct PkbnGhostMon *gm = &g->mon[m];
++        u32 ivs = 0;
++        b[n++] = gm->species & 0xFF, b[n++] = gm->species >> 8;
++        b[n++] = gm->level;
++        for (k = 0; k < MAX_MON_MOVES; k++)
++            b[n++] = gm->moves[k] & 0xFF, b[n++] = gm->moves[k] >> 8;
++        b[n++] = gm->nature;
++        b[n++] = (gm->abilityNum & 1) | (gm->style << 1);
++        for (k = 0; k < NUM_STATS; k++)
++            ivs |= (u32)(gm->iv[k] & 31) << (5 * k);
++        b[n++] = ivs, b[n++] = ivs >> 8, b[n++] = ivs >> 16, b[n++] = ivs >> 24;
++        for (k = 0; k < NUM_STATS; k++)
++            b[n++] = gm->ev[k];
++        b[n++] = gm->partCount;
++        for (k = 0; k < gm->partCount; k++)
++        {
++            const struct PkbnNaviPart *p = &gm->parts[k];
++            u32 v = (p->prog & 127) | ((u32)(p->type & 31) << 7) | ((u32)((p->x + 1) & 7) << 12)
++                  | ((u32)((p->y + 1) & 7) << 15) | ((u32)(p->rot & 3) << 18);
++            b[n++] = v, b[n++] = v >> 8, b[n++] = v >> 16;
++        }
++    }
++    return n;
++}
++
++static bool8 Unpack(const u8 *b, u32 len, struct PkbnGhost *g)
++{
++    u32 n = 0;
++    u8 m, k;
++    memset(g, 0, sizeof(*g));
++#define NEED(c) do { if (n + (c) > len) return FALSE; } while (0)
++    NEED(9);
++    if (b[n++] != GHOST_VERSION)
++        return FALSE;
++    for (k = 0; k < 7; k++)
++        g->name[k] = (b[n] >= ' ' && b[n] < 127) ? (char)b[n] : '\0', n++;
++    g->count = b[n++];
++    if (g->count == 0 || g->count > PARTY_SIZE)
++        return FALSE;
++    for (m = 0; m < g->count; m++)
++    {
++        struct PkbnGhostMon *gm = &g->mon[m];
++        u32 ivs;
++        NEED(24);
++        gm->species = b[n] | (b[n + 1] << 8), n += 2;
++        gm->level = b[n++];
++        for (k = 0; k < MAX_MON_MOVES; k++)
++            gm->moves[k] = b[n] | (b[n + 1] << 8), n += 2;
++        gm->nature = b[n++];
++        gm->abilityNum = b[n] & 1;
++        gm->style = b[n++] >> 1;
++        ivs = b[n] | (b[n + 1] << 8) | (b[n + 2] << 16) | ((u32)b[n + 3] << 24), n += 4;
++        for (k = 0; k < NUM_STATS; k++)
++            gm->iv[k] = (ivs >> (5 * k)) & 31;
++        for (k = 0; k < NUM_STATS; k++)
++            gm->ev[k] = b[n++];
++        gm->partCount = b[n++];
++        if (gm->species == SPECIES_NONE || gm->species >= NUM_SPECIES || gm->level == 0 || gm->level > MAX_LEVEL
++         || gm->nature >= NUM_NATURES || gm->style >= STYLE_COUNT || gm->partCount > GHOST_MAX_PARTS)
++            return FALSE;
++        for (k = 0; k < MAX_MON_MOVES; k++)
++            if (gm->moves[k] >= MOVES_COUNT)
++                return FALSE;
++        NEED(3 * gm->partCount);
++        for (k = 0; k < gm->partCount; k++)
++        {
++            u32 v = b[n] | (b[n + 1] << 8) | ((u32)b[n + 2] << 16);
++            struct PkbnNaviPart *p = &gm->parts[k];
++            n += 3;
++            p->prog = v & 127;
++            p->type = (v >> 7) & 31;
++            p->x = (s8)((v >> 12) & 7) - 1;
++            p->y = (s8)((v >> 15) & 7) - 1;
++            p->rot = (v >> 18) & 3;
++            if (p->prog >= NCP_COUNT)
++                return FALSE;
++        }
++    }
++#undef NEED
++    return n == len;
++}
++
++static void Encode(const u8 *b, u32 n, char *out, u32 size)
++{
++    u32 acc = 0, bits = 0, o = 0, i;
++    u16 check = (u16)Fnv(b, n);
++    u8 buf[512];
++    memcpy(buf, b, n);
++    buf[n] = check & 0xFF, buf[n + 1] = check >> 8;
++    n += 2;
++    o = snprintf(out, size, "PKBN-");
++    for (i = 0; i < n && o + 2 < size; i++)
++    {
++        acc = (acc << 8) | buf[i];
++        bits += 8;
++        while (bits >= 5)
++            out[o++] = sB32[(acc >> (bits - 5)) & 31], bits -= 5;
++    }
++    if (bits && o + 1 < size)
++        out[o++] = sB32[(acc << (5 - bits)) & 31];
++    out[o] = '\0';
++}
++
++static s32 Decode(const char *s, u8 *b, u32 cap)
++{
++    u32 acc = 0, bits = 0, n = 0;
++    while (*s == ' ' || *s == '\n' || *s == '\r' || *s == '\t')
++        s++;
++    if (strncmp(s, "PKBN-", 5) != 0)
++        return -1;
++    for (s += 5; *s; s++)
++    {
++        char c = *s >= 'a' && *s <= 'z' ? *s - 32 : *s;
++        const char *p;
++        if (c == '-' || c == ' ' || c == '\n' || c == '\r')
++            continue;
++        if (c == 'O') c = '0';
++        if (c == 'I' || c == 'L') c = '1';
++        p = strchr(sB32, c);
++        if (p == NULL || c == '\0')
++            break;
++        acc = (acc << 5) | (u32)(p - sB32);
++        bits += 5;
++        if (bits >= 8)
++        {
++            if (n >= cap)
++                return -1;
++            b[n++] = (acc >> (bits - 8)) & 0xFF;
++            bits -= 8;
++        }
++    }
++    if (n < 3 || (u16)Fnv(b, n - 2) != (b[n - 2] | (b[n - 1] << 8)))
++        return -1;
++    return n - 2;
++}
++
++bool8 PkbnGhost_Decode(const char *code, struct PkbnGhost *g)
++{
++    u8 b[512];
++    s32 n = Decode(code, b, sizeof(b));
++    if (n <= 0 || !Unpack(b, n, g))
++        return FALSE;
++    g->hash = Fnv(b, n);
++    return TRUE;
++}
++
++bool8 PkbnGhost_Export(char *out, u32 size)
++{
++    struct PkbnGhost g;
++    u8 b[512], i, k;
++    u32 n;
++    memset(&g, 0, sizeof(g));
++    {
++        char nm[16];
++        Pkbn_GameStringToAscii(nm, gSaveBlock2Ptr->playerName, sizeof(nm));
++        strncpy(g.name, nm, 7);
++        while (g.name[0] == ' ')
++            memmove(g.name, g.name + 1, 7);
++        if (g.name[0] == '\0')
++            strcpy(g.name, "TRAINER");
++    }
++    for (i = 0; i < PARTY_SIZE; i++)
++    {
++        struct Pokemon *mon = &gPlayerParty[i];
++        struct PkbnGhostMon *gm = &g.mon[g.count];
++        struct PkbnNavi *navi;
++        if (GetMonData(mon, MON_DATA_SPECIES) == SPECIES_NONE || GetMonData(mon, MON_DATA_IS_EGG))
++            continue;
++        gm->species = GetMonData(mon, MON_DATA_SPECIES);
++        gm->level = GetMonData(mon, MON_DATA_LEVEL);
++        for (k = 0; k < MAX_MON_MOVES; k++)
++            gm->moves[k] = GetMonData(mon, MON_DATA_MOVE1 + k);
++        gm->nature = GetNature(mon);
++        gm->abilityNum = GetMonData(mon, MON_DATA_ABILITY_NUM);
++        for (k = 0; k < NUM_STATS; k++)
++        {
++            gm->iv[k] = GetMonData(mon, MON_DATA_HP_IV + k);
++            gm->ev[k] = GetMonData(mon, MON_DATA_HP_EV + k);
++        }
++        gm->style = HabitStyle(gm->species);
++        navi = Navi_ForMon(mon, FALSE);
++        if (navi != NULL)
++            for (k = 0; k < navi->count && gm->partCount < GHOST_MAX_PARTS; k++)
++                gm->parts[gm->partCount++] = navi->parts[k];
++        g.count++;
++    }
++    if (g.count == 0)
++        return FALSE;
++    n = Pack(&g, b);
++    Encode(b, n, out, size);
++    printf("[pkbn] ghost exported: %s, %u Pokemon, %u chars\n", g.name, g.count, (unsigned)strlen(out));
++    return TRUE;
++}
++
++// ---- The list of friends' ghosts (pkbn_ghosts.txt, one code per line) --------------------------------------------
++u8 PkbnGhost_LoadList(struct PkbnGhost *out, u8 max)
++{
++    FILE *f = fopen(GHOSTS_PATH, "r");
++    char line[GHOST_CODE_MAX + 8];
++    u8 n = 0;
++    if (f == NULL)
++        return 0;
++    while (n < max && fgets(line, sizeof(line), f))
++        if (PkbnGhost_Decode(line, &out[n]))
++            n++;
++    fclose(f);
++    return n;
++}
++
++s32 PkbnGhost_Add(const char *code)
++{
++    struct PkbnGhost g, list[GHOST_LIST_MAX];
++    u8 n, i;
++    FILE *f;
++    if (!PkbnGhost_Decode(code, &g))
++        return -1;
++    n = PkbnGhost_LoadList(list, GHOST_LIST_MAX);
++    for (i = 0; i < n; i++)
++        if (list[i].hash == g.hash)
++            return 0;
++    if (n >= GHOST_LIST_MAX)
++        return -2;
++    f = fopen(GHOSTS_PATH, "a");
++    if (f == NULL)
++        return -2;
++    while (*code == ' ' || *code == '\n' || *code == '\r')
++        code++;
++    {
++        char clean[GHOST_CODE_MAX + 8];
++        u32 k = 0;
++        for (; *code && k < sizeof(clean) - 1; code++)
++            if (*code != '\n' && *code != '\r' && *code != ' ')
++                clean[k++] = *code;
++        clean[k] = '\0';
++        fprintf(f, "%s\n", clean);
++    }
++    fclose(f);
++    printf("[pkbn] ghost added: %s\n", g.name);
++    return 1;
++}
++
++bool8 PkbnGhost_Select(u8 listIndex)
++{
++    struct PkbnGhost list[GHOST_LIST_MAX];
++    u8 n = PkbnGhost_LoadList(list, GHOST_LIST_MAX);
++    if (listIndex >= n)
++        return FALSE;
++    sActive = list[listIndex];
++    return TRUE;
++}
++
++const struct PkbnGhost *PkbnGhost_Active(void)
++{
++    return &sActive;
++}
++
++// ---- The battle ------------------------------------------------------------------------------------------------
++void PkbnGhost_BuildParty(void)
++{
++    u8 m, k;
++    if (getenv("PKBN_TEST_GHOST") != NULL && !PkbnGhost_Decode(getenv("PKBN_TEST_GHOST"), &sActive))
++        printf("[pkbn] PKBN_TEST_GHOST is not a ghost code\n");
++    ZeroEnemyPartyMons();
++    memset(&gPkbnGhostChallenge, 0, sizeof(gPkbnGhostChallenge));
++    snprintf(sTitle, sizeof(sTitle), "%s'S GHOST", sActive.name);
++    gPkbnGhostChallenge.name = sTitle;
++    gPkbnGhostChallenge.desc = "";
++    gPkbnGhostChallenge.tier = 5;       // TUNE: a friend's team fights like the Elite Four
++    gPkbnGhostChallenge.together = 1;
++    gPkbnGhostChallenge.monCount = sActive.count;
++    for (m = 0; m < sActive.count; m++)
++    {
++        const struct PkbnGhostMon *gm = &sActive.mon[m];
++        struct Pokemon *mon = &gEnemyParty[m];
++        u8 ab = gm->abilityNum;
++        CreateMonWithNature(mon, gm->species, gm->level, 0, gm->nature);
++        for (k = 0; k < NUM_STATS; k++)
++        {
++            u8 iv = gm->iv[k], ev = gm->ev[k];
++            SetMonData(mon, MON_DATA_HP_IV + k, &iv);
++            SetMonData(mon, MON_DATA_HP_EV + k, &ev);
++        }
++        SetMonData(mon, MON_DATA_ABILITY_NUM, &ab);
++        for (k = 0; k < MAX_MON_MOVES; k++)
++        {
++            u16 mv = gm->moves[k];
++            u8 pp = gBattleMoves[mv].pp;
++            SetMonData(mon, MON_DATA_MOVE1 + k, &mv);
++            SetMonData(mon, MON_DATA_PP1 + k, &pp);
++        }
++        CalculateMonStats(mon);
++        gPkbnGhostChallenge.mons[m].species = gm->species;
++        gPkbnGhostChallenge.mons[m].level = gm->level;
++        memcpy(gPkbnGhostChallenge.mons[m].moves, gm->moves, sizeof(gm->moves));
++    }
++    printf("[pkbn] ghost battle: %s, %u Pokemon\n", sTitle, sActive.count);
++}
++
++bool8 PkbnGhost_NaviFor(u8 slot, struct Pokemon *mon, struct PkbnNaviStats *out)
++{
++    struct PkbnNavi navi;
++    struct PkbnNaviOwner owner;
++    if (slot >= sActive.count)
++        return FALSE;
++    memset(&navi, 0, sizeof(navi));
++    navi.id = 1;
++    navi.count = sActive.mon[slot].partCount;
++    memcpy(navi.parts, sActive.mon[slot].parts, sizeof(struct PkbnNaviPart) * navi.count);
++    Navi_OwnerFromMon(&owner, mon);
++    Navi_Compile(&navi, &owner, out, NULL);
++    return TRUE;
++}
++
++u8 PkbnGhost_StyleFor(u8 slot)
++{
++    return slot < sActive.count ? sActive.mon[slot].style : STYLE_NONE;
++}
++
++void PkbnGhost_AfterWin(u32 frames, u8 bust, char *line1, char *line2, u32 size)
++{
++    u16 best = 0;
++    u8 bestBust = 0;
++    u32 s10 = frames * 10 / 60;
++    bool8 had = PkbnGhost_Best(sActive.hash, &best, &bestBust);
++    if (frames > 0xFFFF)
++        frames = 0xFFFF;
++    PkbnGhost_NoteWin(sActive.hash, (u16)frames, bust);
++    snprintf(line1, size, "%s %u:%02u.%u!", (!had || frames < best) ? "NEW RECORD" : "TIME", (unsigned)(s10 / 600),
++             (unsigned)(s10 / 10 % 60), (unsigned)(s10 % 10));
++    snprintf(line2, size, "BEAT %s!", sTitle);
++    printf("[pkbn] ghost beaten: %s %u frames bust %u\n", sTitle, (unsigned)frames, bust);
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index eb81322..407fe2b 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -44,6 +44,7 @@
+ #include "pkbn/replay.h"
+ #include "constants/battle_ai.h"
+ #include "pkbn/tutorial.h"
++#include "pkbn/ghost.h"
+ #include "battle_interface.h"
+ #include "m4a.h"
+ 
+@@ -512,13 +513,16 @@ static void LoadEnemy(struct Pokemon *mon)
+     f->chainSlot = 0;
+     f->paUses = 0;
+     f->style = (!sB.trainer && !sB.challenge && getenv("PKBN_NO_STYLES") == NULL) ? StyleOf(f->bm.species) : STYLE_NONE;
++    if (sB.challenge == CHALLENGE_GHOST + 1)
++        f->style = PkbnGhost_StyleFor(mon - gEnemyParty);   // POC-20b: the ghost fights the way its trainer does
+     if (f->style)
+         PKBN_LOG("%s fights as a %s", f->name, sStyleNames[f->style]);
+     if (sB.rivalTier)
+     {
+         // a rival's Pokémon run NaviCust programs (src/pkbn/rival.c)
+         u16 bonus;
+-        Rival_NaviForMon(mon, sB.rivalTier, &f->navi);
++        if (sB.challenge != CHALLENGE_GHOST + 1 || !PkbnGhost_NaviFor(mon - gEnemyParty, mon, &f->navi))
++            Rival_NaviForMon(mon, sB.rivalTier, &f->navi);   // POC-20b: a ghost runs its own NaviCust
+         ApplyNaviToBattleMon(&f->bm, &f->navi, &bonus);
+         if (f->navi.firstBarrier)
+             f->barrier = TRUE;
+@@ -966,7 +970,7 @@ static void Begin(void)
+     gBattleEnvironment = (gMapHeader.mapLayout != NULL) ? BattleSetup_GetEnvironmentId() : BATTLE_ENVIRONMENT_GRASS;
+     Field_Init();
+     if (sB.challenge)
+-        Field_ChallengeConditions(gPkbnChallenges[sB.challenge - 1].weather, gPkbnChallenges[sB.challenge - 1].panels);
++        Field_ChallengeConditions(PKBN_CHAL(sB.challenge - 1).weather, PKBN_CHAL(sB.challenge - 1).panels);
+     else if (gMapHeader.mapLayout != NULL && getenv("PKBN_SELFTEST") == NULL)
+         Field_StartConditions();   // self-tests have no map: their battles start as before
+ 
+@@ -1029,7 +1033,7 @@ static void Begin(void)
+     if (sB.challenge)
+     {
+         // the foes fight as a rival of the challenge's tier: Emerald's trainer AI, NaviCust, combos and PAs
+-        const struct PkbnChallenge *c = &gPkbnChallenges[sB.challenge - 1];
++        const struct PkbnChallenge *c = &PKBN_CHAL(sB.challenge - 1);
+         sB.rivalTier = c->tier;
+         sB.aiFlags = AI_SCRIPT_CHECK_BAD_MOVE | AI_SCRIPT_TRY_TO_FAINT | AI_SCRIPT_CHECK_VIABILITY;
+         sB.timeLimit = c->seconds * 60;
+@@ -1101,8 +1105,8 @@ static void Begin(void)
+         // the rest of the pack: back corners, attacks staggered (TUNE)
+         static const s8 sPos[MAX_FOES][2] = { {4, 1}, {5, 0}, {5, 2} };
+         u8 out = MAX_FOES;
+-        if (sB.challenge && gPkbnChallenges[sB.challenge - 1].together < out)
+-            out = gPkbnChallenges[sB.challenge - 1].together;   // the rest come in as these fall
++        if (sB.challenge && PKBN_CHAL(sB.challenge - 1).together < out)
++            out = PKBN_CHAL(sB.challenge - 1).together;   // the rest come in as these fall
+         sB.foes[0] = sB.f[SIDE_ENEMY];
+         for (i = 1; i < sB.enemyCount && i < out; i++)
+         {
+@@ -1120,7 +1124,7 @@ static void Begin(void)
+         PKBN_LOG("wild pack: %u Pokemon", sB.foeCount);
+     }
+     if (sB.challenge)
+-        snprintf(sB.banner, sizeof(sB.banner), "NET CHALLENGE: %s!", gPkbnChallenges[sB.challenge - 1].name);
++        snprintf(sB.banner, sizeof(sB.banner), "NET CHALLENGE: %s!", PKBN_CHAL(sB.challenge - 1).name);
+     else
+     if (sB.trainer && (gBattleTypeFlags & BATTLE_TYPE_TWO_OPPONENTS))
+     {
+@@ -2240,6 +2244,17 @@ static void UseNextChip(void)
+         return;
+     }
+     PlayLog_NoteChip(ch->move);
++    {
++        // POC-20b: habits for your ghost - melee (reaches the next column), area (lands anywhere) or ranged
++        u8 k = Moves_KindOf(ch->move);
++        struct PartyMember *pm = &sB.party[sB.active];
++        if (k == GK_SWORD || k == GK_LONGSWORD || k == GK_WIDESWORD || k == GK_LIFESWORD || k == GK_DASH)
++            pm->melee++;
++        else if (k == GK_BOMB || k == GK_FIELD || k == GK_METEORS || k == GK_LOCKON || k == GK_FIREHIT || k == GK_GOLEMHIT)
++            pm->area++;
++        else if (k < GK_BARRIER)
++            pm->ranged++;
++    }
+     switch (Moves_KindOf(ch->move))
+     {
+     case GK_BATON:
+@@ -3258,6 +3273,8 @@ static void UpdateFight(void)
+ 
+     if (sB.chipReadyT)
+         sB.chipReadyT--;   // POC-18: the gap after Custom
++    if (sB.f[SIDE_PLAYER].x >= 0 && sB.f[SIDE_PLAYER].x < 3)
++        sB.party[sB.active].colFrames[sB.f[SIDE_PLAYER].x]++;   // POC-20b: habits for your ghost
+ 
+     // Custom gauge fills faster/slower with the player's Speed stage (stage 6 = 1x).
+     {
+diff --git a/src/pkbn/playlog.c b/src/pkbn/playlog.c
+index 2bc9967..1b3aa9e 100644
+--- a/src/pkbn/playlog.c
++++ b/src/pkbn/playlog.c
+@@ -123,6 +123,18 @@ void PlayLog_Write(void)
+     fprintf(f, "],\"pas\":[");
+     for (i = 0; i < sL.paCount; i++)
+         fprintf(f, "%s%u", i ? "," : "", sL.pas[i]);
++    fprintf(f, "],\"habits\":[");   // POC-20b: [species, frames in columns 0-2, melee, ranged, area] per Pokémon that fought
++    {
++        s32 n = 0;
++        for (i = 0; i < sB.partyCount; i++)
++        {
++            const struct PartyMember *pm = &sB.party[i];
++            if (!pm->participated)
++                continue;
++            fprintf(f, "%s[%u,%u,%u,%u,%u,%u,%u]", n++ ? "," : "", pm->bm.species, (unsigned)pm->colFrames[0],
++                    (unsigned)pm->colFrames[1], (unsigned)pm->colFrames[2], pm->melee, pm->ranged, pm->area);
++        }
++    }
+     fprintf(f, "],\"pack\":%u,\"candy\":%u,\"money\":%u}\n", packTotal, candy,
+             (unsigned)GetMoney(&gSaveBlock1Ptr->money));
+     fclose(f);
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index 9e28735..08dd990 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -27,6 +27,7 @@
+ #include "money.h"
+ #include "pkbn/leader.h"
+ #include "pkbn/challenge.h"
++#include "pkbn/ghost.h"
+ #include "naming_screen.h"
+ #include "overworld.h"
+ #include "pokedex.h"
+@@ -740,7 +741,9 @@ static void CB2_PkbnPostBattle(void)
+             {
+                 Busting_ScaleExp(level);
+                 Busting_Reward(level, sMsg, sizeof(sMsg));
+-                if (sB.challenge)
++                if (sB.challenge == CHALLENGE_GHOST + 1)
++                    PkbnGhost_AfterWin(sB.bust.fightFrames, level, sLeaderMsg[0], sLeaderMsg[1], sizeof(sLeaderMsg[0]));   // POC-20b
++                else if (sB.challenge)
+                     PkbnChallenge_AfterWin(sB.challenge - 1, sB.bust.fightFrames, sLeaderMsg[0], sLeaderMsg[1], sizeof(sLeaderMsg[0]));
+                 else if (sB.trainer)
+                     Leader_AfterWin(gTrainerBattleOpponent_A, level, sB.bust.fightFrames, sB.omega, sLeaderMsg[0], sLeaderMsg[1],
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index 1e26765..dfa2101 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -30,6 +30,7 @@
+ #include "pkbn/render.h"
+ #include "pokedex.h"
+ #include "pkbn/bot.h"
++#include "pkbn/ghost.h"
+ #include "pkbn/navicust.h"
+ #include "pkbn/chip_pack.h"
+ #include "party_menu.h"
+@@ -684,6 +685,19 @@ void Pkbn_SelfTestMaybeStart(void)
+         PkbnChallenge_BuildParty(ch);
+         gPkbnChallengeActive = ch + 1;
+     }
++    // PKBN_TEST_GHOST=<code>: a ghost battle (POC-20b)
++    if (getenv("PKBN_TEST_GHOST") != NULL)
++    {
++        PkbnGhost_BuildParty();
++        gPkbnChallengeActive = CHALLENGE_GHOST + 1;
++    }
++    // PKBN_TEST_GHOST_EXPORT=1: print the player party's ghost code
++    if (getenv("PKBN_TEST_GHOST_EXPORT") != NULL)
++    {
++        char code[GHOST_CODE_MAX];
++        if (PkbnGhost_Export(code, sizeof(code)))
++            printf("[pkbn] ghost code: %s\n", code);
++    }
+     // PKBN_TEST_TRAINER=id: a single trainer battle against gTrainers[id] instead of the wild Pokémon
+     if (getenv("PKBN_TEST_TRAINER") != NULL)
+     {
+diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
+index 2fbbbec..35dc67c 100644
+--- a/src/platform/sdl2.c
++++ b/src/platform/sdl2.c
+@@ -103,6 +103,33 @@ const char *Platform_DataPath(const char *file)
+     return out;
+ }
+ 
++// pkbn POC-20b: ghost codes go through the clipboard (PKBN_TEST_CLIPBOARD stands in for it in self-tests)
++bool8 Platform_SetClipboard(const char *text)
++{
++    if (getenv("PKBN_TEST_CLIPBOARD") != NULL)
++    {
++        printf("[pkbn] clipboard set: %s\n", text);
++        return TRUE;
++    }
++    return SDL_SetClipboardText(text) == 0;
++}
++
++bool8 Platform_GetClipboard(char *out, u32 size)
++{
++    char *t;
++    if (getenv("PKBN_TEST_CLIPBOARD") != NULL)
++    {
++        snprintf(out, size, "%s", getenv("PKBN_TEST_CLIPBOARD"));
++        return TRUE;
++    }
++    t = SDL_GetClipboardText();
++    if (t == NULL)
++        return FALSE;
++    snprintf(out, size, "%s", t);
++    SDL_free(t);
++    return out[0] != '\0';
++}
++
+ // pkbn POC-18: F1 shows which key is which (keys only; the START menu already has its 9 rows). The game pauses.
+ static bool sShowKeys, sKeysDirty;
+ static void DrawKeysCard(uint16_t *canvas)
+-- 
+2.43.0
+

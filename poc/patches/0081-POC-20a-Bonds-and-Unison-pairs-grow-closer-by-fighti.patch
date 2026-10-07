@@ -1,0 +1,937 @@
+From 8ae483da214651c6e4f6c189fdd733a63626bc16 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 7 Oct 2026 14:43:20 +0300
+Subject: [PATCH 81/85] =?UTF-8?q?POC-20a:=20Bonds=20and=20Unison=20-=20pai?=
+ =?UTF-8?q?rs=20grow=20closer=20by=20fighting=20together;=20a=20full=20Bon?=
+ =?UTF-8?q?d=20makes=20their=20Cross=20a=20Unison:=20the=20partner's=20col?=
+ =?UTF-8?q?ours=20on=20your=20Pok=C3=A9mon=20(palette=20fusion)=20and=20a?=
+ =?UTF-8?q?=20pair=20Program=20Advance;=20save=20v9?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/chip_pack.h     |  11 ++
+ include/pkbn/gfx.h           |   2 +
+ include/pkbn/grid_internal.h |   3 +
+ include/pkbn/move_table.h    |   4 +
+ src/pkbn/bot.c               |   2 +-
+ src/pkbn/folder.c            |   2 +-
+ src/pkbn/gfx.c               | 117 ++++++++++++++++++++
+ src/pkbn/grid_battle.c       | 206 ++++++++++++++++++++++++++++++++---
+ src/pkbn/grid_draw.c         |  32 +++++-
+ src/pkbn/grid_moves.c        |  14 ++-
+ src/pkbn/grid_vfx.c          |   2 +-
+ src/pkbn/pkbn_save.c         |  96 +++++++++++++++-
+ src/pkbn/selftest.c          |  32 +++---
+ 13 files changed, 476 insertions(+), 47 deletions(-)
+
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index 8791079..18fed9c 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -42,6 +42,17 @@ u8 PkbnFolder_Equipped(void);
+ bool8 PkbnFolder_Regular(u8 folder, u16 *move, u8 *letter);   // POC-19: BN6's Regular Chip
+ void PkbnFolder_SetRegular(u8 folder, u16 move, u8 letter);
+ bool8 PkbnBeast_Unlocked(void);   // POC-19j
++// POC-20 (pkbn_save.c)
++#define PKBN_BOND_SLOTS 32
++#define PKBN_BOND_MAX 100      // a full Bond: Cross becomes Unison (TUNE)
++#define PKBN_GHOST_RECORDS 32
++u8 PkbnBond_Get(u32 pidA, u32 pidB);
++void PkbnBond_Add(u32 pidA, u32 pidB, s32 delta);
++bool8 PkbnDark_Offered(u8 giver);
++bool8 PkbnDark_Taken(u8 giver);
++void PkbnDark_SetOffered(u8 giver, bool8 taken);
++bool8 PkbnGhost_Best(u32 hash, u16 *frames, u8 *bust);
++void PkbnGhost_NoteWin(u32 hash, u16 frames, u8 bust);
+ void PkbnBeast_Note(u8 boss);
+ u8 PkbnFolder_RegularMB(void);                                 // the biggest chip that can be Regular                               // 0-2
+ // POC-14 (src/pkbn/pkbn_save.c)
+diff --git a/include/pkbn/gfx.h b/include/pkbn/gfx.h
+index 34cae70..91806f2 100644
+--- a/include/pkbn/gfx.h
++++ b/include/pkbn/gfx.h
+@@ -65,6 +65,8 @@ void Gfx_DrawOmega(u16 *fb, s32 x, s32 y, bool8 big, s32 scale, u16 color);   //
+ void Gfx_Ellipse(u16 *fb, s32 cx, s32 cy, s32 rx, s32 ry, u16 color, u8 amt16);
+ 
+ void Gfx_LoadMonPic(struct PkbnMonPic *dst, u16 species, u32 personality, u32 otId);
++// POC-20a: the partner's colour ramps on the body's picture (Unison)
++void Gfx_FusePalette(struct PkbnMonPic *body, const struct PkbnMonPic *partner);
+ // Image view of frame 0/1 of a loaded picture, anchored at the horizontal centre of its feet line.
+ // (Built on demand so struct copies of a PkbnMonPic never point at another copy's pixels.)
+ struct PkbnImage Gfx_MonImage(const struct PkbnMonPic *pic, u8 frame);
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index d0faddf..b79bf7d 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -145,6 +145,7 @@ struct Fighter
+     u8 typeOverride;     // Conversion
+     u8 crossType;        // POC-19i: Cross - the partner's type + 1 (0 = no Cross)
+     u8 crossSlot;        // POC-19i: the party slot crossed with
++    bool8 unison;        // POC-20a: the Cross is a Unison (full Bond)
+     s8 slideDx, slideDy; // sliding on ice
+     u16 icon[2][32 * 32];
+     struct PkbnMonPic pic;
+@@ -454,5 +455,7 @@ u8 PkbnGrid_CrossTypeOf(u8 slot);
+ void PkbnGrid_EndCross(bool8 broken);
+ // POC-19j: Beast Out (grid_battle.c)
+ bool8 PkbnGrid_BeastAvailable(void);
++u8 PkbnGrid_BondWith(u8 slot);
++u16 Moves_TypeMulOnFoe(u8 type);   // POC-20a: the Pokémon in and that party slot
+ 
+ #endif // GUARD_PKBN_GRID_INTERNAL_H
+diff --git a/include/pkbn/move_table.h b/include/pkbn/move_table.h
+index a1ec254..196cbed 100644
+--- a/include/pkbn/move_table.h
++++ b/include/pkbn/move_table.h
+@@ -97,6 +97,10 @@ struct PkbnProgramAdvance
+     u8 drain;        // % of damage healed
+ };
+ extern const struct PkbnProgramAdvance gPkbnProgramAdvances[];
++// POC-20a: index PKBN_PA_COUNT is the Unison pair's Program Advance, built when a Unison starts (grid_battle.c)
++#define PA_UNISON PKBN_PA_COUNT
++extern struct PkbnProgramAdvance gPkbnUnisonPA;
++#define PKBN_PA(i) (*((i) == PA_UNISON ? &gPkbnUnisonPA : &gPkbnProgramAdvances[(i)]))
+ extern const char *const gPkbnKindNames[];
+ 
+ #endif // GUARD_PKBN_MOVE_TABLE_H
+diff --git a/src/pkbn/bot.c b/src/pkbn/bot.c
+index 0f8e52b..b39d045 100644
+--- a/src/pkbn/bot.c
++++ b/src/pkbn/bot.c
+@@ -258,7 +258,7 @@ static void NextChip(u8 *kind, u16 *move)
+     if (q == FOLDER_QUEUE_WILD)
+         *kind = GK_BATON;
+     else if (q >= QUEUE_PA_BASE)
+-        *kind = gPkbnProgramAdvances[sB.paQueue[q - QUEUE_PA_BASE].pa].kind;
++        *kind = PKBN_PA(sB.paQueue[q - QUEUE_PA_BASE].pa).kind;
+     else
+     {
+         const struct FolderChip *ch = &sB.folder.chips[q];
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index 26a7b11..fd3291c 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -665,7 +665,7 @@ u8 PkbnFolder_BuildStyle(u8 style, const struct BattlePokemon *party, u8 partyCo
+         u8 formed = 0;
+         for (i = 0; i < PKBN_PA_COUNT && f.count + 6 <= size; i++)
+         {
+-            const u16 *r = gPkbnProgramAdvances[i].recipe;
++            const u16 *r = PKBN_PA(i).recipe;
+             s32 k, l, code = -1;
+             for (k = 0; k < 3; k++)
+                 if (!PkbnFolder_MoveIsChip(r[k]) || PkbnPack_Total(r[k]) == 0 || !AnyCanUse(party, partyCount, r[k]))
+diff --git a/src/pkbn/gfx.c b/src/pkbn/gfx.c
+index fe523de..a4d6e4d 100644
+--- a/src/pkbn/gfx.c
++++ b/src/pkbn/gfx.c
+@@ -312,3 +312,120 @@ void Gfx_DrawOmega(u16 *fb, s32 x, s32 y, bool8 big, s32 scale, u16 color)
+             if (rows[r][c] == '#')
+                 Pkbn_FillRect(fb, x + c * scale, y + r * scale, scale, scale, color);
+ }
++
++// ---- POC-20a: Unison look - the partner's colours on your Pokémon's body ------------------------------------------
++// Khaled asked us to look at sprite fusion (Pokémon Infinite Fusion, Alex Onsager's Pokémon Fusion). Those paste the
++// head of one Pokémon on the body of the other and "swap the colors on the body to match the head" (Onsager); the
++// head part needs a hand-cut head per species. We do the colour step only, which works for every pair: the body's
++// colour ramps (grouped by hue, biggest area first) take the hue and saturation of the partner's ramps in the same
++// order, keeping the body's own lightness so the shading survives. Outline, near-white and grey stay as they are.
++// Studied in research/fusion_study.py (same algorithm).
++static void Rgb555ToHls(u16 c, s32 *h, s32 *l, s32 *s)   // h 0..359, l and s 0..1000
++{
++    s32 r = (c & 31) * 1000 / 31, g = ((c >> 5) & 31) * 1000 / 31, b = ((c >> 10) & 31) * 1000 / 31;
++    s32 mx = r > g ? (r > b ? r : b) : (g > b ? g : b), mn = r < g ? (r < b ? r : b) : (g < b ? g : b), d = mx - mn;
++    *l = (mx + mn) / 2;
++    if (d == 0)
++    {
++        *h = *s = 0;
++        return;
++    }
++    *s = *l < 500 ? d * 1000 / (mx + mn) : d * 1000 / (2000 - mx - mn);
++    if (mx == r)      *h = (60 * (g - b) / d + 360) % 360;
++    else if (mx == g) *h = 60 * (b - r) / d + 120;
++    else              *h = 60 * (r - g) / d + 240;
++}
++
++static s32 HueToRgb(s32 p, s32 q, s32 t)   // t in degrees, values 0..1000
++{
++    t = (t % 360 + 360) % 360;
++    if (t < 60)  return p + (q - p) * t / 60;
++    if (t < 180) return q;
++    if (t < 240) return p + (q - p) * (240 - t) / 60;
++    return p;
++}
++
++static u16 HlsToRgb555(s32 h, s32 l, s32 s)
++{
++    s32 q = l < 500 ? l * (1000 + s) / 1000 : l + s - l * s / 1000, p = 2 * l - q, r, g, b;
++    if (s == 0)
++        r = g = b = l;
++    else
++    {
++        r = HueToRgb(p, q, h + 120);
++        g = HueToRgb(p, q, h);
++        b = HueToRgb(p, q, h - 120);
++    }
++    return (u16)((r * 31 / 1000) | ((g * 31 / 1000) << 5) | ((b * 31 / 1000) << 10));
++}
++
++struct FuseRamp { u8 n; u8 idx[15]; s32 area, hue; };
++
++// Colour ramps of a picture: palette entries in use grouped by hue (within 25 degrees), biggest area first.
++static u8 FuseRamps(const struct PkbnMonPic *pic, struct FuseRamp *out)
++{
++    s32 cnt[16] = {0}, i, k, n = 0, order[16], m = 0;
++    for (i = 0; i < 64 * 64; i++)
++        cnt[pic->px[0][i] & 15]++;
++    for (i = 1; i < 16; i++)
++        if (cnt[i])
++            order[m++] = i;
++    for (i = 0; i < m; i++)   // by area, largest first
++        for (k = i + 1; k < m; k++)
++            if (cnt[order[k]] > cnt[order[i]])
++            {
++                s32 t = order[i]; order[i] = order[k]; order[k] = t;
++            }
++    for (i = 0; i < m; i++)
++    {
++        s32 h, l, s, c = order[i];
++        Rgb555ToHls(pic->pal[c], &h, &l, &s);
++        if (s < 180 || l < 120 || l > 930)
++            continue;   // outline, highlight, grey: not a colour ramp
++        for (k = 0; k < n; k++)
++        {
++            s32 d = h - out[k].hue;
++            d = d < 0 ? -d : d;
++            if ((d > 180 ? 360 - d : d) < 25 && out[k].n < 15)
++                break;
++        }
++        if (k == n)
++        {
++            if (n == 8)
++                continue;
++            out[n].n = 0, out[n].area = 0, out[n].hue = h, n++;
++        }
++        out[k].idx[out[k].n++] = c;
++        out[k].area += cnt[c];
++    }
++    for (i = 0; i < n; i++)
++        for (k = i + 1; k < n; k++)
++            if (out[k].area > out[i].area)
++            {
++                struct FuseRamp t = out[i]; out[i] = out[k]; out[k] = t;
++            }
++    return n;
++}
++
++void Gfx_FusePalette(struct PkbnMonPic *body, const struct PkbnMonPic *partner)
++{
++    struct FuseRamp br[8], pr[8];
++    u8 nb = FuseRamps(body, br), np = FuseRamps(partner, pr), i, j;
++    u16 pal[16];
++    if (np == 0)
++        return;
++    memcpy(pal, body->pal, sizeof(pal));
++    for (i = 0; i < nb; i++)
++    {
++        const struct FuseRamp *t = &pr[i % np];
++        s32 th, tl, ts;
++        Rgb555ToHls(partner->pal[t->idx[0]], &th, &tl, &ts);   // the partner ramp's main colour
++        for (j = 0; j < br[i].n; j++)
++        {
++            s32 h, l, s;
++            Rgb555ToHls(body->pal[br[i].idx[j]], &h, &l, &s);
++            pal[br[i].idx[j]] = HlsToRgb555(th, l, ts);
++        }
++    }
++    memcpy(body->pal, pal, sizeof(pal));
++}
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 8db2d59..eb81322 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -233,6 +233,10 @@ static void LoadActiveFromParty(u8 slot)
+     sB.sentIn |= 1 << slot; // Cmd_getexp: everyone sent in against the current opponent shares its EXP
+ }
+ 
++static void BondEvent(u8 a, u8 b, s32 pts, const char *why);   // POC-20a
++static bool8 UnisonPAAt(const u8 *q, u8 i);
++#define BOND_RECENT_HIT 120   // "right after it took a hit" (frames; TUNE)
++
+ static void DoSwitch(u8 target, bool8 keepStages)
+ {
+     s8 carried[NUM_BATTLE_STATS];
+@@ -245,6 +249,8 @@ static void DoSwitch(u8 target, bool8 keepStages)
+     if (sB.f[SIDE_PLAYER].bm.ability == ABILITY_NATURAL_CURE && sB.f[SIDE_PLAYER].bm.hp)
+         sB.f[SIDE_PLAYER].bm.status1 = 0;   // Natural Cure: cured on switching out (battle_script_commands.c:9616)
+     PkbnGrid_EndCross(FALSE);   // POC-19i: the Cross leaves with the Pokémon
++    if (sB.f[SIDE_PLAYER].bm.hp && sB.f[SIDE_PLAYER].lastHitFrame && sB.frame - sB.f[SIDE_PLAYER].lastHitFrame < BOND_RECENT_HIT)
++        BondEvent(sB.active, target, 2, "switched in after a hit");   // POC-20a
+     SyncActiveToParty();
+     LoadActiveFromParty(target);
+     if (keepStages)
+@@ -367,7 +373,7 @@ static void EndTimeStop(void)
+         if (sB.tsPA)
+         {
+             SpendPAChips(sB.tsSlot);
+-            sB.chainPrev = gPkbnProgramAdvances[sB.tsPA - 1].recipe[2];
++            sB.chainPrev = PKBN_PA(sB.tsPA - 1).recipe[2];
+             Moves_UsePA(SIDE_PLAYER, sB.tsPA - 1, &p->bm, p->name, sB.active);
+             sB.tsPA = 0;
+             break;
+@@ -912,7 +918,7 @@ static s8 PAByName(const char *name)
+     if (name == NULL)
+         return -1;
+     for (k = 0; k < PKBN_PA_COUNT; k++)
+-        if (strcmp(gPkbnProgramAdvances[k].name, name) == 0)
++        if (strcmp(PKBN_PA(k).name, name) == 0)
+             return k;
+     return -1;
+ }
+@@ -1295,6 +1301,15 @@ static void EndBattle(u8 outcome, const char *text)
+     if (sB.challenge && outcome == B_OUTCOME_LOST)
+         outcome = B_OUTCOME_RAN;   // a NET CHALLENGE is a simulation: losing it costs nothing (no whiteout)
+     sB.outcome = outcome;
++    if (outcome == B_OUTCOME_WON && !sB.challenge)
++    {
++        // POC-20a: everyone who fought in a win grows closer (+1 per pair)
++        s32 i, j;
++        for (i = 0; i < sB.partyCount; i++)
++            for (j = i + 1; j < sB.partyCount; j++)
++                if (sB.party[i].participated && sB.party[j].participated)
++                    BondEvent(i, j, 1, "won together");
++    }
+     if (sB.boss && !sB.challenge && (outcome == B_OUTCOME_WON || outcome == B_OUTCOME_CAUGHT))
+         PkbnBeast_Note(sB.boss - 1);   // POC-19j: a legendary boss beaten or caught opens Beast Out
+     strncpy(sB.banner, text, sizeof(sB.banner) - 1);
+@@ -1346,6 +1361,19 @@ bool8 PkbnGrid_HandSelectable(u8 pos)
+     if (pos < sB.handCount ? sB.picked[pos] : sB.wildPicked)
+         return FALSE;
+     SyncActiveToParty();
++    if (sB.f[SIDE_PLAYER].unison && pos < sB.handCount && gPkbnUnisonPA.recipe[0])
++    {
++        // POC-20a: a Unison's pair PA can be picked whatever the codes - its two moves, then any * chip
++        const struct FolderChip *c = &sB.folder.chips[sB.hand[pos]];
++        if (sB.queueCount == 1 && sB.queue[0] < QUEUE_PA_BASE && sB.queue[0] != FOLDER_QUEUE_WILD
++         && sB.folder.chips[sB.queue[0]].move == gPkbnUnisonPA.recipe[0] && c->move == gPkbnUnisonPA.recipe[1]
++         && Chip_CanUse(&sB.f[SIDE_PLAYER].bm, c->move))
++            return TRUE;
++        if (sB.queueCount == 2 && sB.queue[0] < QUEUE_PA_BASE && sB.queue[1] < QUEUE_PA_BASE
++         && sB.folder.chips[sB.queue[0]].move == gPkbnUnisonPA.recipe[0]
++         && sB.folder.chips[sB.queue[1]].move == gPkbnUnisonPA.recipe[1] && c->letter == LETTER_WILD)
++            return TRUE;
++    }
+     AliveTable(alive);
+     for (i = 0; i < PKBN_PARTY_MAX; i++)
+         party[i] = sB.party[i].bm;
+@@ -1364,9 +1392,14 @@ static s8 FindPA(const u8 *q, u8 n, u8 *at)
+     {
+         if (q[i] >= QUEUE_PA_BASE || q[i + 1] >= QUEUE_PA_BASE || q[i + 2] >= QUEUE_PA_BASE)
+             continue;
++        if (UnisonPAAt(q, i))
++        {
++            *at = i;
++            return PA_UNISON;
++        }
+         for (p = 0; p < PKBN_PA_COUNT; p++)
+         {
+-            const u16 *r = gPkbnProgramAdvances[p].recipe;
++            const u16 *r = PKBN_PA(p).recipe;
+             if (sB.folder.chips[q[i]].move == r[0] && sB.folder.chips[q[i + 1]].move == r[1]
+              && sB.folder.chips[q[i + 2]].move == r[2])
+             {
+@@ -1383,7 +1416,7 @@ static void UpdatePAPreview(void)
+     u8 at;
+     s8 p = FindPA(sB.queue, sB.queueCount, &at);
+     if (p >= 0)
+-        snprintf(sB.paPreview, sizeof(sB.paPreview), "%s", gPkbnProgramAdvances[p].name);
++        snprintf(sB.paPreview, sizeof(sB.paPreview), "%s", PKBN_PA(p).name);
+     else
+         sB.paPreview[0] = '\0';
+ }
+@@ -1407,11 +1440,11 @@ static void FormProgramAdvances(void)
+         for (i = at + 1; i + 2 < sB.queueCount; i++)
+             sB.queue[i] = sB.queue[i + 2];
+         sB.queueCount -= 2;
+-        snprintf(line, sizeof(line), "PROGRAM ADVANCE! %s", gPkbnProgramAdvances[p].name);
++        snprintf(line, sizeof(line), "PROGRAM ADVANCE! %s", PKBN_PA(p).name);
+         Flash(line, 120);
+         PlaySE(SE_RG_POKE_JUMP_SUCCESS);   // POC-16b: a fanfare (was SE_EXP_MAX)
+         Vis_Post(VEV_PAFORM, SIDE_PLAYER, MOVE_NONE, 0, (s8)k, 0, 0);
+-        PKBN_LOG("Program Advance formed: %s", gPkbnProgramAdvances[p].name);
++        PKBN_LOG("Program Advance formed: %s", PKBN_PA(p).name);
+     }
+ }
+ 
+@@ -1618,6 +1651,112 @@ static void BeastRush(void)
+     PKBN_LOG("beast rush to (%d,%d)", (int)bx, (int)by);
+ }
+ 
++// ---- POC-20a: Bonds and Unison (Khaled's picks) ----------------------------------------------------------------------
++// Each pair of party Pokémon builds a Bond by fighting together (all TUNE): Cross with that partner +6; switching in for
++// the other right after it took a hit +2; a Program Advance using both their chips +4; both took part in a won battle
++// +1. At PKBN_BOND_MAX their Cross is a Unison: the partner's colours on your Pokémon (Gfx_FusePalette) and a pair
++// Program Advance. A Bond is kept by the two Pokémon (personality values), so it follows them through the PC.
++struct PkbnProgramAdvance gPkbnUnisonPA;
++static char sUnisonName[24];
++
++static u32 SlotPid(u8 slot)
++{
++    return slot == sB.active ? sB.f[SIDE_PLAYER].bm.personality : sB.party[slot].bm.personality;
++}
++
++static void BondEvent(u8 a, u8 b, s32 pts, const char *why)
++{
++    if (gPkbnReplayActive || a == b || a >= sB.partyCount || b >= sB.partyCount)
++        return;
++    PkbnBond_Add(SlotPid(a), SlotPid(b), pts);
++    PKBN_LOG("bond %s+%s %+d (%s) -> %u", sB.party[a].name, sB.party[b].name, (int)pts, why,
++             PkbnBond_Get(SlotPid(a), SlotPid(b)));
++}
++
++u8 PkbnGrid_BondWith(u8 slot)
++{
++    return PkbnBond_Get(SlotPid(sB.active), SlotPid(slot));
++}
++
++// The pair's best damaging move each: same-type first, then power.
++static u16 BestOwnMove(const struct BattlePokemon *bm)
++{
++    s32 k, best = -1;
++    u16 mv = MOVE_NONE;
++    for (k = 0; k < MAX_MON_MOVES; k++)
++    {
++        u16 m = bm->moves[k];
++        s32 sc;
++        if (m == MOVE_NONE || gBattleMoves[m].power == 0 || !PkbnFolder_MoveIsChip(m))
++            continue;
++        sc = gBattleMoves[m].power + ((gBattleMoves[m].type == bm->types[0] || gBattleMoves[m].type == bm->types[1]) ? 1000 : 0);
++        if (sc > best)
++            best = sc, mv = m;
++    }
++    return mv;
++}
++
++// The Unison's Program Advance: the two best moves, then any * chip. It strikes every enemy panel with whichever of
++// the pair's types hits the foe harder (picked when it fires), 200 power (TUNE).
++static void BuildUnisonPA(u8 slot)
++{
++    const struct BattlePokemon *a = &sB.f[SIDE_PLAYER].bm, *b = &sB.party[slot].bm;
++    memset(&gPkbnUnisonPA, 0, sizeof(gPkbnUnisonPA));
++    snprintf(sUnisonName, sizeof(sUnisonName), "%s+%s", sB.f[SIDE_PLAYER].name, sB.party[slot].name);
++    gPkbnUnisonPA.name = sUnisonName;
++    gPkbnUnisonPA.recipe[0] = BestOwnMove(a);
++    gPkbnUnisonPA.recipe[1] = BestOwnMove(b);
++    gPkbnUnisonPA.recipe[2] = MOVE_NONE;   // any * chip
++    gPkbnUnisonPA.kind = GK_FIELD;
++    gPkbnUnisonPA.type = a->types[0];
++    gPkbnUnisonPA.power = 200;
++    gPkbnUnisonPA.rows = gPkbnUnisonPA.hits = 1;
++    gPkbnUnisonPA.flags = PAF_NOFAINT;   // a FIELD attack that doesn't cost the user (like GEYSER)
++    PKBN_LOG("unison PA %s: moves %u, %u, then a * chip", sUnisonName, gPkbnUnisonPA.recipe[0], gPkbnUnisonPA.recipe[1]);
++}
++
++static bool8 UnisonPAAt(const u8 *q, u8 i)
++{
++    const struct FolderChip *c0 = &sB.folder.chips[q[i]], *c1 = &sB.folder.chips[q[i + 1]], *c2 = &sB.folder.chips[q[i + 2]];
++    return sB.f[SIDE_PLAYER].unison && gPkbnUnisonPA.recipe[0] && gPkbnUnisonPA.recipe[1]
++        && c0->move == gPkbnUnisonPA.recipe[0] && c1->move == gPkbnUnisonPA.recipe[1] && c2->letter == LETTER_WILD;
++}
++
++// Fired: the pair's type that hits the foe harder.
++static void UnisonPickType(void)
++{
++    const struct Fighter *p = &sB.f[SIDE_PLAYER];
++    u16 ea = 0, eb = 0;
++    u8 ta = p->bm.types[0], tb = p->crossType ? p->crossType - 1 : ta;
++    ea = Moves_TypeMulOnFoe(ta);
++    eb = Moves_TypeMulOnFoe(tb);
++    gPkbnUnisonPA.type = eb > ea ? tb : ta;
++}
++
++// A Program Advance from the Pokémon in and its Cross partner's chips together: +4.
++static void BondNotePA(u8 pa)
++{
++    const struct Fighter *p = &sB.f[SIDE_PLAYER];
++    s32 i;
++    bool8 own = FALSE, lent = FALSE;
++    if (!p->crossType)
++        return;
++    for (i = 0; i < 3; i++)
++    {
++        u16 m = PKBN_PA(pa).recipe[i];
++        bool8 mine = FALSE;
++        s32 k;
++        if (m == MOVE_NONE)
++            continue;
++        for (k = 0; k < MAX_MON_MOVES; k++)
++            mine |= p->bm.moves[k] == m;
++        mine |= Chip_SpeciesCanLearn(p->bm.species, m);
++        if (mine) own = TRUE; else lent = TRUE;
++    }
++    if (own && lent)
++        BondEvent(sB.active, p->crossSlot, 4, "program advance together");
++}
++
+ // ---- POC-19i: Cross (Khaled's pick: BN6's Cross, adapted) ----------------------------------------------------------
+ // BN6: on the Custom screen Up opens the Cross window (CrossSelect); "Activating once lets you stay linked during a
+ // battle"; a hit of the element the Cross is weak to does double damage and ends it (bn6f
+@@ -1677,6 +1816,29 @@ static void ApplyCross(u8 slot)
+     p->crossType = PkbnGrid_CrossTypeOf(slot) + 1;
+     p->crossSlot = slot;
+     sB.crossUsed = TRUE;
++    // POC-20a: a full Bond makes it a Unison
++    p->unison = PkbnGrid_BondWith(slot) >= PKBN_BOND_MAX;
++    if (p->unison)
++    {
++        Gfx_FusePalette(&p->pic, &sB.party[slot].pic);
++        BuildUnisonPA(slot);
++        Flash("UNISON!", 70);
++        if (getenv("PKBN_TEST_UNISON_PA") != NULL && sB.handCount >= 3)
++        {
++            // self-test: the hand opens with the pair's PA (the two moves, then the third chip made a * chip)
++            s32 i, k;
++            for (k = 0; k < 2; k++)
++                for (i = 0; i < sB.folder.count; i++)
++                    if (sB.folder.chips[i].move == gPkbnUnisonPA.recipe[k])
++                    {
++                        sB.hand[k] = i;
++                        break;
++                    }
++            sB.folder.chips[sB.hand[2]].letter = LETTER_WILD;
++            PKBN_LOG("test: unison PA hand");
++        }
++    }
++    BondEvent(sB.active, slot, 6, "cross");
+     gPkbnCross.userSpecies = p->bm.species;
+     gPkbnCross.userPid = p->bm.personality;
+     gPkbnCross.partnerSpecies = sB.party[slot].bm.species;
+@@ -1693,6 +1855,11 @@ void PkbnGrid_EndCross(bool8 broken)
+         return;
+     p->crossType = 0;
+     memset(&gPkbnCross, 0, sizeof(gPkbnCross));
++    if (p->unison)
++    {
++        p->unison = FALSE;
++        Gfx_LoadMonPic(&p->pic, p->bm.species, p->bm.personality, p->bm.otId);   // its own colours back
++    }
+     if (broken)
+     {
+         SetMsg("CROSS BROKE!", 50);
+@@ -2004,8 +2171,11 @@ static void UseNextChip(void)
+             return;
+         }
+         SpendPAChips(k);
++        BondNotePA(sB.paQueue[k].pa);   // POC-20a
++        if (sB.paQueue[k].pa == PA_UNISON)
++            UnisonPickType();
+         PlayLog_NotePA(sB.paQueue[k].pa);
+-        sB.chainPrev = gPkbnProgramAdvances[sB.paQueue[k].pa].recipe[2];
++        sB.chainPrev = PKBN_PA(sB.paQueue[k].pa).recipe[2];
+         Moves_UsePA(SIDE_PLAYER, sB.paQueue[k].pa, &p->bm, p->name, sB.active);
+         return;
+     }
+@@ -2417,7 +2587,7 @@ static s8 RivalPA(const struct Fighter *e)
+     s32 k, m, i, best = -1, bestPow = 0;
+     for (k = 0; k < PKBN_PA_COUNT; k++)
+     {
+-        const struct PkbnProgramAdvance *pa = &gPkbnProgramAdvances[k];
++        const struct PkbnProgramAdvance *pa = &PKBN_PA(k);
+         s32 known = 0;
+         bool8 finisher = FALSE;
+         for (i = 0; i < 3; i++)
+@@ -2481,7 +2651,7 @@ static void BossPhaseLands(struct Fighter *e)
+         s8 pa = PAByName(b->phasePA);
+         if (pa >= 0)
+         {
+-            EnemyLineUp(gPkbnProgramAdvances[pa].kind);
++            EnemyLineUp(PKBN_PA(pa).kind);
+             Moves_UsePA(SIDE_ENEMY, pa, &e->bm, e->name, 0);
+         }
+         break;
+@@ -2541,13 +2711,13 @@ static s8 TeamPA(const struct Fighter *a, const struct Fighter *b)
+     }
+     for (k = 0; k < PKBN_PA_COUNT; k++)
+     {
+-        u8 t = gPkbnProgramAdvances[k].type;
++        u8 t = PKBN_PA(k).type;
+         if ((a->bm.types[0] == t || a->bm.types[1] == t) && (b->bm.types[0] == t || b->bm.types[1] == t)
+-         && gPkbnProgramAdvances[k].power > bestPow)
+-            best = k, bestPow = gPkbnProgramAdvances[k].power;
++         && PKBN_PA(k).power > bestPow)
++            best = k, bestPow = PKBN_PA(k).power;
+     }
+     for (k = 0; k < PKBN_PA_COUNT && best < 0; k++)   // no type in common: the PA of the leader's lead type
+-        if (gPkbnProgramAdvances[k].type == a->bm.types[0])
++        if (PKBN_PA(k).type == a->bm.types[0])
+             best = k;
+     return best;
+ }
+@@ -2578,14 +2748,14 @@ static bool8 TeamSpecial(struct Fighter *e)
+     }
+     else
+         Pkbn_GameStringToAscii(names, gTrainers[gTrainerBattleOpponent_A].trainerName, sizeof(names));
+-    snprintf(line, sizeof(line), "%s: TEAM %s!", names, gPkbnProgramAdvances[pa].name);
++    snprintf(line, sizeof(line), "%s: TEAM %s!", names, PKBN_PA(pa).name);
+     Flash(line, 100);
+     PlaySE(SE_SUCCESS);
+     PKBN_LOG("team program advance: %s (%s + %s)", line, a->name, b->name);
+     sB.teamPAs++;
+     e->chainSlot = 0;
+     sB.foeAi[sB.cur ^ 1][1] += 60;   // the partner lines up too: its next attack waits
+-    EnemyLineUp(gPkbnProgramAdvances[pa].kind);
++    EnemyLineUp(PKBN_PA(pa).kind);
+     Moves_UsePA(SIDE_ENEMY, pa, &e->bm, e->name, 0);
+     return TRUE;
+ }
+@@ -2602,14 +2772,14 @@ static bool8 RivalSpecial(struct Fighter *e)
+         return FALSE;
+     {
+         char line[48];
+-        snprintf(line, sizeof(line), "%s: %s!", e->name, gPkbnProgramAdvances[pa].name);
++        snprintf(line, sizeof(line), "%s: %s!", e->name, PKBN_PA(pa).name);
+         Flash(line, 90);
+         PlaySE(SE_SUCCESS);
+         PKBN_LOG("rival program advance: %s", line);
+     }
+     e->paUses++;
+     e->chainSlot = 0;   // the PA replaces a queued follow-up
+-    EnemyLineUp(gPkbnProgramAdvances[pa].kind);
++    EnemyLineUp(PKBN_PA(pa).kind);
+     Moves_UsePA(SIDE_ENEMY, pa, &e->bm, e->name, 0);
+     return TRUE;
+ }
+@@ -3327,7 +3497,7 @@ void PkbnGrid_GetDebug(struct PkbnGridDebug *d)
+         if (sB.queue[0] == FOLDER_QUEUE_WILD)
+             d->nextKind = GK_BATON; // position-independent
+         else if (sB.queue[0] >= QUEUE_PA_BASE)
+-            d->nextKind = gPkbnProgramAdvances[sB.paQueue[sB.queue[0] - QUEUE_PA_BASE].pa].kind;
++            d->nextKind = PKBN_PA(sB.paQueue[sB.queue[0] - QUEUE_PA_BASE].pa).kind;
+         else
+         {
+             const struct FolderChip *ch = &sB.folder.chips[sB.queue[0]];
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index cd8e30c..0b2de11 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -875,7 +875,7 @@ static void DrawFighter(u16 *fb, u8 side)
+         flags |= GFX_TINT; color = (sTick & 4) ? RGB(31, 6, 2) : RGB(31, 20, 4); amt = (u8)(5 + ((sTick / 3) & 1));
+         dx += (sTick & 8) ? ((sTick & 1) ? 1 : 0) : 0;
+     }
+-    else if (f->crossType)
++    else if (f->crossType && !f->unison)   // POC-20a: a Unison shows its fused colours instead
+     {
+         // POC-19i: crossed - the partner's type glows through (a slow pulse)
+         u8 p = (u8)((sTick / 4) % 12);
+@@ -1043,7 +1043,14 @@ static void DrawPlayerHud(u16 *fb)
+     if (f->crossType)
+     {
+         struct PkbnImage icon = Gfx_TypeIcon(f->crossType - 1);   // POC-19i: the crossed type
+-        Gfx_Draw(fb, &icon, x + (tag ? Pkbn_EmTextWidth(tag, PKBN_FONT_SMALL) + 8 : 3), 2, 0, 0, 0);
++        s32 ix = x + (tag ? Pkbn_EmTextWidth(tag, PKBN_FONT_SMALL) + 8 : 3);
++        if (f->unison)
++        {
++            struct PkbnImage own = Gfx_TypeIcon(f->bm.types[0]);   // POC-20a: a Unison shows both types
++            Gfx_Draw(fb, &own, ix, 2, 0, 0, 0);
++            ix += 33;
++        }
++        Gfx_Draw(fb, &icon, ix, 2, 0, 0, 0);
+     }
+     if (sB.beastTurns)
+     {
+@@ -1166,7 +1173,7 @@ static void DrawBottomHud(u16 *fb)
+             snprintf(line, sizeof(line), "SWITCH > ANY  *");
+         else if (sB.queue[0] >= QUEUE_PA_BASE)
+         {
+-            const struct PkbnProgramAdvance *pa = &gPkbnProgramAdvances[sB.paQueue[sB.queue[0] - QUEUE_PA_BASE].pa];
++            const struct PkbnProgramAdvance *pa = &PKBN_PA(sB.paQueue[sB.queue[0] - QUEUE_PA_BASE].pa);
+             snprintf(line, sizeof(line), "PA %s  %u", pa->name, pa->power);
+         }
+         else
+@@ -1679,9 +1686,22 @@ static void DrawCrossWindow(u16 *fb, u32 t)
+         Text(fb, cx + 36 + b, ART_Y + 36, ">", COL_WHITE);
+     }
+     Gfx_Draw(fb, &icon, cx + 2, ART_Y + 40, 0, 0, 0);
++    {
++        // POC-20a: the pair's Bond - a heart and a meter; full, it pulses (a Unison)
++        u8 bond = PkbnGrid_BondWith(slot);
++        bool8 full = bond >= PKBN_BOND_MAX;
++        s32 bx = ART_X + 6, by = ART_Y + ART_H - 9, bw = 34;
++        u16 hc = full ? ((t & 8) ? RGB(31, 12, 20) : RGB(31, 24, 28)) : RGB(26, 8, 14);
++        Pkbn_FillRect(fb, bx + 1, by, 2, 1, hc); Pkbn_FillRect(fb, bx + 4, by, 2, 1, hc);
++        Pkbn_FillRect(fb, bx, by + 1, 7, 2, hc); Pkbn_FillRect(fb, bx + 1, by + 3, 5, 1, hc);
++        Pkbn_FillRect(fb, bx + 2, by + 4, 3, 1, hc); Pkbn_FillRect(fb, bx + 3, by + 5, 1, 1, hc);
++        Pkbn_FillRect(fb, bx + 10, by + 1, bw + 2, 5, RGB(2, 3, 8));
++        Pkbn_FillRect(fb, bx + 11, by + 2, bw * bond / PKBN_BOND_MAX, 3, hc);
++    }
+     Gfx_ClipNone();
+     Gfx_Draw(fb, &icon, ART_X, y, 0, 0, 0);
+-    TextBig(fb, ART_X + 35, y - 2, "CROSS", (t & 8) ? COL_GAUGE_FULL : COL_WHITE);
++    TextBig(fb, ART_X + 35, y - 2, PkbnGrid_BondWith(slot) >= PKBN_BOND_MAX ? "UNISON" : "CROSS",
++            (t & 8) ? COL_GAUGE_FULL : COL_WHITE);
+ }
+ 
+ static void DrawCustomScreen(u16 *fb)
+@@ -1916,7 +1936,7 @@ static void DrawStackChip(u16 *fb, s32 x, s32 y, u8 id)
+     }
+     if (id >= QUEUE_PA_BASE)
+     {
+-        const struct PkbnProgramAdvance *pa = &gPkbnProgramAdvances[sB.paQueue[id - QUEUE_PA_BASE].pa];
++        const struct PkbnProgramAdvance *pa = &PKBN_PA(sB.paQueue[id - QUEUE_PA_BASE].pa);
+         Pkbn_FrameRect(fb, x, y, CHIP_ICON_W + 2, CHIP_ICON_H + 2, ((sTick / 4) & 1) ? COL_PA : COL_WHITE);
+         DrawChipIcon(fb, x + 1, y + 1, pa->recipe[2], FALSE);
+         return;
+@@ -1988,7 +2008,7 @@ static void DrawPAForming(u16 *fb)
+     }
+     {
+         // the Program Advance's card
+-        const struct PkbnProgramAdvance *pa = &gPkbnProgramAdvances[sPAAnimPA];
++        const struct PkbnProgramAdvance *pa = &PKBN_PA(sPAAnimPA);
+         char line[32];
+         s32 w = 164, h = 36;
+         Draw_Box(fb, cx - w / 2, cy - h / 2, w, h, RGB(16, 2, 10), ((sTick / 4) & 1) ? COL_PA : COL_WHITE, 15);
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 69d710c..7f820e5 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -129,7 +129,7 @@ static u8 EffectOf(const struct Attack *a)
+ 
+ static const struct PkbnProgramAdvance *PAOf(const struct Attack *a)
+ {
+-    return a->pa ? &gPkbnProgramAdvances[a->pa - 1] : NULL;
++    return a->pa ? &PKBN_PA(a->pa - 1) : NULL;
+ }
+ 
+ // NaviCust (POC-9): the compiled programs behind an attack (player side: the Pokémon that used it).
+@@ -216,7 +216,7 @@ static void NoteImpact(s32 r, s32 c)
+     {
+         sB.fxMove[r][c] = a->move;
+         sB.fxKind[r][c] = a->kind;
+-        sB.fxType[r][c] = a->pa ? gPkbnProgramAdvances[a->pa - 1].type : a->typeOverride ? a->typeOverride : gBattleMoves[a->move].type;
++        sB.fxType[r][c] = a->pa ? PKBN_PA(a->pa - 1).type : a->typeOverride ? a->typeOverride : gBattleMoves[a->move].type;
+         sB.fxSide[r][c] = a->side;
+         sB.fxPA[r][c] = a->pa;
+     }
+@@ -554,6 +554,14 @@ static struct BattlePokemon DefenderData(u8 defSide)
+     return d;
+ }
+ 
++// POC-20a: the type chart multiplier (x10) of `type` on the foe the player is aiming at.
++u16 Moves_TypeMulOnFoe(u8 type)
++{
++    struct BattlePokemon d = DefenderData(SIDE_ENEMY);
++    s32 one = 10;
++    return ApplyTypeChart(type, &d, &one);
++}
++
+ // AI estimate (POC-11 rivals): Gen 3 damage of `move` from side's Pokémon on the other one, with STAB and the type
+ // chart but no random roll, no crit and no side effects. 0 when it can't hurt (status moves, immunities).
+ s32 Moves_EstimateDamage(u8 side, u16 move, u16 *eff)
+@@ -2836,7 +2844,7 @@ void Moves_ComboPanel(u8 type, s8 x, s8 y)
+ // A Program Advance: a brand-new move made from three chips (tools/attacks_curated.py PA_EFFECTS).
+ void Moves_UsePA(u8 side, u8 paIndex, const struct BattlePokemon *user, const char *userName, u8 userSlot)
+ {
+-    const struct PkbnProgramAdvance *pa = &gPkbnProgramAdvances[paIndex];
++    const struct PkbnProgramAdvance *pa = &PKBN_PA(paIndex);
+     struct Fighter *me = &sB.f[side];
+     struct Attack *a;
+ 
+diff --git a/src/pkbn/grid_vfx.c b/src/pkbn/grid_vfx.c
+index 08e3619..06eb48a 100644
+--- a/src/pkbn/grid_vfx.c
++++ b/src/pkbn/grid_vfx.c
+@@ -180,7 +180,7 @@ static void TypeBurst(u8 type, s32 x, s32 y, bool8 big)
+ static u8 AttackType(const struct Attack *a)
+ {
+     if (a->pa)
+-        return gPkbnProgramAdvances[a->pa - 1].type;
++        return PKBN_PA(a->pa - 1).type;
+     return a->typeOverride ? a->typeOverride : gBattleMoves[a->move].type;
+ }
+ 
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index 7302346..f4cd655 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -29,7 +29,7 @@
+ #define PKBN_SAVE_BAK     Platform_DataPath("pkbn.sav.bak")
+ #define PKBN_SAVE_BAD     Platform_DataPath("pkbn.sav.bad")
+ extern const char *Platform_DataPath(const char *file);
+-#define PKBN_SAVE_VERSION 8   // v8 (POC-19): Regular Chips;
++#define PKBN_SAVE_VERSION 9   // v9 (POC-20): Bonds, Dark Chips, ghost records; v8 (POC-19): Regular Chips;
+                               // v7 v7 (POC-18): lessons seen;
+                               // v2 (POC-10): chip pack, grants, candy, folder; v3 (POC-11): partner chips;
+                               // v4 (POC-13): folders 2 and 3 and which one is equipped;
+@@ -83,8 +83,16 @@ struct PkbnSaveFile
+     u16 regMove[PKBN_FOLDERS];                // BN6's Regular Chip per folder (MOVE_NONE = none)
+     u8 regLetter[PKBN_FOLDERS];
+     u8 beastBosses;                           // POC-19j: legendary bosses beaten or caught (bit per boss) - Beast Out
++    // ---- v9 (POC-20) ----
++    struct { u32 pidA, pidB; u8 points; u8 pad[3]; } bonds[PKBN_BOND_SLOTS];   // Bonds between pairs of Pokémon
++    u8 darkOffered;                           // Dark Chip offers already made (bit per giver; YES or NO is final)
++    u8 darkTaken;                             // ... and accepted
++    u8 pad9[2];
++    struct { u32 hash; u16 frames; u8 bust; u8 pad; } ghostBest[PKBN_GHOST_RECORDS];   // best win per ghost
+ };
+ 
++#define V8_SIZE offsetof(struct PkbnSaveFile, bonds)
++
+ #define V7_SIZE offsetof(struct PkbnSaveFile, regMove)
+ 
+ #define V6_SIZE offsetof(struct PkbnSaveFile, tutorialSeen)
+@@ -188,6 +196,8 @@ void PkbnSave_Read(void)
+         memset((u8 *)&tmp + V6_SIZE, 0, sizeof(tmp) - V6_SIZE); // v6 -> v7
+     else if (tmp.version == 7)
+         memset((u8 *)&tmp + V7_SIZE, 0, sizeof(tmp) - V7_SIZE); // v7 -> v8: no Regular Chips
++    else if (tmp.version == 8)
++        memset((u8 *)&tmp + V8_SIZE, 0, sizeof(tmp) - V8_SIZE); // v8 -> v9: no Bonds, Dark Chips or ghost records
+     if (tmp.version < 7)
+         tmp.tutorialSeen = tmp.tutorialSeen2 = 0xFF;   // a game already under way: no lessons, and NaviCust stays open as it was
+     if (tmp.version < 5)
+@@ -631,6 +641,90 @@ void PkbnFolder_SetRegular(u8 folder, u16 move, u8 letter)
+     sSave.regLetter[folder] = letter;
+ }
+ 
++// ---- POC-20a: Bonds (src/pkbn/grid_battle.c) ----------------------------------------------------------------------
++// A pair is stored by the two Pokémon's personality values (order-free), so it follows them through the PC.
++static s32 BondFind(u32 a, u32 b)
++{
++    s32 i;
++    for (i = 0; i < PKBN_BOND_SLOTS; i++)
++        if ((sSave.bonds[i].pidA == a && sSave.bonds[i].pidB == b) || (sSave.bonds[i].pidA == b && sSave.bonds[i].pidB == a))
++            return i;
++    return -1;
++}
++
++u8 PkbnBond_Get(u32 pidA, u32 pidB)
++{
++    s32 i;
++    if (getenv("PKBN_TEST_BOND") != NULL)
++        return (u8)atoi(getenv("PKBN_TEST_BOND"));   // self-tests: every pair at this Bond
++    i = BondFind(pidA, pidB);
++    return i < 0 ? 0 : sSave.bonds[i].points;
++}
++
++void PkbnBond_Add(u32 pidA, u32 pidB, s32 delta)
++{
++    s32 i, v;
++    if (pidA == pidB || delta == 0)
++        return;
++    i = BondFind(pidA, pidB);
++    if (i < 0)
++    {
++        s32 k, low = 0x7FFF;
++        if (delta < 0)
++            return;
++        for (k = 0; k < PKBN_BOND_SLOTS; k++)   // a free slot, else the weakest Bond makes room
++            if (sSave.bonds[k].points < low)
++                low = sSave.bonds[k].points, i = k;
++        sSave.bonds[i].pidA = pidA;
++        sSave.bonds[i].pidB = pidB;
++        sSave.bonds[i].points = 0;
++    }
++    v = sSave.bonds[i].points + delta;
++    sSave.bonds[i].points = v < 0 ? 0 : v > PKBN_BOND_MAX ? PKBN_BOND_MAX : v;
++}
++
++// POC-20c: Dark Chips - who already offered (bit per giver) and who was accepted
++bool8 PkbnDark_Offered(u8 giver) { return (sSave.darkOffered >> giver) & 1; }
++bool8 PkbnDark_Taken(u8 giver) { return (sSave.darkTaken >> giver) & 1; }
++void PkbnDark_SetOffered(u8 giver, bool8 taken)
++{
++    sSave.darkOffered |= 1 << giver;
++    if (taken)
++        sSave.darkTaken |= 1 << giver;
++}
++
++// POC-20b: ghost records - best win time and Busting Level per ghost (by its code's hash)
++bool8 PkbnGhost_Best(u32 hash, u16 *frames, u8 *bust)
++{
++    s32 i;
++    for (i = 0; i < PKBN_GHOST_RECORDS; i++)
++        if (sSave.ghostBest[i].hash == hash && sSave.ghostBest[i].frames)
++        {
++            *frames = sSave.ghostBest[i].frames;
++            *bust = sSave.ghostBest[i].bust;
++            return TRUE;
++        }
++    return FALSE;
++}
++
++void PkbnGhost_NoteWin(u32 hash, u16 frames, u8 bust)
++{
++    s32 i, slot = -1;
++    for (i = 0; i < PKBN_GHOST_RECORDS && slot < 0; i++)
++        if (sSave.ghostBest[i].hash == hash)
++            slot = i;
++    for (i = 0; i < PKBN_GHOST_RECORDS && slot < 0; i++)
++        if (sSave.ghostBest[i].frames == 0)
++            slot = i;
++    if (slot < 0)
++        slot = 0;   // full: the oldest goes (TUNE: 32 ghosts)
++    if (sSave.ghostBest[slot].hash != hash || sSave.ghostBest[slot].frames == 0 || frames < sSave.ghostBest[slot].frames)
++        sSave.ghostBest[slot].frames = frames;
++    if (sSave.ghostBest[slot].hash != hash || bust > sSave.ghostBest[slot].bust)
++        sSave.ghostBest[slot].bust = bust;
++    sSave.ghostBest[slot].hash = hash;
++}
++
+ // POC-19j: Beast Out opens once a legendary boss is beaten or caught (src/pkbn/grid_battle.c)
+ bool8 PkbnBeast_Unlocked(void)
+ {
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index 4e52b13..1e26765 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -143,6 +143,22 @@ static void Autopilot(void)
+             }
+             break;
+         }
++        // POC-19j: PKBN_TEST_BEAST=1 - SELECT arms Beast Out on every Custom it can (a second one goes Beast Over)
++        if (getenv("PKBN_TEST_BEAST") != NULL && !PkbnGrid_BeastArmed() && PkbnGrid_BeastAvailable())
++        {
++            pressed = SELECT_BUTTON;
++            break;
++        }
++        // POC-19i: PKBN_TEST_CROSS=1 - Up opens the Cross window on the first Custom, A takes the first partner
++        if (getenv("PKBN_TEST_CROSS") != NULL && !SmartBot() && (PkbnGrid_CrossOpen() || PkbnGrid_CrossAvailable()))
++        {
++            static u8 sCrossLook;   // screenshots: the window stays up a moment, the cursor moves once
++            if (PkbnGrid_CrossOpen())
++                pressed = ++sCrossLook == 30 ? DPAD_RIGHT : sCrossLook == 60 ? DPAD_LEFT : sCrossLook >= 90 ? A_BUTTON : 0;
++            else
++                pressed = d.cursor < 5 ? DPAD_UP : PkbnGrid_CursorKeyToward(0);
++            break;
++        }
+         // PKBN_TEST_PICKS="0,2,4": on the first Custom, queue these hand positions in this order.
+         if (sPicksLeft > 0)
+         {
+@@ -167,22 +183,6 @@ static void Autopilot(void)
+             if (edge) sPicksDone = FALSE;
+             break;
+         }
+-        // POC-19j: PKBN_TEST_BEAST=1 - SELECT arms Beast Out on every Custom it can (a second one goes Beast Over)
+-        if (getenv("PKBN_TEST_BEAST") != NULL && !PkbnGrid_BeastArmed() && PkbnGrid_BeastAvailable())
+-        {
+-            pressed = SELECT_BUTTON;
+-            break;
+-        }
+-        // POC-19i: PKBN_TEST_CROSS=1 - Up opens the Cross window on the first Custom, A takes the first partner
+-        if (getenv("PKBN_TEST_CROSS") != NULL && !SmartBot() && (PkbnGrid_CrossOpen() || PkbnGrid_CrossAvailable()))
+-        {
+-            static u8 sCrossLook;   // screenshots: the window stays up a moment, the cursor moves once
+-            if (PkbnGrid_CrossOpen())
+-                pressed = ++sCrossLook == 30 ? DPAD_RIGHT : sCrossLook == 60 ? DPAD_LEFT : sCrossLook >= 90 ? A_BUTTON : 0;
+-            else
+-                pressed = d.cursor < 5 ? DPAD_UP : PkbnGrid_CursorKeyToward(0);
+-            break;
+-        }
+         {
+             // POC-18: a lesson wants a particular slot
+             u8 want = Tut_WantedCursor();
+-- 
+2.43.0
+

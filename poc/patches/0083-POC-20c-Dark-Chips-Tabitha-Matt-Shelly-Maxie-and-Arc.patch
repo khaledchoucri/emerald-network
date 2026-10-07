@@ -1,0 +1,582 @@
+From 7fded854bc0b802f4e7dbda65a2f7b5fd98c753c Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 7 Oct 2026 15:01:44 +0300
+Subject: [PATCH 83/85] =?UTF-8?q?POC-20c:=20Dark=20Chips=20-=20Tabitha,=20?=
+ =?UTF-8?q?Matt,=20Shelly,=20Maxie=20and=20Archie=20each=20offer=20one=20a?=
+ =?UTF-8?q?fter=20you=20beat=20them=20(YES=20or=20NO,=20once);=20one=20of?=
+ =?UTF-8?q?=20each=20in=20the=20folder;=20using=20one=20costs=20the=20Pok?=
+ =?UTF-8?q?=C3=A9mon=2020=20friendship=20and=2010=20Bond=20with=20everyone?=
+ =?UTF-8?q?,=20ends=20Full=20Synchro,=20Cross=20and=20Unison=20for=20the?=
+ =?UTF-8?q?=20battle,=20and=20leaves=20a=20dark=20aura=20while=20its=20fri?=
+ =?UTF-8?q?endship=20is=20under=20100?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/chip_pack.h     |  2 ++
+ include/pkbn/dark.h          | 27 +++++++++++++++++++
+ include/pkbn/grid_internal.h |  1 +
+ include/pkbn/move_table.h    |  5 +++-
+ src/pkbn/bot.c               |  2 ++
+ src/pkbn/dark.c              | 45 +++++++++++++++++++++++++++++++
+ src/pkbn/folder.c            | 19 +++++++++++--
+ src/pkbn/grid_battle.c       | 43 ++++++++++++++++++++++++-----
+ src/pkbn/grid_draw.c         | 33 +++++++++++++++++++----
+ src/pkbn/grid_moves.c        | 11 +++++---
+ src/pkbn/pkbn_save.c         | 33 ++++++++++++++++++++++-
+ src/pkbn/post_battle.c       | 52 +++++++++++++++++++++++++++++++++++-
+ 12 files changed, 252 insertions(+), 21 deletions(-)
+ create mode 100644 include/pkbn/dark.h
+ create mode 100644 src/pkbn/dark.c
+
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index 18fed9c..1f2d8c4 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -51,6 +51,8 @@ void PkbnBond_Add(u32 pidA, u32 pidB, s32 delta);
+ bool8 PkbnDark_Offered(u8 giver);
+ bool8 PkbnDark_Taken(u8 giver);
+ void PkbnDark_SetOffered(u8 giver, bool8 taken);
++bool8 PkbnDark_Marked(u32 personality);
++void PkbnDark_Mark(u32 personality);
+ bool8 PkbnGhost_Best(u32 hash, u16 *frames, u8 *bust);
+ void PkbnGhost_NoteWin(u32 hash, u16 frames, u8 bust);
+ void PkbnBeast_Note(u8 boss);
+diff --git a/include/pkbn/dark.h b/include/pkbn/dark.h
+new file mode 100644
+index 0000000..3ee5f45
+--- /dev/null
++++ b/include/pkbn/dark.h
+@@ -0,0 +1,27 @@
++#ifndef GUARD_PKBN_DARK_H
++#define GUARD_PKBN_DARK_H
++// POC-20c: Dark Chips (src/pkbn/dark.c). BN6's own text: DarkChips are "against the law", and "You can use only 1 of
++// the same DarkChip" (bn6f data/textscript/compressed/CompText87E9578.s, CompText86CEE84.s). The rest is ours: Team
++// Magma's and Team Aqua's admins and leaders offer one after you beat them; using one costs the Pokémon friendship and
++// Bonds, shuts Full Synchro, Cross and Unison for the battle, and leaves a dark aura while its friendship is low.
++#include "global.h"
++#include "pkbn/move_table.h"
++
++#define DARK_CHIP     0x40          // FolderChip.slot: DARK_CHIP | giver (owner CHIP_SHARED)
++#define DARK_GIVERS   5             // Tabitha, Matt, Shelly, Maxie, Archie (Emerald's admins and leaders)
++#define PA_DARK0      (PA_UNISON + 1)
++#define DARK_FRIENDSHIP_COST 20     // TUNE
++#define DARK_BOND_COST       10     // TUNE
++#define DARK_AURA_BELOW      100    // TUNE: friendship under this shows the aura on a Pokémon that used one
++
++struct PkbnDarkChip
++{
++    const char *giver;              // as the game spells it
++    u16 faceMove;                   // the move whose art the chip shows
++    struct PkbnProgramAdvance pa;   // what it fires (Moves_UsePA)
++};
++extern const struct PkbnDarkChip gPkbnDarkChips[DARK_GIVERS];
++
++s8 PkbnDark_GiverOf(u16 trainerId);                 // -1: not a giver
++
++#endif // GUARD_PKBN_DARK_H
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index d27287d..e6a7073 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -244,6 +244,7 @@ struct GridBattle
+     bool8 lowHp;               // POC-17c: the low-HP alarm is on
+     u8 runHold;                // POC-18: frames SELECT has been held (running needs RUN_HOLD_FRAMES)
+     bool8 regDealt;            // POC-19: the Regular Chip has been dealt (first hand only)
++    bool8 darkUsed;            // POC-20c: a Dark Chip was used - no Full Synchro, Cross or Unison for the rest of it
+     bool8 crossOpen;           // POC-19i: the Cross window is open on the Custom screen
+     bool8 crossUsed;           // POC-19i: once per battle
+     u8 crossCursor, crossCount;
+diff --git a/include/pkbn/move_table.h b/include/pkbn/move_table.h
+index 196cbed..3e222e0 100644
+--- a/include/pkbn/move_table.h
++++ b/include/pkbn/move_table.h
+@@ -100,7 +100,10 @@ extern const struct PkbnProgramAdvance gPkbnProgramAdvances[];
+ // POC-20a: index PKBN_PA_COUNT is the Unison pair's Program Advance, built when a Unison starts (grid_battle.c)
+ #define PA_UNISON PKBN_PA_COUNT
+ extern struct PkbnProgramAdvance gPkbnUnisonPA;
+-#define PKBN_PA(i) (*((i) == PA_UNISON ? &gPkbnUnisonPA : &gPkbnProgramAdvances[(i)]))
++// POC-20c: indices PA_UNISON + 1 ... are the Dark Chips (include/pkbn/dark.h, gPkbnDarkPA)
++extern const struct PkbnProgramAdvance *Pkbn_DarkPA(u8 i);
++#define PKBN_PA(i) (*((i) == PKBN_PA_COUNT ? &gPkbnUnisonPA : (i) > PKBN_PA_COUNT ? Pkbn_DarkPA((i) - PKBN_PA_COUNT - 1) \
++                                                                                  : &gPkbnProgramAdvances[(i)]))
+ extern const char *const gPkbnKindNames[];
+ 
+ #endif // GUARD_PKBN_MOVE_TABLE_H
+diff --git a/src/pkbn/bot.c b/src/pkbn/bot.c
+index b39d045..2c52308 100644
+--- a/src/pkbn/bot.c
++++ b/src/pkbn/bot.c
+@@ -44,6 +44,8 @@ static s32 ChipScore(u8 handPos)
+     u8 kind = Moves_KindOf(mv);
+     s32 dmg;
+ 
++    if (ch->slot & 0x40 && ch->owner == CHIP_SHARED)
++        return getenv("PKBN_BOT_DARK") ? 90 : 0;   // POC-20c: the bot leaves Dark Chips alone unless told
+     if (ch->owner != CHIP_SHARED || (ch->slot & LEADER_CHIP))
+         return 60;                                  // partner and Leader chips are strong by design
+     if (!Chip_CanUse(&me->bm, mv))
+diff --git a/src/pkbn/dark.c b/src/pkbn/dark.c
+new file mode 100644
+index 0000000..298e45c
+--- /dev/null
++++ b/src/pkbn/dark.c
+@@ -0,0 +1,45 @@
++// POC-20c: Dark Chips (Khaled's pick). include/pkbn/dark.h.
++// Each fires like a Program Advance (Moves_UsePA, index PA_DARK0 + giver). Power: about 2.5x the strongest move of its
++// type, every one a full-field or full-row attack (Khaled's pick; TUNE). Names and shapes are ours.
++#include "global.h"
++#include "constants/moves.h"
++#include "constants/opponents.h"
++#include "constants/battle.h"
++#include "pkbn/move_table.h"
++#include "pkbn/dark.h"
++
++#ifdef PORTABLE
++
++const struct PkbnDarkChip gPkbnDarkChips[DARK_GIVERS] = {
++    { "TABITHA", MOVE_FLAMETHROWER, { "DARK BLAZE",    {0}, GK_FIELD,     TYPE_FIRE,   300, 1, 1, PAF_NOFAINT, 0, 0 } },
++    { "MATT",    MOVE_SURF,         { "DARK TIDE",     {0}, GK_WAVE,      TYPE_WATER,  300, 3, 1, 0,           0, 0 } },
++    { "SHELLY",  MOVE_ICE_BEAM,     { "DARK FREEZE",   {0}, GK_WAVE,      TYPE_ICE,    300, 3, 1, 0,           0, 0 } },
++    { "MAXIE",   MOVE_EARTHQUAKE,   { "PRIMAL QUAKE",  {0}, GK_SHOCKWAVE, TYPE_GROUND, 375, 3, 1, 0,           0, 0 } },   // Groudon's power
++    { "ARCHIE",  MOVE_HYDRO_PUMP,   { "PRIMAL SURGE",  {0}, GK_FIELD,     TYPE_WATER,  375, 1, 1, PAF_NOFAINT, 0, 0 } },   // Kyogre's power
++};
++
++const struct PkbnProgramAdvance *Pkbn_DarkPA(u8 i)
++{
++    return &gPkbnDarkChips[i < DARK_GIVERS ? i : 0].pa;
++}
++
++// Every battle with that admin or leader counts; the offer comes after the first win (pkbn.sav darkOffered).
++s8 PkbnDark_GiverOf(u16 trainerId)
++{
++    switch (trainerId)
++    {
++    case TRAINER_TABITHA_MT_CHIMNEY: case TRAINER_TABITHA_MAGMA_HIDEOUT: case TRAINER_TABITHA_MOSSDEEP:
++        return 0;
++    case TRAINER_MATT:
++        return 1;
++    case TRAINER_SHELLY_WEATHER_INSTITUTE: case TRAINER_SHELLY_SEAFLOOR_CAVERN:
++        return 2;
++    case TRAINER_MAXIE_MT_CHIMNEY: case TRAINER_MAXIE_MAGMA_HIDEOUT: case TRAINER_MAXIE_MOSSDEEP:
++        return 3;
++    case TRAINER_ARCHIE:
++        return 4;
++    }
++    return -1;
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index fd3291c..d2f2f29 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -14,6 +14,7 @@
+ #include "pkbn/leader.h"
+ #include "pkbn/chip_pack.h"
+ #include "pkbn/move_table.h"
++#include "pkbn/dark.h"
+ #include "event_data.h"
+ #include "constants/flags.h"
+ #include "battle_main.h"
+@@ -424,6 +425,20 @@ shuffle:
+             megas++;
+         }
+     }
++    // POC-20c: Dark Chips - one of each you took (BN6: "You can use only 1 of the same DarkChip"), code *
++    {
++        u8 g;
++        for (g = 0; g < DARK_GIVERS && folder->count < FOLDER_MAX; g++)
++        {
++            if (!PkbnDark_Taken(g))
++                continue;
++            folder->chips[folder->count].move = gPkbnDarkChips[g].faceMove;
++            folder->chips[folder->count].letter = LETTER_WILD;
++            folder->chips[folder->count].owner = CHIP_SHARED;
++            folder->chips[folder->count].slot = DARK_CHIP | g;
++            folder->count++;
++        }
++    }
+     for (p = 0; p < folder->count; p++)
+         folder->pile[p] = p;
+     folder->pileCount = folder->count;
+@@ -547,8 +562,8 @@ bool8 PkbnFolder_CanAppend(const struct Folder *folder, const u8 *queue, u8 queu
+         // POC-10: the Pokémon in battle must be able to use it (shared chips don't switch anyone in)
+         if (c->owner != CHIP_SHARED)
+             return alive[c->owner];
+-        if (c->slot & LEADER_CHIP)
+-            return alive[active];   // a Leader chip calls its own Pokémon: anyone can use it
++        if (c->slot & (LEADER_CHIP | DARK_CHIP))
++            return alive[active];   // a Leader chip calls its own Pokémon, a Dark Chip works for anyone
+         return alive[active] && Chip_CanUse(&party[active], c->move);
+     }
+ }
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 407fe2b..faab9aa 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -45,6 +45,7 @@
+ #include "constants/battle_ai.h"
+ #include "pkbn/tutorial.h"
+ #include "pkbn/ghost.h"
++#include "pkbn/dark.h"
+ #include "battle_interface.h"
+ #include "m4a.h"
+ 
+@@ -566,8 +567,8 @@ static bool8 ChipAlive(u8 idx)
+     s32 p;
+     if (c->owner != CHIP_SHARED)
+         return PartyAlive(c->owner);
+-    if (c->slot & LEADER_CHIP)
+-        return TRUE;   // Leader chip (POC-14)
++    if (c->slot & (LEADER_CHIP | DARK_CHIP))
++        return TRUE;   // Leader chip (POC-14), Dark Chip (POC-20c)
+     SyncActiveToParty();
+     for (p = 0; p < sB.partyCount; p++)
+         if (PartyAlive(p) && Chip_CanUse(&sB.party[p].bm, c->move))
+@@ -586,7 +587,7 @@ static bool8 ChipPlayableNow(u8 idx)
+         return FALSE;
+     if (c->owner != CHIP_SHARED)
+         return PartyAlive(c->owner);
+-    return (c->slot & LEADER_CHIP) || Chip_CanUse(&sB.f[SIDE_PLAYER].bm, c->move);
++    return (c->slot & (LEADER_CHIP | DARK_CHIP)) || Chip_CanUse(&sB.f[SIDE_PLAYER].bm, c->move);
+ }
+ 
+ static void GuaranteePlayable(void)
+@@ -669,7 +670,7 @@ static void RefillHand(void)
+         {
+             const struct FolderChip *c = &sB.folder.chips[keep[i]];
+             if (c->owner != CHIP_SHARED ? PartyAlive(c->owner)
+-              : (c->slot & LEADER_CHIP) || Chip_CanUse(&sB.f[SIDE_PLAYER].bm, c->move))
++              : (c->slot & (LEADER_CHIP | DARK_CHIP)) || Chip_CanUse(&sB.f[SIDE_PLAYER].bm, c->move))
+                 any = TRUE;
+         }
+         if (!any)
+@@ -715,7 +716,7 @@ static void RefillHand(void)
+         {
+             const struct FolderChip *c = &sB.folder.chips[sB.hand[i]];
+             if (c->owner != CHIP_SHARED ? PartyAlive(c->owner)
+-              : (c->slot & LEADER_CHIP) || Chip_CanUse(&sB.f[SIDE_PLAYER].bm, c->move))
++              : (c->slot & (LEADER_CHIP | DARK_CHIP)) || Chip_CanUse(&sB.f[SIDE_PLAYER].bm, c->move))
+                 usable = TRUE;
+         }
+         if (!usable)
+@@ -1778,8 +1779,8 @@ bool8 PkbnGrid_CrossUnlocked(void)
+ bool8 PkbnGrid_CrossAvailable(void)
+ {
+     s32 i;
+-    if (!PkbnGrid_CrossUnlocked() || sB.crossUsed || sB.firstBattle || sB.f[SIDE_PLAYER].crossType)
+-        return FALSE;
++    if (!PkbnGrid_CrossUnlocked() || sB.crossUsed || sB.firstBattle || sB.f[SIDE_PLAYER].crossType || sB.darkUsed)
++        return FALSE;   // POC-20c: none after a Dark Chip
+     for (i = 0; i < sB.partyCount; i++)
+         if (i != sB.active && PartyAlive(i))
+             return TRUE;
+@@ -2212,6 +2213,34 @@ static void UseNextChip(void)
+         ChainUse(ch->move, 0);
+         return;
+     }
++    if (ch->slot & DARK_CHIP)
++    {
++        // POC-20c: a Dark Chip - huge, and it costs the Pokémon that uses it
++        u8 g = ch->slot & 7, i;
++        struct Fighter *pf = &sB.f[SIDE_PLAYER];
++        char line[48];
++        snprintf(line, sizeof(line), "%s!", gPkbnDarkChips[g].pa.name);
++        Flash(line, 80);
++        PlaySE(SE_M_NIGHTMARE);
++        PlayLog_NoteChip(ch->move);
++        Moves_UsePA(SIDE_PLAYER, PA_DARK0 + g, &pf->bm, pf->name, sB.active);
++        if (!gPkbnReplayActive)
++        {
++            u8 fr = GetMonData(&gPlayerParty[sB.active], MON_DATA_FRIENDSHIP);
++            fr = fr > DARK_FRIENDSHIP_COST ? fr - DARK_FRIENDSHIP_COST : 0;
++            SetMonData(&gPlayerParty[sB.active], MON_DATA_FRIENDSHIP, &fr);
++            pf->bm.friendship = fr;
++            PkbnDark_Mark(pf->bm.personality);
++            for (i = 0; i < sB.partyCount; i++)
++                if (i != sB.active)
++                    BondEvent(sB.active, i, -DARK_BOND_COST, "dark chip");
++        }
++        sB.darkUsed = TRUE;
++        sB.fullSynchro = FALSE;
++        PkbnGrid_EndCross(FALSE);
++        PKBN_LOG("dark chip %s by %s: friendship %u", gPkbnDarkChips[g].pa.name, pf->name, pf->bm.friendship);
++        return;
++    }
+     if (ch->slot & LEADER_CHIP)
+     {
+         // a Leader chip (POC-14): the Gym Leader's ace comes in for one attack, at the chip's power
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 0b2de11..6f9f713 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -17,6 +17,7 @@ static void DrawTutorial(u16 *fb);   // POC-18 (end of file)
+ #include "sprite.h"
+ #include "battle_setup.h"
+ #include "pkbn/chip_pack.h"
++#include "pkbn/dark.h"
+ #include "data.h"
+ #include "item.h"
+ #include "constants/moves.h"
+@@ -869,6 +870,11 @@ static void DrawFighter(u16 *fb, u8 side)
+     {
+         flags |= GFX_TINT; color = COL_STATUS; amt = 8;
+     }
++    else if (side == SIDE_PLAYER && f->bm.friendship < DARK_AURA_BELOW && PkbnDark_Marked(f->bm.personality) && (sTick % 48) < 20)
++    {
++        // POC-20c: a Pokémon that used a Dark Chip, while its friendship is low - a slow dark pulse
++        flags |= GFX_TINT; color = RGB(6, 0, 10); amt = (u8)(4 + ((sTick % 48) < 10 ? (sTick % 48) / 2 : (20 - sTick % 48) / 2));
++    }
+     else if (side == SIDE_PLAYER && sB.beastTurns)
+     {
+         // POC-19j: out - a hot red flicker
+@@ -1225,6 +1231,14 @@ static void ChipName(char *dst, u32 size, u16 move)
+     snprintf(dst, size, "%s", name);
+ }
+ 
++// POC-20c: a Dark Chip's slot is framed in violet-black, every other chip in its type's colour.
++static u16 ChipFrameColor(const struct FolderChip *ch)
++{
++    if (ch->owner == CHIP_SHARED && (ch->slot & DARK_CHIP))
++        return (sTick & 16) ? RGB(20, 4, 28) : RGB(10, 0, 16);
++    return Vfx_TypeColor(gBattleMoves[ch->move].type);
++}
++
+ static u8 QueueOrder(u8 queueId)
+ {
+     s32 q;
+@@ -1462,7 +1476,9 @@ static void DrawChipInfo(u16 *fb)
+         struct PkbnImage icon = Gfx_TypeIcon(gBattleMoves[ch->move].type);
+         Gfx_Draw(fb, &icon, ART_X, y, 0, 0, 0);
+         ChipName(line, sizeof(line), ch->move);
+-        TextBig(fb, ART_X + 35, y - 2, line, COL_WHITE);
++        if (ch->owner == CHIP_SHARED && (ch->slot & DARK_CHIP))
++            snprintf(line, sizeof(line), "%s", gPkbnDarkChips[ch->slot & 7].pa.name);   // POC-20c
++        TextBig(fb, ART_X + 35, y - 2, line, (ch->owner == CHIP_SHARED && (ch->slot & DARK_CHIP)) ? RGB(24, 12, 31) : COL_WHITE);
+         if (ch->owner == CHIP_SHARED && Chip_Class(ch->move) != CHIP_STANDARD)
+         {
+             bool8 giga = Chip_Class(ch->move) == CHIP_GIGA;
+@@ -1470,7 +1486,12 @@ static void DrawChipInfo(u16 *fb)
+             Draw_Box(fb, tx, y + 1, giga ? 24 : 26, 9, giga ? RGB(24, 6, 18) : RGB(6, 12, 26), giga ? RGB(31, 12, 24) : RGB(10, 20, 31), 16);
+             Text(fb, tx + 2, y - 2, giga ? "GIGA" : "MEGA", COL_WHITE);
+         }
+-        if (gBattleMoves[ch->move].power > 1)
++        if (ch->owner == CHIP_SHARED && (ch->slot & DARK_CHIP))
++        {
++            snprintf(line, sizeof(line), "%u", gPkbnDarkChips[ch->slot & 7].pa.power);
++            TextBig(fb, ART_X + ART_W - Pkbn_EmTextWidth(line, PKBN_FONT_NORMAL), y - 2, line, RGB(24, 12, 31));
++        }
++        else if (gBattleMoves[ch->move].power > 1)
+         {
+             snprintf(line, sizeof(line), "%u", gBattleMoves[ch->move].power);
+             TextBig(fb, ART_X + ART_W - Pkbn_EmTextWidth(line, PKBN_FONT_NORMAL), y - 2, line, COL_GAUGE_FULL);
+@@ -1479,6 +1500,8 @@ static void DrawChipInfo(u16 *fb)
+             snprintf(line, sizeof(line), "PARTNER V%u", ch->slot);
+         else if (ch->slot & LEADER_CHIP)
+             snprintf(line, sizeof(line), "%s V%u", Leader_Name(LEADER_INDEX(ch->slot)), LEADER_LEVEL(ch->slot));
++        else if (ch->slot & DARK_CHIP)
++            snprintf(line, sizeof(line), "DARK CHIP");
+         else if (sB.hand[cur] == FOLDER_STRUGGLE)
+             line[0] = '\0';
+         else
+@@ -1489,7 +1512,7 @@ static void DrawChipInfo(u16 *fb)
+             snprintf(line, sizeof(line), "%s IN", sB.party[ch->owner].name);
+             Text(fb, ART_X + ART_W - Pkbn_EmTextWidth(line, PKBN_FONT_SMALL), y + 13, line, COL_HP);
+         }
+-        else if (!(ch->slot & LEADER_CHIP) && !Chip_CanUse(&sB.f[SIDE_PLAYER].bm, ch->move))
++        else if (!(ch->slot & (LEADER_CHIP | DARK_CHIP)) && !Chip_CanUse(&sB.f[SIDE_PLAYER].bm, ch->move))
+         {
+             Text(fb, ART_X + ART_W - Pkbn_EmTextWidth("CAN'T USE", PKBN_FONT_SMALL), y + 13, "CAN'T USE", COL_HP_LOW);
+         }
+@@ -1528,7 +1551,7 @@ static void DrawSlots(u16 *fb, u32 t)
+             const struct FolderChip *ch = &sB.folder.chips[sB.hand[i]];
+             bool8 ok = PkbnGrid_HandSelectable(i);
+             u8 order = sB.picked[i] ? QueueOrder(sB.hand[i]) : 0;
+-            DrawSlotFrame(fb, x, y, SLOT_W - 2, SLOT_H, Vfx_TypeColor(gBattleMoves[ch->move].type), !ok && !order);
++            DrawSlotFrame(fb, x, y, SLOT_W - 2, SLOT_H, ChipFrameColor(ch), !ok && !order);
+             if (!order)
+                 DrawChipFace(fb, ch, x, y, !ok);
+             snprintf(line, sizeof(line), "%c", PkbnFolder_LetterChar(ch->letter));
+@@ -1564,7 +1587,7 @@ static void DrawSlots(u16 *fb, u32 t)
+                 const struct FolderChip *ch = &sB.folder.chips[sB.hand[i]];
+                 bool8 ok2 = PkbnGrid_HandSelectable(i);
+                 u8 ord = sB.picked[i] ? QueueOrder(sB.hand[i]) : 0;
+-                DrawSlotFrame(fb, x, y, SLOT_W - 2, SLOT_H, Vfx_TypeColor(gBattleMoves[ch->move].type), !ok2 && !ord);
++                DrawSlotFrame(fb, x, y, SLOT_W - 2, SLOT_H, ChipFrameColor(ch), !ok2 && !ord);
+                 if (ord)
+                 {
+                     snprintf(line, sizeof(line), "%u", ord);
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 7f820e5..37dda43 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -1050,11 +1050,14 @@ static void ApplyHit(struct Attack *a, bool8 last)
+         // keep it going. Stun length TUNE.
+         if (!(def->navi.flags & NCPF_SUPER_ARMOR) && def->stun < 40)
+             def->stun = 40;
+-        if (!sB.fullSynchro)
++        if (!sB.fullSynchro && !sB.darkUsed)
+             PKBN_LOG("FULL SYNCHRO");
+-        sB.fullSynchro = TRUE;
+-        strncpy(sB.flashText, "FULL SYNCHRO!", sizeof(sB.flashText) - 1);
+-        sB.flashTimer = 60;
++        sB.fullSynchro = !sB.darkUsed;   // POC-20c: no Full Synchro after a Dark Chip
++        if (!sB.darkUsed)
++        {
++            strncpy(sB.flashText, "FULL SYNCHRO!", sizeof(sB.flashText) - 1);
++            sB.flashTimer = 60;
++        }
+     }
+     // Gust / Twister x2 on a flyer, Earthquake / Magnitude x2 on a digger, Surf / Whirlpool on a diver (Gen 3)
+     if (def->invuln && CanHitInvulnerable(a->move, def->invulnKind))
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index f4cd655..5eeb6c2 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -88,6 +88,7 @@ struct PkbnSaveFile
+     u8 darkOffered;                           // Dark Chip offers already made (bit per giver; YES or NO is final)
+     u8 darkTaken;                             // ... and accepted
+     u8 pad9[2];
++    u32 darkPids[16];                         // Pokémon that used a Dark Chip (the aura while friendship is low)
+     struct { u32 hash; u16 frames; u8 bust; u8 pad; } ghostBest[PKBN_GHOST_RECORDS];   // best win per ghost
+ };
+ 
+@@ -685,7 +686,37 @@ void PkbnBond_Add(u32 pidA, u32 pidB, s32 delta)
+ 
+ // POC-20c: Dark Chips - who already offered (bit per giver) and who was accepted
+ bool8 PkbnDark_Offered(u8 giver) { return (sSave.darkOffered >> giver) & 1; }
+-bool8 PkbnDark_Taken(u8 giver) { return (sSave.darkTaken >> giver) & 1; }
++bool8 PkbnDark_Taken(u8 giver)
++{
++    if (getenv("PKBN_TEST_DARK_CHIPS") != NULL)   // self-tests: these givers' chips are owned (bit mask)
++        return (atoi(getenv("PKBN_TEST_DARK_CHIPS")) >> giver) & 1;
++    return (sSave.darkTaken >> giver) & 1;
++}
++
++bool8 PkbnDark_Marked(u32 pid)
++{
++    s32 i;
++    for (i = 0; i < 16; i++)
++        if (sSave.darkPids[i] == pid && pid)
++            return TRUE;
++    return FALSE;
++}
++
++void PkbnDark_Mark(u32 pid)
++{
++    s32 i;
++    if (PkbnDark_Marked(pid))
++        return;
++    for (i = 0; i < 16; i++)
++        if (sSave.darkPids[i] == 0)
++            break;
++    if (i == 16)
++    {
++        memmove(sSave.darkPids, sSave.darkPids + 1, sizeof(u32) * 15);   // full: the oldest mark fades
++        i = 15;
++    }
++    sSave.darkPids[i] = pid;
++}
+ void PkbnDark_SetOffered(u8 giver, bool8 taken)
+ {
+     sSave.darkOffered |= 1 << giver;
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index 08dd990..190a11b 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -28,6 +28,8 @@
+ #include "pkbn/leader.h"
+ #include "pkbn/challenge.h"
+ #include "pkbn/ghost.h"
++#include "pkbn/dark.h"
++#include "pkbn/replay.h"
+ #include "naming_screen.h"
+ #include "overworld.h"
+ #include "pokedex.h"
+@@ -76,6 +78,7 @@ enum
+     PB_CLEAR_GRADE_NICK,
+     PB_LEADER,        // Leader chip and rematch record (POC-14)
+     PB_RESULTS,       // POC-19: BN6's results window
++    PB_DARK_ASK,      // POC-20c: a Team Magma / Aqua admin or leader offers a Dark Chip (YES or NO, once)
+ };
+ 
+ struct PostBattle
+@@ -188,6 +191,16 @@ static void Say(u8 next, const char *fmt, ...)
+     fflush(stdout);
+ }
+ 
++// POC-20c: the admin or leader just beaten still has a Dark Chip to offer (-1: none)
++static s8 DarkOfferPending(void)
++{
++    s8 g;
++    if (!sB.trainer || sB.outcome != B_OUTCOME_WON || gPkbnReplayActive)
++        return -1;
++    g = PkbnDark_GiverOf(gTrainerBattleOpponent_A);
++    return (g >= 0 && !PkbnDark_Offered(g)) ? g : -1;
++}
++
+ static void Ask(u8 step, const char *fmt, ...)
+ {
+     char buf[256];
+@@ -774,6 +787,8 @@ static void CB2_PkbnPostBattle(void)
+         sPB.next = capture ? PB_CLEAR_GRADE_NICK : PB_CLEAR_GRADE_EXP;
+         if (!capture && (sLeaderMsg[0][0] || sLeaderMsg[1][0]))
+             sPB.next = PB_LEADER;
++        else if (!capture && DarkOfferPending() >= 0)
++            sPB.next = PB_DARK_ASK;   // POC-20c
+         if (capture && gCapturePick.count)
+         {
+             sPB.next = PB_CODE_PICK;
+@@ -797,9 +812,44 @@ static void CB2_PkbnPostBattle(void)
+     case PB_CODE_PICK:
+         StepCodePick();
+         break;
++    case PB_DARK_ASK:
++    {
++        s8 g = DarkOfferPending();
++        if (g < 0)
++        {
++            sPB.step = PB_CLEAR_GRADE_EXP;
++            break;
++        }
++        if (!sPB.prompt)
++        {
++            Ask(PB_DARK_ASK, "%s: THIS CHIP IS AGAINST THE LAW. IT WILL HURT WHOEVER USES IT. TAKE %s?",
++                gPkbnDarkChips[g].giver, gPkbnDarkChips[g].pa.name);
++            break;
++        }
++        if (sPB.autopilot && getenv("PKBN_TEST_DARK") != NULL)
++        {
++            if (++sPB.waitFrames < 8)
++                break;
++            yes = strcmp(getenv("PKBN_TEST_DARK"), "yes") == 0;
++        }
++        else if (!Confirm(&yes))
++            break;
++        sPB.prompt = FALSE;
++        PkbnDark_SetOffered(g, yes);
++        printf("[pkbn] dark chip %s offered by %s: %s\n", gPkbnDarkChips[g].pa.name, gPkbnDarkChips[g].giver, yes ? "taken" : "refused");
++        if (yes)
++        {
++            PlaySE(SE_M_NIGHTMARE);
++            Say(PB_EXP_NEXT, "GOT DARK CHIP %s!", gPkbnDarkChips[g].pa.name);
++        }
++        else
++            Say(PB_EXP_NEXT, "%s: SUIT YOURSELF.", gPkbnDarkChips[g].giver);
++        sPB.next = PB_CLEAR_GRADE_EXP;
++        break;
++    }
+     case PB_LEADER:
+         Say(PB_EXP_NEXT, "%s%s%s", sLeaderMsg[0], sLeaderMsg[0][0] && sLeaderMsg[1][0] ? " " : "", sLeaderMsg[1]);
+-        sPB.next = PB_CLEAR_GRADE_EXP;
++        sPB.next = DarkOfferPending() >= 0 ? PB_DARK_ASK : PB_CLEAR_GRADE_EXP;
+         sLeaderMsg[0][0] = sLeaderMsg[1][0] = '\0';
+         break;
+     case PB_NICK_ASK:
+-- 
+2.43.0
+

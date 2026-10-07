@@ -70,6 +70,18 @@ OWPARTY="285:40:57/89/58/182|309:8:45/55" run net_challenge 2:2:10:2 \
 # POC-19: the CHIP TRADER on the PC - 3 chips in (3 GROWL rows marked), 1 random chip out (BN6's roll)
 run chip_trader 2:2:10:2 "W200,U,W20,A,Y,A,Y,W30,D,W20,D,W20,D,W20,A,W90,P,W300,P,W10,Q" "chip trader (3): move" \
     PKBN_TEST_FOLDER_KEYS="........,A,.,D,.,A,.,D,.,A,....,S,......"
+# POC-20b: NET CHALLENGE > GHOSTS - paste a friend's ghost (SELECT), copy yours (START), jack in against it
+GHOST_CODE="PKBN-05A54GA99S2N40RX04P3J02S00X01DG00G3B0C910W00000000000DG158WG0480XW00000213DYE69Y000000000001M09A6M01G007007004R2RN5EPD8000000000026GC"
+rm -rf "$OUT/ghost_data"; mkdir -p "$OUT/ghost_data"
+run ghost_netbattle 2:2:10:2 "W200,U,W20,A,Y,A,Y,W30,D,W20,D,W20,A,W60,Y,A,W90,P,W40,P,W60,P,W600,P,W10,Q" "ghost battle: TRAINER" \
+    PKBN_DATA_DIR="$OUT/ghost_data/" PKBN_TEST_CLIPBOARD="$GHOST_CODE" PKBN_OW_AUTOBATTLE=1 PKBN_BOT=smart \
+    PKBN_TEST_CHALLENGE_KEYS=">>.E....S........A"
+# POC-20a: a full Bond makes Cross a Unison; the pair's Program Advance (its two moves, then a * chip)
+bt unison_pa "285:44:57/89/58/182|310:42:57/17/239|282:42:53/24/7/14,347:45" "Program Advance formed: SWAMPERT+PELIPPER" \
+    PKBN_TEST_BOND=100 PKBN_TEST_UNISON_PA=1 PKBN_TEST_PICKS="0,1,2" PKBN_TEST_CROSS=1
+# POC-20c: Tabitha offers a Dark Chip after her fight; one used costs friendship and Bonds
+bt dark_offer "285:60:57/89/58/182|310:55:57/17/239" "DARK BLAZE offered by TABITHA: taken" PKBN_TEST_DARK=yes PKBN_TEST_TRAINER=597 PKBN_BOT=smart
+bt dark_use "285:44:57/89/58/182|310:42:57/17/239,242:50" "dark chip DARK BLAZE by SWAMPERT" PKBN_TEST_DARK_CHIPS=31 PKBN_BOT=smart PKBN_BOT_DARK=1
 # POC-14: a legendary fought as a BN boss (Kyogre's tide phase), and a NET CHALLENGE as a self-test (DEEP CURRENT)
 bt boss_kyogre "279:70:348/337/89/98|338:70:85/242/98/44,404:45" "boss phase: KYOGRE CALLS THE TIDE" PKBN_BOT=smart PKBN_TEST_LEGENDARY=1
 bt challenge_deep_current "285:70:57/89/58/182|279:70:348/337/89/98,74:5" "net challenge 7: DEEP CURRENT" PKBN_BOT=smart PKBN_TEST_CHALLENGE=7

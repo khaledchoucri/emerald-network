@@ -1,0 +1,25 @@
+From fb796b4ca188b449d1cf89e36cb1a3c3e8c7b85f Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 7 Oct 2026 15:08:36 +0300
+Subject: [PATCH 85/85] POC-20e: version 0.20
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/version.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/include/pkbn/version.h b/include/pkbn/version.h
+index 8cb7e4d..1a8b2b1 100644
+--- a/include/pkbn/version.h
++++ b/include/pkbn/version.h
+@@ -1,5 +1,5 @@
+ #ifndef GUARD_PKBN_VERSION_H
+ #define GUARD_PKBN_VERSION_H
+ // POC-18: the build friends are playing, shown on the title screen and in the window title, so bug reports say which.
+-#define PKBN_VERSION "0.19"
++#define PKBN_VERSION "0.20"
+ #endif
+-- 
+2.43.0
+
