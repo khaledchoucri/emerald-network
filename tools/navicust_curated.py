@@ -206,3 +206,17 @@ ABILITY_GRANTS = {
     'STURDY': ['UNDER_SHIRT'],                  # BN-ified Sturdy
     'INNER_FOCUS': ['SUPER_ARMOR'],             # Gen 3 Inner Focus already blocks flinch
 }
+
+# ---- POC-21: held items that become programs (Khaled: "everstone and soothe bell probably can be turned into
+# programs"). Appended at the end so saved program indices don't move. Effects are Gen 3's hold effects, as programs.
+PROGRAMS += [
+    dict(name='Everstone', effect=('EVERSTONE', 0), plus=False, group=0, bug=6, cond='TOUGH', types=['ROCK', 'NORMAL'],
+         shape=['##', '##'], cshape=['##'], src='design (Everstone: no evolution; breeding passes the nature)',
+         desc="Doesn't evolve. In the Day Care, passes on its nature."),
+    dict(name='SoothBel', effect=('SOOTHE_BELL', 50), plus=False, group=0, bug=6, cond='CUTE', types=['NORMAL', 'PSYCHIC'],
+         shape=['.#.', '###'], cshape=['.#.', '##.'], src='design (Soothe Bell: friendship gains x1.5, pokemon.c AdjustFriendship)',
+         desc='Friendship grows 50% faster.'),
+    dict(name='SmokeBal', effect=('SMOKE_BALL', 0), plus=False, group=0, bug=5, cond='SMART', types=['NORMAL', 'GHOST'],
+         shape=['#.', '##', '.#'], cshape=['##', '.#'], src='design (Smoke Ball: always escapes wild battles)',
+         desc='Always gets away from wild Pokemon.'),
+]

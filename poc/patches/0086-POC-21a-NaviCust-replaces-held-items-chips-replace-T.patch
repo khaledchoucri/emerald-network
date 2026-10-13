@@ -1,0 +1,1263 @@
+From 7916f28774a30db80e706a03065df7c5a4fca1a4 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 7 Oct 2026 16:40:01 +0300
+Subject: [PATCH 86/88] POC-21a: NaviCust replaces held items, chips replace
+ TMs - held items do nothing in grid battles; items with a program become it
+ (found, given, bought, caught; old saves on load); battle-only items held
+ only at the Frontier; a TM is 3 chips; Move Relearner teaches chip moves; Gen
+ 6 Exp. Share toggle; Everstone, SoothBel, SmokeBal programs
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ data/scripts/obtain_item.inc      |  45 +++++
+ data/specials.inc                 |   1 +
+ include/item_use.h                |   1 +
+ include/pkbn/items.h              |  30 +++
+ include/pkbn/navicust.h           |   8 +-
+ include/pkbn/ncp_table.h          |   5 +-
+ src/data/items.h                  |   7 +
+ src/data/text/item_descriptions.h |   7 +
+ src/daycare.c                     |  11 +-
+ src/field_specials.c              |  11 ++
+ src/item.c                        |   9 +
+ src/item_menu.c                   |   9 +
+ src/item_use.c                    |  21 +++
+ src/menu_helpers.c                |   7 +
+ src/move_relearner.c              |   7 +
+ src/pkbn/grid_battle.c            |  68 +++----
+ src/pkbn/items.c                  | 293 ++++++++++++++++++++++++++++++
+ src/pkbn/navicust.c               |  23 +++
+ src/pkbn/ncp_table.c              |   9 +
+ src/pkbn/owtest.c                 |  28 ++-
+ src/pkbn/pkbn_save.c              |   7 +-
+ src/pkbn/post_battle.c            |  24 ++-
+ src/pkbn/selftest.c               |   3 +-
+ src/pokemon.c                     |  30 ++-
+ src/save.c                        |   5 +
+ src/scrcmd.c                      |  18 +-
+ src/shop.c                        |  10 +-
+ 27 files changed, 638 insertions(+), 59 deletions(-)
+ create mode 100644 include/pkbn/items.h
+ create mode 100644 src/pkbn/items.c
+
+diff --git a/data/scripts/obtain_item.inc b/data/scripts/obtain_item.inc
+index d32db9d..a0698ac 100644
+--- a/data/scripts/obtain_item.inc
++++ b/data/scripts/obtain_item.inc
+@@ -4,9 +4,37 @@
+ Std_ObtainItem::
+ 	additem ITEMID, AMOUNT
+ 	copyvar VAR_0x8007, VAR_RESULT
++	specialvar VAR_0x800A, PkbnItemNote
++	goto_if_ne VAR_0x800A, 0, EventScript_PkbnObtainedBecame
+ 	call EventScript_ObtainItemMessage
+ 	return
+ 
++@ pkbn POC-21: a TM became chips, a held item a NaviCust program (src/pkbn/items.c): say so, no pocket
++EventScript_PkbnObtainedBecame::
++	call_if_eq VAR_0x800A, 1, EventScript_PlayFanfareObtainedTMHM
++	call_if_eq VAR_0x800A, 2, EventScript_PlayFanfareObtainedItem
++	message Text_PkbnObtainedItem
++	waitfanfare
++	msgbox Text_PkbnItBecame, MSGBOX_DEFAULT
++	setvar VAR_RESULT, TRUE
++	return
++
++EventScript_PkbnFoundBecame::
++	message Text_PkbnFoundItem
++	waitfanfare
++	waitmessage
++	msgbox Text_PkbnItBecame, MSGBOX_DEFAULT
++	return
++
++Text_PkbnObtainedItem:
++	.string "{PLAYER} obtained the {STR_VAR_2}!$"
++
++Text_PkbnFoundItem:
++	.string "{PLAYER} found the {STR_VAR_2}!$"
++
++Text_PkbnItBecame:
++	.string "It became {STR_VAR_3}!$"
++
+ EventScript_ObtainItemMessage::
+ 	bufferitemnameplural STR_VAR_2, ITEMID, AMOUNT
+ 	checkitemtype ITEMID
+@@ -111,6 +139,8 @@ Std_FindItem::
+ EventScript_PickUpItem::
+ 	removeobject VAR_LAST_TALKED
+ 	additem VAR_0x8004, VAR_0x8005
++	specialvar VAR_0x800A, PkbnItemNote
++	goto_if_ne VAR_0x800A, 0, EventScript_PkbnFoundBecame
+ 	specialvar VAR_RESULT, BufferTMHMMoveName
+ 	copyvar VAR_0x8008, VAR_RESULT
+ 	call_if_eq VAR_0x8008, TRUE, EventScript_FoundTMHM
+@@ -147,6 +177,7 @@ EventScript_HiddenItemScript::
+ 	waitse
+ 	additem VAR_0x8005
+ 	copyvar VAR_0x8007, VAR_RESULT
++	specialvar VAR_0x800A, PkbnItemNote
+ 	bufferitemnameplural STR_VAR_2, VAR_0x8005, 1
+ 	checkitemtype VAR_0x8005
+ 	call EventScript_BufferPocketNameAndTryFanfare
+@@ -155,6 +186,7 @@ EventScript_HiddenItemScript::
+ 	end
+ 
+ EventScript_PickUpHiddenItem::
++	goto_if_ne VAR_0x800A, 0, EventScript_PkbnFoundHiddenBecame
+ 	copyvar VAR_0x8008, VAR_0x8004
+ 	copyvar VAR_0x8004, VAR_0x8005
+ 	specialvar VAR_RESULT, BufferTMHMMoveName
+@@ -186,6 +218,19 @@ EventScript_PutHiddenItemInPocket::
+ 	releaseall
+ 	end
+ 
++@ pkbn POC-21: a hidden TM became chips, a hidden held item a program
++EventScript_PkbnFoundHiddenBecame::
++	message Text_PkbnFoundItem
++	waitmessage
++	waitfanfare
++	msgbox Text_PkbnItBecame, MSGBOX_DEFAULT
++	special TryPutTreasureInvestigatorsOnAir
++	special SetHiddenItemFlag
++	special PkbnHiddenChipData
++	goto_if_eq VAR_RESULT, TRUE, EventScript_PkbnHiddenChipData
++	releaseall
++	end
++
+ @ pkbn POC-14: a hidden item also holds chip data (src/pkbn/pkbn_save.c, PkbnPack_GrantHiddenData)
+ EventScript_PkbnHiddenChipData::
+ 	msgbox Text_PkbnHiddenChipData, MSGBOX_DEFAULT
+diff --git a/data/specials.inc b/data/specials.inc
+index 20b4723..51c772c 100644
+--- a/data/specials.inc
++++ b/data/specials.inc
+@@ -546,3 +546,4 @@ gSpecials::
+ 	def_special PkbnStartNetChallenge
+ 	def_special PkbnStartReplay
+ 	def_special PkbnChipTraderMenu
++	def_special PkbnItemNote
+diff --git a/include/item_use.h b/include/item_use.h
+index 52b07cd..d97e730 100755
+--- a/include/item_use.h
++++ b/include/item_use.h
+@@ -7,6 +7,7 @@ void ItemUseOutOfBattle_Rod(u8 taskId);
+ void ItemUseOutOfBattle_Itemfinder(u8 var);
+ void ItemUseOutOfBattle_PokeblockCase(u8 taskId);
+ void ItemUseOutOfBattle_CoinCase(u8 taskId);
++void ItemUseOutOfBattle_PkbnExpShare(u8 taskId);   // pkbn POC-21
+ void ItemUseOutOfBattle_PowderJar(u8 taskId);
+ void ItemUseOutOfBattle_WailmerPail(u8 taskId);
+ void ItemUseOutOfBattle_Medicine(u8 taskId);
+diff --git a/include/pkbn/items.h b/include/pkbn/items.h
+new file mode 100644
+index 0000000..24d755a
+--- /dev/null
++++ b/include/pkbn/items.h
+@@ -0,0 +1,30 @@
++#ifndef GUARD_PKBN_ITEMS_H
++#define GUARD_PKBN_ITEMS_H
++// POC-21: NaviCust replaces held items in grid battles, chips replace TMs (src/pkbn/items.c).
++#include "global.h"
++
++#define PKBN_TM_COPIES 3   // a TM gives what learning a move gives (TUNE)
++enum { PKBN_GOT_NONE, PKBN_GOT_CHIPS, PKBN_GOT_PROGRAM };
++
++s16 PkbnItem_ProgramFor(u16 item);       // the NaviCust program an item is (-1: none)
++bool8 PkbnItem_IsTM(u16 item);
++bool8 PkbnItem_AtFrontier(void);
++bool8 PkbnItem_BattleOnly(u16 item);      // its only effect is in battle (berries, herbs, species items)
++bool8 PkbnItem_CanHold(u16 item);         // GIVE: battle-only items only at the Battle Frontier
++// Getting an item: TMs become chips, program items programs. TRUE: handled - it doesn't go in the bag.
++bool8 PkbnItem_Acquire(u16 item, u16 count, bool8 quiet);
++u8 PkbnItem_LastNote(void);              // for scripts: PKBN_GOT_*; STR_VAR_2 item, STR_VAR_3 what it became
++void PkbnItem_MigrateSave(void);         // old saves: once on load
++bool8 PkbnExpShare_On(void);             // Gen 6's party-wide Exp. Share
++
++// POC-21: the Move Relearner also teaches the moves you own as chips (Khaled's pick: chips are TMs now)
++#define PKBN_RELEARNER_MAX 60
++u8 PkbnRelearner_AddChipMoves(struct Pokemon *mon, u16 *moves, u8 n, u8 max);
++
++// pkbn_save.c
++bool8 PkbnSave_ExpShareOn(void);
++void PkbnSave_SetExpShare(bool8 on);
++// item.c
++void PkbnBag_ClearSlot(struct ItemSlot *slot);
++
++#endif // GUARD_PKBN_ITEMS_H
+diff --git a/include/pkbn/navicust.h b/include/pkbn/navicust.h
+index 6c98fdf..80b3b25 100644
+--- a/include/pkbn/navicust.h
++++ b/include/pkbn/navicust.h
+@@ -60,6 +60,9 @@ struct PkbnNaviStats
+     u8 bug[NAVI_BUG_TYPES];   // bug levels 0-3 by BN6 bug type
+     u8 colours;               // distinct colours that count toward BN6's colour limit
+     bool8 pokerus;            // active Pokérus softened the bugs
++    bool8 everstone;          // POC-21: Everstone - no evolution; the Day Care passes its nature
++    u8 sootheBell;            // POC-21: Soothe Bell - friendship gains +%
++    bool8 smokeBall;          // POC-21: Smoke Ball - always escapes wild battles
+     u8 programsRun;
+ };
+ 
+@@ -96,7 +99,10 @@ void Navi_Compile(const struct PkbnNavi *navi, const struct PkbnNaviOwner *owner
+ // The layout of a Pokémon; create = give it a Navi ID (and an empty layout) when it has none. NULL if none.
+ struct PkbnNavi *Navi_ForMon(struct Pokemon *mon, bool8 create);
+ void Navi_StatsForMon(struct Pokemon *mon, struct PkbnNaviStats *out);
+-void Navi_LeadStats(struct PkbnNaviStats *out);   // POC-16d: gPlayerParty[0]'s (all zero for an egg / nobody)
++void Navi_LeadStats(struct PkbnNaviStats *out);
++// POC-21: does this Pokémon run a program with that effect (NCPE_*)? For Emerald's own code (Everstone, Soothe Bell).
++bool8 Navi_MonProgram(struct Pokemon *mon, u8 effect);
++bool8 Navi_BoxMonProgram(const struct BoxPokemon *mon, u8 effect);   // POC-16d: gPlayerParty[0]'s (all zero for an egg / nobody)
+ u8 Navi_ProgramsInUse(u8 prog);        // copies placed on all Pokémon
+ u8 Navi_ProgramsOwned(u8 prog);
+ const char *Navi_BugName(u8 bugType);
+diff --git a/include/pkbn/ncp_table.h b/include/pkbn/ncp_table.h
+index 2abadd7..a56c340 100644
+--- a/include/pkbn/ncp_table.h
++++ b/include/pkbn/ncp_table.h
+@@ -41,6 +41,9 @@ enum PkbnNcpEffect
+     NCPE_SNEAK_RUN,
+     NCPE_AUTO_HEAL,
+     NCPE_TANGO,
++    NCPE_EVERSTONE,
++    NCPE_SOOTHE_BELL,
++    NCPE_SMOKE_BALL,
+     NCPE_COUNT
+ };
+ 
+@@ -70,7 +73,7 @@ struct PkbnNcp
+     struct PkbnNcpShape shape, cshape;
+ };
+ 
+-#define NCP_COUNT 67
++#define NCP_COUNT 70
+ extern const struct PkbnNcp gPkbnNcps[NCP_COUNT];
+ extern const u8 gPkbnAbilityCells[];   // 1..3 cells of the fixed ability program, by ABILITY_*
+ extern const u8 gPkbnAbilityGrants[];  // NCPF_* an ability grants
+diff --git a/src/data/items.h b/src/data/items.h
+index 27326e0..645ce39 100644
+--- a/src/data/items.h
++++ b/src/data/items.h
+@@ -2227,9 +2227,16 @@ const struct Item gItems[] =
+         .price = 3000,
+         .holdEffect = HOLD_EFFECT_EXP_SHARE,
+         .description = sExpShareDesc,
++#ifdef PORTABLE
++        .importance = 1,                // pkbn POC-21: Gen 6's Exp. Share - a key item you turn ON or OFF
++        .pocket = POCKET_KEY_ITEMS,
++        .type = ITEM_USE_BAG_MENU,
++        .fieldUseFunc = ItemUseOutOfBattle_PkbnExpShare,
++#else
+         .pocket = POCKET_ITEMS,
+         .type = ITEM_USE_BAG_MENU,
+         .fieldUseFunc = ItemUseOutOfBattle_CannotUse,
++#endif
+     },
+ 
+     [ITEM_QUICK_CLAW] =
+diff --git a/src/data/text/item_descriptions.h b/src/data/text/item_descriptions.h
+index 5f79efc..738a80e 100644
+--- a/src/data/text/item_descriptions.h
++++ b/src/data/text/item_descriptions.h
+@@ -728,10 +728,17 @@ static const u8 sMachoBraceDesc[] = _(
+     "promotes growth,\n"
+     "but reduces SPEED.");
+ 
++#ifdef PORTABLE
++static const u8 sExpShareDesc[] = _(
++    "Turn it ON and your\n"
++    "whole party gets\n"
++    "EXP. points.");
++#else
+ static const u8 sExpShareDesc[] = _(
+     "A hold item that\n"
+     "gets EXP. points\n"
+     "from battles.");
++#endif
+ 
+ static const u8 sQuickClawDesc[] = _(
+     "A hold item that\n"
+diff --git a/src/daycare.c b/src/daycare.c
+index ef4eaab..05ce682 100644
+--- a/src/daycare.c
++++ b/src/daycare.c
+@@ -1,4 +1,8 @@
+ #include "global.h"
++#ifdef PORTABLE
++#include "pkbn/navicust.h"
++#include "pkbn/ncp_table.h"
++#endif
+ #include "pokemon.h"
+ #include "battle.h"
+ #include "daycare.h"
+@@ -443,8 +447,11 @@ static s32 GetParentToInheritNature(struct DayCare *daycare)
+     }
+ 
+     // Don't inherit nature if not holding Everstone
+-    if (GetBoxMonData(&daycare->mons[parent].mon, MON_DATA_HELD_ITEM) != ITEM_EVERSTONE
+-        || Random() >= USHRT_MAX / 2)
++    if ((GetBoxMonData(&daycare->mons[parent].mon, MON_DATA_HELD_ITEM) != ITEM_EVERSTONE
++#ifdef PORTABLE
++         && !Navi_BoxMonProgram(&daycare->mons[parent].mon, NCPE_EVERSTONE)   // pkbn POC-21: the Everstone program
++#endif
++        ) || Random() >= USHRT_MAX / 2)
+     {
+         return -1;
+     }
+diff --git a/src/field_specials.c b/src/field_specials.c
+index 58f20f8..e674a57 100644
+--- a/src/field_specials.c
++++ b/src/field_specials.c
+@@ -68,6 +68,7 @@
+ #include "pkbn/chip_pack.h"
+ #include "pkbn/challenge.h"
+ #include "pkbn/ghost.h"
++#include "pkbn/items.h"
+ #include "pkbn/replay.h"
+ #include "battle_setup.h"
+ 
+@@ -953,6 +954,16 @@ void PkbnHiddenChipData(void)
+ #endif
+ }
+ 
++// pkbn POC-21: what the last additem became (data/scripts/obtain_item.inc): 0 nothing, 1 chips, 2 a program.
++u16 PkbnItemNote(void)
++{
++#ifdef PORTABLE
++    return PkbnItem_LastNote();
++#else
++    return 0;
++#endif
++}
++
+ // pkbn POC-14: NET CHALLENGE on the PC (data/scripts/pc.inc). The PC menu gets a NET CHALLENGE row (script_menu.c);
+ // PkbnPcMenuRemap turns its answer back into the vanilla numbering, with 10 for NET CHALLENGE.
+ void PkbnPcMenuRemap(void)
+diff --git a/src/item.c b/src/item.c
+index a3095c3..fe2d7eb 100644
+--- a/src/item.c
++++ b/src/item.c
+@@ -941,3 +941,12 @@ u8 GetItemSecondaryId(u16 itemId)
+ {
+     return gItems[SanitizeItemId(itemId)].secondaryId;
+ }
++
++#ifdef PORTABLE
++// pkbn POC-21: empty one bag slot in place (moving the Exp. Share out of the ITEMS pocket, src/pkbn/items.c)
++void PkbnBag_ClearSlot(struct ItemSlot *slot)
++{
++    slot->itemId = ITEM_NONE;
++    SetBagItemQuantity(&slot->quantity, 0);
++}
++#endif
+diff --git a/src/item_menu.c b/src/item_menu.c
+index af98d86..fb5c0c1 100644
+--- a/src/item_menu.c
++++ b/src/item_menu.c
+@@ -1925,6 +1925,15 @@ static void ItemMenu_Give(u8 taskId)
+     {
+         DisplayItemMessage(taskId, FONT_NORMAL, gText_CantWriteMail, HandleErrorMessage);
+     }
++#ifdef PORTABLE
++    else if (!IsHoldingItemAllowed(gSpecialVar_ItemId))
++    {
++        // pkbn POC-21: battle-only items are held only at the Battle Frontier
++        CopyItemName(gSpecialVar_ItemId, gStringVar1);
++        StringExpandPlaceholders(gStringVar4, gText_Var1CantBeHeldHere);
++        DisplayItemMessage(taskId, FONT_NORMAL, gStringVar4, HandleErrorMessage);
++    }
++#endif
+     else if (!GetItemImportance(gSpecialVar_ItemId))
+     {
+         if (CalculatePlayerPartyCount() == 0)
+diff --git a/src/item_use.c b/src/item_use.c
+index 1884801..ce29289 100644
+--- a/src/item_use.c
++++ b/src/item_use.c
+@@ -1,4 +1,7 @@
+ #include "global.h"
++#ifdef PORTABLE
++#include "pkbn/items.h"
++#endif
+ #include "item_use.h"
+ #include "battle.h"
+ #include "battle_pyramid.h"
+@@ -655,6 +658,24 @@ void ItemUseOutOfBattle_CoinCase(u8 taskId)
+     }
+ }
+ 
++#ifdef PORTABLE
++// pkbn POC-21: Gen 6's Exp. Share - using it turns it ON or OFF (src/pkbn/items.c)
++static const u8 sText_PkbnExpShareOn[] = _("The EXP. SHARE was turned on.\pYour whole party will get\nEXP. points.");
++static const u8 sText_PkbnExpShareOff[] = _("The EXP. SHARE was turned off.");
++void ItemUseOutOfBattle_PkbnExpShare(u8 taskId)
++{
++    bool8 on = !PkbnSave_ExpShareOn();
++    PkbnSave_SetExpShare(on);
++    PlaySE(SE_EXP_MAX);
++    if (!gTasks[taskId].tUsingRegisteredKeyItem)
++        DisplayItemMessage(taskId, FONT_NORMAL, on ? sText_PkbnExpShareOn : sText_PkbnExpShareOff, CloseItemMessage);
++    else
++        DisplayItemMessageOnField(taskId, on ? sText_PkbnExpShareOn : sText_PkbnExpShareOff, Task_CloseCantUseKeyItemMessage);
++}
++#else
++void ItemUseOutOfBattle_PkbnExpShare(u8 taskId) { ItemUseOutOfBattle_CannotUse(taskId); }
++#endif
++
+ void ItemUseOutOfBattle_PowderJar(u8 taskId)
+ {
+     ConvertIntToDecimalStringN(gStringVar1, GetBerryPowder(), STR_CONV_MODE_LEFT_ALIGN, 5);
+diff --git a/src/menu_helpers.c b/src/menu_helpers.c
+index 04e7f06..a8e98c1 100644
+--- a/src/menu_helpers.c
++++ b/src/menu_helpers.c
+@@ -1,4 +1,7 @@
+ #include "global.h"
++#ifdef PORTABLE
++#include "pkbn/items.h"
++#endif
+ #include "task.h"
+ #include "window.h"
+ #include "menu.h"
+@@ -283,6 +286,10 @@ bool8 IsHoldingItemAllowed(u16 itemId)
+        && gSaveBlock1Ptr->location.mapNum == MAP_NUM(MAP_TRADE_CENTER))
+        || InUnionRoom() == TRUE))
+         return FALSE;
++#ifdef PORTABLE
++    else if (!PkbnItem_CanHold(itemId))
++        return FALSE;   // pkbn POC-21: battle-only items are held only at the Battle Frontier (src/pkbn/items.c)
++#endif
+     else
+         return TRUE;
+ }
+diff --git a/src/move_relearner.c b/src/move_relearner.c
+index 9b80318..7ee55ea 100644
+--- a/src/move_relearner.c
++++ b/src/move_relearner.c
+@@ -1,5 +1,8 @@
+ #include "global.h"
+ #ifdef PORTABLE
++#include "pkbn/items.h"
++#endif
++#ifdef PORTABLE
+ #include "pkbn/chip_pack.h"
+ #endif
+ #include "main.h"
+@@ -160,7 +163,11 @@ enum {
+ #define GFXTAG_UI       5525
+ #define PALTAG_UI       5526
+ 
++#ifdef PORTABLE
++#define MAX_RELEARNER_MOVES PKBN_RELEARNER_MAX   // pkbn POC-21: the chips you own are on the list too
++#else
+ #define MAX_RELEARNER_MOVES max(MAX_LEVEL_UP_MOVES, 25)
++#endif
+ 
+ static EWRAM_DATA struct
+ {
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index faab9aa..344cadc 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -46,6 +46,7 @@
+ #include "pkbn/tutorial.h"
+ #include "pkbn/ghost.h"
+ #include "pkbn/dark.h"
++#include "pkbn/items.h"
+ #include "battle_interface.h"
+ #include "m4a.h"
+ 
+@@ -181,7 +182,7 @@ static void MonToBattleMon(struct Pokemon *mon, struct BattlePokemon *bm)
+     bm->maxHP = GetMonData(mon, MON_DATA_MAX_HP);
+     bm->level = GetMonData(mon, MON_DATA_LEVEL);
+     bm->friendship = GetMonData(mon, MON_DATA_FRIENDSHIP);
+-    bm->item = GetMonData(mon, MON_DATA_HELD_ITEM);
++    bm->item = ITEM_NONE;   // POC-21 (Khaled's pick): held items do nothing in grid battles - NaviCust is the item system
+     bm->personality = GetMonData(mon, MON_DATA_PERSONALITY);
+     bm->otId = GetMonData(mon, MON_DATA_OT_ID);
+     bm->status1 = GetMonData(mon, MON_DATA_STATUS);
+@@ -2345,6 +2346,11 @@ static bool8 TryRun(void)
+         SetMsg("PROF. BIRCH: DON'T LEAVE ME LIKE THIS!", 60);   // sText_DontLeaveBirch (battle_message.c:332)
+     else if (sB.trainer)
+         SetMsg("NO RUNNING FROM A TRAINER BATTLE!", 50);
++    else if (p->navi.smokeBall)
++    {
++        EndBattle(B_OUTCOME_RAN, "GOT AWAY SAFELY!");   // POC-21: the SmokeBal program, like Gen 3's Smoke Ball
++        return TRUE;
++    }
+     else if (p->noEscape && p->bm.ability != ABILITY_RUN_AWAY)   // Run Away beats Mean Look (battle_util.c:427)
+         SetMsg("CAN'T ESCAPE!", 40);
+     else if (Field_EscapeBlocker() != NULL)
+@@ -3013,67 +3019,45 @@ static void Tick(struct Fighter *f)
+     if (f->charging) f->charging--;
+ }
+ 
+-static u8 HoldEffectOf(u8 slot)
+-{
+-    u16 item = GetMonData(&gPlayerParty[slot], MON_DATA_HELD_ITEM);
+-    if (item == ITEM_ENIGMA_BERRY)
+-        return gSaveBlock1Ptr->enigmaBerry.holdEffect;
+-    return GetItemHoldEffect(item);
+-}
+-
+ // Cmd_getexp (battle_script_commands.c:3255-3420), run when an opponent faints. The EXP is banked and
+ // given level by level after the battle (src/pkbn/post_battle.c), where the level-up screens live.
+ static void AwardExpForFaintedEnemy(void)
+ {
++    // POC-21: held items do nothing in grid battles, so the Exp. Share is no longer held. Khaled's note: a party-wide
++    // Exp. Share toggle "similar to newer Gens" - Gen 6's Exp. Share (a key item, ON/OFF): the Pokémon that fought split
++    // the EXP as in Gen 3, and with it ON every other Pokémon able to fight gets half of a fighter's share (TUNE).
+     const struct BattlePokemon *e = &sB.f[SIDE_ENEMY].bm;
+     u32 calculatedExp = gSpeciesInfo[e->species].expYield * e->level / 7;
+-    u32 exp, shareExp = 0;
+-    s32 i, viaSentIn = 0, viaExpShare = 0;
++    u32 exp;
++    s32 i, viaSentIn = 0;
++    bool8 shareOn = PkbnExpShare_On();
+ 
+     for (i = 0; i < sB.partyCount; i++)
+-    {
+-        if (!PartyAlive(i))
+-            continue;
+-        if (sB.sentIn & (1 << i))
++        if (PartyAlive(i) && (sB.sentIn & (1 << i)))
+             viaSentIn++;
+-        if (HoldEffectOf(i) == HOLD_EFFECT_EXP_SHARE)
+-            viaExpShare++;
+-    }
+-    if (viaExpShare)
+-    {
+-        exp = viaSentIn ? calculatedExp / 2 / viaSentIn : 0;
+-        if (exp == 0) exp = 1;
+-        shareExp = calculatedExp / 2 / viaExpShare;
+-        if (shareExp == 0) shareExp = 1;
+-    }
+-    else
+-    {
+-        exp = viaSentIn ? calculatedExp / viaSentIn : 0;
+-        if (exp == 0) exp = 1;
+-    }
++    exp = viaSentIn ? calculatedExp / viaSentIn : calculatedExp;
++    if (exp == 0)
++        exp = 1;
+     for (i = 0; i < sB.partyCount; i++)
+     {
+-        u8 hold = HoldEffectOf(i);
++        bool8 fought = (sB.sentIn & (1 << i)) != 0;
+         u32 gain;
+-        if (hold != HOLD_EFFECT_EXP_SHARE && !(sB.sentIn & (1 << i)))
++        if (!fought && !shareOn)
+             continue;
+         if (GetMonData(&gPlayerParty[i], MON_DATA_LEVEL) == MAX_LEVEL || !PartyAlive(i))
+             continue;
+-        gain = (sB.sentIn & (1 << i)) ? exp : 0;
+-        if (hold == HOLD_EFFECT_EXP_SHARE)
+-            gain += shareExp;
+-        if (hold == HOLD_EFFECT_LUCKY_EGG)
+-            gain = gain * 150 / 100;
+-        else if (sB.party[i].navi.luckyEgg)
+-            gain = gain * (100 + sB.party[i].navi.luckyEgg) / 100;   // LuckyEgg program (not stacking with the item)
++        gain = fought ? exp : (exp / 2 ? exp / 2 : 1);
++        if (sB.party[i].navi.luckyEgg)
++            gain = gain * (100 + sB.party[i].navi.luckyEgg) / 100;   // LuckyEgg program (the Lucky Egg item is now it)
+         if (sB.trainer)
+             gain = gain * 150 / 100;
+         if (IsTradedMon(&gPlayerParty[i]))
+             gain = gain * 150 / 100;
+         sB.pendingExp[i] += gain;
+-        MonGainEVs(&gPlayerParty[i], e->species);
+-        PKBN_LOG("slot %d banks %u EXP for %s (pending %u)", (int)i, (unsigned)gain, sB.f[SIDE_ENEMY].name,
+-                 (unsigned)sB.pendingExp[i]);
++        if (fought)
++            MonGainEVs(&gPlayerParty[i], e->species);   // Gen 6's Exp. Share also passes EVs; ours only to fighters (TUNE)
++        PKBN_LOG("slot %d banks %u EXP for %s (pending %u)%s", (int)i, (unsigned)gain, sB.f[SIDE_ENEMY].name,
++                 (unsigned)sB.pendingExp[i], fought ? "" : " (exp share)");
+     }
+ }
+ 
+diff --git a/src/pkbn/items.c b/src/pkbn/items.c
+new file mode 100644
+index 0000000..a89db19
+--- /dev/null
++++ b/src/pkbn/items.c
+@@ -0,0 +1,293 @@
++// POC-21: hardening - NaviCust replaces held items in grid battles, chips replace TMs (Khaled's picks). include/pkbn/items.h.
++//
++//  - Held items do nothing in grid battles (grid_battle.c MonToBattleMon). Emerald's own battles (Battle Frontier,
++//    Wally's demo, Safari) keep them.
++//  - An item that has a NaviCust program becomes that program when you get it: found, given, hidden, bought, or held
++//    by a Pokémon you catch. Already in the bag, the PC or held: converted once when the save loads. The Battle
++//    Frontier is the exception: what you get there stays an item, for the Frontier's own battles.
++//  - Items whose only effect is in battle (berries, herbs, species items) can't be given to hold, except at the Battle
++//    Frontier.
++//  - A TM gives 3 copies of its chip and never reaches the bag (3 = what learning a move gives, GrantLearned).
++//    HMs stay items in the TM case (field moves) and give 3 copies too.
++//  - Khaled's note: Exp. Share is Gen 6's party-wide toggle (a key item: use it to turn it ON/OFF).
++#include "pkbn/grid_vfx.h"   // first: it pulls in <stdlib.h> before global.h's macros
++#include "global.h"
++#include "item.h"
++#include "pokemon.h"
++#include "pokemon_storage_system.h"
++#include "string_util.h"
++#include "strings.h"
++#include "event_data.h"
++#include "constants/items.h"
++#include "constants/region_map_sections.h"
++#include "pkbn/chip_pack.h"
++#include "pkbn/folder.h"
++#include "pkbn/move_table.h"
++#include "pkbn/ncp_table.h"
++#include "pkbn/navicust.h"
++#include "pkbn/items.h"
++#include "pkbn/render.h"
++#include "party_menu.h"
++#include "data.h"
++#include "constants/characters.h"
++
++#ifdef PORTABLE
++#include <stdio.h>
++#include <string.h>
++
++// The held items that are NaviCust programs (tools/navicust_curated.py). Cleanse Tag is SneakRun ("No weak enemies").
++static const struct { u16 item; const char *program; } sItemPrograms[] = {
++    { ITEM_LEFTOVERS, "Leftovrs" }, { ITEM_QUICK_CLAW, "QuickClw" }, { ITEM_KINGS_ROCK, "KingRock" },
++    { ITEM_SCOPE_LENS, "ScopLens" }, { ITEM_BRIGHT_POWDER, "BrtPowdr" }, { ITEM_SHELL_BELL, "ShelBell" },
++    { ITEM_FOCUS_BAND, "FocsBand" }, { ITEM_CHOICE_BAND, "ChoiceBd" }, { ITEM_LUCKY_EGG, "LuckyEgg" },
++    { ITEM_AMULET_COIN, "AmuletCn" }, { ITEM_CHARCOAL, "Charcoal" }, { ITEM_MYSTIC_WATER, "MystcWtr" },
++    { ITEM_MAGNET, "Magnet" }, { ITEM_MIRACLE_SEED, "MircSeed" }, { ITEM_NEVER_MELT_ICE, "NevMeltI" },
++    { ITEM_BLACK_BELT, "BlkBelt" }, { ITEM_POISON_BARB, "PoisBarb" }, { ITEM_SOFT_SAND, "SoftSand" },
++    { ITEM_SHARP_BEAK, "ShrpBeak" }, { ITEM_TWISTED_SPOON, "TwstSpn" }, { ITEM_SILVER_POWDER, "SlvPowdr" },
++    { ITEM_HARD_STONE, "HardStn" }, { ITEM_SPELL_TAG, "SpellTag" }, { ITEM_DRAGON_FANG, "DrgnFang" },
++    { ITEM_BLACK_GLASSES, "BlkGlass" }, { ITEM_METAL_COAT, "MetlCoat" }, { ITEM_SILK_SCARF, "SilkScrf" },
++    // POC-21 programs (Khaled: "everstone and soothe bell probably can be turned into programs")
++    { ITEM_EVERSTONE, "Everstone" }, { ITEM_SOOTHE_BELL, "SoothBel" }, { ITEM_SMOKE_BALL, "SmokeBal" },
++    { ITEM_CLEANSE_TAG, "SneakRun" },
++};
++
++static struct
++{
++    u8 kind;          // PKBN_GOT_*
++    u16 item, count;
++    u16 move;         // chips: the move
++    s16 program;      // programs: the index
++} sLast;
++
++s16 PkbnItem_ProgramFor(u16 item)
++{
++    s32 i;
++    for (i = 0; i < (s32)ARRAY_COUNT(sItemPrograms); i++)
++        if (sItemPrograms[i].item == item)
++            return (s16)PkbnProgram_ByName(sItemPrograms[i].program);
++    return -1;
++}
++
++bool8 PkbnItem_IsTM(u16 item)
++{
++    return item >= ITEM_TM01 && item <= ITEM_TM50;
++}
++
++bool8 PkbnItem_AtFrontier(void)
++{
++    return gMapHeader.regionMapSectionId == MAPSEC_BATTLE_FRONTIER;
++}
++
++// Items whose only effect is in battle (Gen 3 hold effects we don't run on the grid).
++bool8 PkbnItem_BattleOnly(u16 item)
++{
++    if (item >= ITEM_CHERI_BERRY && item <= ITEM_ENIGMA_BERRY)
++        return TRUE;
++    switch (item)
++    {
++    case ITEM_WHITE_HERB: case ITEM_MENTAL_HERB: case ITEM_LIGHT_BALL: case ITEM_THICK_CLUB: case ITEM_LUCKY_PUNCH:
++    case ITEM_STICK: case ITEM_METAL_POWDER: case ITEM_SOUL_DEW: case ITEM_DEEP_SEA_TOOTH: case ITEM_DEEP_SEA_SCALE:
++        return TRUE;
++    }
++    return FALSE;
++}
++
++bool8 PkbnItem_CanHold(u16 item)
++{
++    return PkbnItem_AtFrontier() || !PkbnItem_BattleOnly(item);
++}
++
++// 3 copies of a move's chip, spread over its codes (the GrantLearned rule).
++static void GrantChips(u16 move, u16 copies)
++{
++    const struct PkbnMoveInfo *info = &gPkbnMoveInfo[move];
++    u16 k;
++    if (!PkbnFolder_MoveIsChip(move) || info->laneCount == 0)
++        return;
++    for (k = 0; k < copies; k++)
++        PkbnPack_Add(move, info->lanes[k % info->laneCount], 1);
++}
++
++bool8 PkbnItem_Acquire(u16 item, u16 count, bool8 quiet)
++{
++    s16 prog;
++    if (count == 0)
++        return FALSE;
++    if (!quiet)
++        memset(&sLast, 0, sizeof(sLast));
++    if (item >= ITEM_TM01 && item <= ITEM_HM08)
++    {
++        u16 move = ItemIdToBattleMoveId(item);
++        GrantChips(move, PKBN_TM_COPIES * count);
++        printf("[pkbn] %s item %u -> move %u x%u\n", PkbnItem_IsTM(item) ? "TM" : "HM", item, move, PKBN_TM_COPIES * count);
++        if (!PkbnItem_IsTM(item))
++            return FALSE;   // HMs: also into the TM case, for the field moves
++        if (!quiet)
++            sLast.kind = PKBN_GOT_CHIPS, sLast.item = item, sLast.count = PKBN_TM_COPIES * count, sLast.move = move;
++        return TRUE;
++    }
++    prog = PkbnItem_ProgramFor(item);
++    if (prog >= 0 && !PkbnItem_AtFrontier())
++    {
++        PkbnProgram_Grant(prog, count);
++        printf("[pkbn] item %u -> program %s x%u\n", item, gPkbnNcps[prog].name, count);
++        if (!quiet)
++            sLast.kind = PKBN_GOT_PROGRAM, sLast.item = item, sLast.count = count, sLast.program = prog;
++        return TRUE;
++    }
++    return FALSE;
++}
++
++// ASCII to Emerald's text encoding (charmap.txt; the reverse of Pkbn_GameStringToAscii).
++static void AsciiToGame(u8 *dst, const char *src, u32 max)
++{
++    u32 i;
++    for (i = 0; i + 1 < max && src[i]; i++)
++    {
++        char c = src[i];
++        u8 o = 0x00;
++        if (c >= '0' && c <= '9') o = 0xA1 + (c - '0');
++        else if (c >= 'A' && c <= 'Z') o = 0xBB + (c - 'A');
++        else if (c >= 'a' && c <= 'z') o = 0xD5 + (c - 'a');
++        else if (c == '!') o = 0xAB;
++        else if (c == '?') o = 0xAC;
++        else if (c == '.') o = 0xAD;
++        else if (c == '-') o = 0xAE;
++        else if (c == '\'') o = 0xB4;
++        else if (c == ',') o = 0xB8;
++        else if (c == '/') o = 0xBA;
++        else if (c == ':') o = 0xF0;
++        else if (c == '+') o = 0x2E;
++        dst[i] = o;
++    }
++    dst[i] = EOS;
++}
++
++// For the scripts (data/scripts/obtain_item.inc): what the last additem became. VAR_RESULT: PKBN_GOT_*.
++// STR_VAR_2: the item's name, STR_VAR_3: what it became.
++u8 PkbnItem_LastNote(void)
++{
++    u8 kind = sLast.kind;
++    char text[40];
++    if (kind == PKBN_GOT_NONE)
++        return kind;
++    CopyItemName(sLast.item, gStringVar2);
++    if (kind == PKBN_GOT_CHIPS)
++    {
++        char name[MOVE_NAME_LENGTH + 1];
++        Pkbn_GameStringToAscii(name, gMoveNames[sLast.move], sizeof(name));
++        snprintf(text, sizeof(text), "%u %s CHIPS", sLast.count, name);
++    }
++    else
++        snprintf(text, sizeof(text), "the %s program", gPkbnNcps[sLast.program].name);
++    AsciiToGame(gStringVar3, text, 40);
++    sLast.kind = PKBN_GOT_NONE;
++    return kind;
++}
++
++// ---- The Move Relearner: chips you own that the Pokémon can learn and doesn't know (after its level-up moves) ----
++u8 PkbnRelearner_AddChipMoves(struct Pokemon *mon, u16 *moves, u8 n, u8 max)
++{
++    u16 species = GetMonData(mon, MON_DATA_SPECIES), mv;
++    s32 k;
++    for (mv = 1; mv < MOVES_COUNT && n < max; mv++)
++    {
++        bool8 dup = FALSE;
++        if (PkbnPack_Total(mv) == 0 || !Chip_SpeciesCanLearn(species, mv))
++            continue;
++        for (k = 0; k < MAX_MON_MOVES; k++)
++            dup |= GetMonData(mon, MON_DATA_MOVE1 + k) == mv;
++        for (k = 0; k < n; k++)
++            dup |= moves[k] == mv;
++        if (!dup)
++            moves[n++] = mv;
++    }
++    return n;
++}
++
++// ---- Gen 6's Exp. Share: ON/OFF ------------------------------------------------------------------------------------
++bool8 PkbnExpShare_On(void)
++{
++    if (getenv("PKBN_TEST_EXP_SHARE") != NULL)
++        return TRUE;
++    return CheckBagHasItem(ITEM_EXP_SHARE, 1) && PkbnSave_ExpShareOn();
++}
++
++// ---- Old saves: convert once on load ---------------------------------------------------------------------------
++static void MigrateMon(struct BoxPokemon *box, u32 *got)
++{
++    u16 item = GetBoxMonData(box, MON_DATA_HELD_ITEM), none = ITEM_NONE;
++    if (item == ITEM_NONE || GetBoxMonData(box, MON_DATA_SPECIES) == SPECIES_NONE)
++        return;
++    if (item == ITEM_EXP_SHARE)
++    {
++        if (!CheckBagHasItem(ITEM_EXP_SHARE, 1))
++            AddBagItem(ITEM_EXP_SHARE, 1);   // the key item now
++        SetBoxMonData(box, MON_DATA_HELD_ITEM, &none);
++        (*got)++;
++        return;
++    }
++    if (PkbnItem_ProgramFor(item) >= 0 && PkbnItem_Acquire(item, 1, TRUE))
++    {
++        SetBoxMonData(box, MON_DATA_HELD_ITEM, &none);
++        (*got)++;
++    }
++}
++
++void PkbnItem_MigrateSave(void)
++{
++    u32 got = 0;
++    s32 i, j;
++    u16 item;
++    // Exp. Share: it was in the ITEMS pocket; the key item keeps one
++    for (i = 0; i < BAG_ITEMS_COUNT; i++)
++        if (gSaveBlock1Ptr->bagPocket_Items[i].itemId == ITEM_EXP_SHARE)
++        {
++            PkbnBag_ClearSlot(&gSaveBlock1Ptr->bagPocket_Items[i]);
++            if (!CheckBagHasItem(ITEM_EXP_SHARE, 1))
++                AddBagItem(ITEM_EXP_SHARE, 1);
++            got++;
++        }
++    // TMs and program items in the bag
++    for (item = ITEM_TM01; item <= ITEM_TM50; item++)
++    {
++        u16 n = CountTotalItemQuantityInBag(item);
++        if (n && PkbnItem_Acquire(item, n, TRUE))
++            RemoveBagItem(item, n), got += n;
++    }
++    for (i = 0; i < (s32)ARRAY_COUNT(sItemPrograms); i++)
++    {
++        u16 n = CountTotalItemQuantityInBag(sItemPrograms[i].item);
++        if (n && PkbnItem_Acquire(sItemPrograms[i].item, n, TRUE))
++            RemoveBagItem(sItemPrograms[i].item, n), got += n;
++    }
++    // the PC's item storage
++    for (i = 0; i < PC_ITEMS_COUNT; i++)
++    {
++        struct ItemSlot *s = &gSaveBlock1Ptr->pcItems[i];
++        if (s->itemId == ITEM_EXP_SHARE || (s->itemId && (PkbnItem_IsTM(s->itemId) || PkbnItem_ProgramFor(s->itemId) >= 0)))
++        {
++            if (s->itemId == ITEM_EXP_SHARE)
++            {
++                if (!CheckBagHasItem(ITEM_EXP_SHARE, 1))
++                    AddBagItem(ITEM_EXP_SHARE, 1);
++            }
++            else
++                PkbnItem_Acquire(s->itemId, s->quantity, TRUE);
++            got += s->quantity;
++            s->itemId = ITEM_NONE;
++            s->quantity = 0;
++        }
++    }
++    CompactPCItems();
++    // held by the party and the boxes
++    for (i = 0; i < PARTY_SIZE; i++)
++        MigrateMon(&gPlayerParty[i].box, &got);
++    for (i = 0; i < TOTAL_BOXES_COUNT; i++)
++        for (j = 0; j < IN_BOX_COUNT; j++)
++            MigrateMon(GetBoxedMonPtr(i, j), &got);
++    if (got)
++        printf("[pkbn] POC-21: converted %u items, TMs and held items into programs and chips\n", (unsigned)got);
++}
++
++#endif // PORTABLE
+diff --git a/src/pkbn/navicust.c b/src/pkbn/navicust.c
+index 62ca34d..76af5c0 100644
+--- a/src/pkbn/navicust.c
++++ b/src/pkbn/navicust.c
+@@ -188,6 +188,9 @@ static void Apply(struct PkbnNaviStats *s, const struct PkbnNcp *p)
+     case NCPE_ATTRACT:       s->attractType = p->arg + 1; break;
+     case NCPE_COLLECT:       s->collect = TRUE; break;
+     case NCPE_SNEAK_RUN:     s->sneakRun = TRUE; break;
++    case NCPE_EVERSTONE:     s->everstone = TRUE; break;     // POC-21
++    case NCPE_SOOTHE_BELL:   s->sootheBell = p->value; break;
++    case NCPE_SMOKE_BALL:    s->smokeBall = TRUE; break;
+     case NCPE_AUTO_HEAL:     s->autoHeal = p->value; break;
+     case NCPE_TANGO:         s->tango = p->value; break;
+     }
+@@ -417,4 +420,24 @@ const char *Navi_BugName(u8 t)
+     return "BUG";
+ }
+ 
++// POC-21: the held items that became programs (Everstone, SoothBel) act in Emerald's own code through these.
++bool8 Navi_MonProgram(struct Pokemon *mon, u8 effect)
++{
++    struct PkbnNavi *n = Navi_ForMon(mon, FALSE);
++    s32 i;
++    if (n == NULL)
++        return FALSE;
++    for (i = 0; i < n->count; i++)
++        if (n->parts[i].prog < NCP_COUNT && gPkbnNcps[n->parts[i].prog].effect == effect)
++            return TRUE;
++    return FALSE;
++}
++
++bool8 Navi_BoxMonProgram(const struct BoxPokemon *box, u8 effect)
++{
++    struct Pokemon mon;
++    BoxMonToMon(box, &mon);
++    return Navi_MonProgram(&mon, effect);
++}
++
+ #endif // PORTABLE
+diff --git a/src/pkbn/ncp_table.c b/src/pkbn/ncp_table.c
+index acfdb75..41b62e8 100644
+--- a/src/pkbn/ncp_table.c
++++ b/src/pkbn/ncp_table.c
+@@ -207,6 +207,15 @@ const struct PkbnNcp gPkbnNcps[NCP_COUNT] =
+     { // bn6f entry 136 (Tango)
+         "Tango", "Heals low HP", NCPE_TANGO, 0, 30, FALSE, 0, 8, NCP_COND_CUTE, 2, {TYPE_GRASS, TYPE_NORMAL}, {3, 4, {7, 2, 2, 7, 0}}, {3, 4, {7, 2, 2, 3, 0}}
+     },
++    { // design (Everstone: no evolution; breeding passes the nature)
++        "Everstone", "Doesn't evolve. In the Day Care, passes on its nature.", NCPE_EVERSTONE, 0, 0, FALSE, 0, 6, NCP_COND_TOUGH, 2, {TYPE_ROCK, TYPE_NORMAL}, {2, 2, {3, 3, 0, 0, 0}}, {2, 1, {3, 0, 0, 0, 0}}
++    },
++    { // design (Soothe Bell: friendship gains x1.5, pokemon.c AdjustFriendship)
++        "SoothBel", "Friendship grows 50% faster.", NCPE_SOOTHE_BELL, 0, 50, FALSE, 0, 6, NCP_COND_CUTE, 2, {TYPE_NORMAL, TYPE_PSYCHIC}, {3, 2, {2, 7, 0, 0, 0}}, {3, 2, {2, 3, 0, 0, 0}}
++    },
++    { // design (Smoke Ball: always escapes wild battles)
++        "SmokeBal", "Always gets away from wild Pokemon.", NCPE_SMOKE_BALL, 0, 0, FALSE, 0, 5, NCP_COND_SMART, 2, {TYPE_NORMAL, TYPE_GHOST}, {2, 3, {1, 3, 2, 0, 0}}, {2, 2, {3, 2, 0, 0, 0}}
++    },
+ };
+ 
+ const u8 gPkbnAbilityCells[ABILITIES_COUNT] =
+diff --git a/src/pkbn/owtest.c b/src/pkbn/owtest.c
+index 5c9bd24..bc83687 100644
+--- a/src/pkbn/owtest.c
++++ b/src/pkbn/owtest.c
+@@ -11,7 +11,7 @@
+ //   PKBN_OWKEYS="W60,S,D,A,P,B,Q"      the script: Wn waits n frames; U D L R A B S(tart) E(select) < > press a key
+ //                                      (held 4 frames, then 6 frames released); Hn+key holds it n frames (H40R
+ //                                      walks right); Mn taps A for n frames; P dumps a frame now; Q quits.
+-//                                      Titem runs "additem item, 1" as a script.
++//                                      Titem runs "additem item, 1" as a script; Oitem "giveitem item" (POC-21).
+ //                                      Vn sets the field weather to n (3 rain, 8 sandstorm, 12 drought).
+ //                                      Y waits until the message box has finished printing (text speed varies).
+ //                                      Gsp:lv starts a wild battle (species / level numbers) as if met in grass.
+@@ -152,6 +152,18 @@ u16 PkbnOwTest_Keys(void)
+             printf("[pkbn-owtest] script additem %u\n", item);
+             continue;
+         }
++        if (c == 'O')   // Oitem: "giveitem item" - the obtain-item standard script and its messages (POC-21)
++        {
++            static u8 sScr[16];
++            u16 item = (u16)strtoul(sScript, (char **)&sScript, 10);
++            sScr[0] = 0x16, sScr[1] = 0x00, sScr[2] = 0x80, sScr[3] = item & 0xFF, sScr[4] = item >> 8;   // setvar VAR_0x8000
++            sScr[5] = 0x16, sScr[6] = 0x01, sScr[7] = 0x80, sScr[8] = 1, sScr[9] = 0;                     // setvar VAR_0x8001, 1
++            sScr[10] = 0x09, sScr[11] = 0;        // callstd STD_OBTAIN_ITEM
++            sScr[12] = 0x02;                      // end
++            ScriptContext_SetupScript(sScr);
++            printf("[pkbn-owtest] script giveitem %u\n", item);
++            continue;
++        }
+         if (c == 'M')   // Mn: tap A every 8 frames for n frames (text boxes, post-battle)
+         {
+             sMash = strtoul(sScript, (char **)&sScript, 10);
+@@ -304,6 +316,20 @@ static void CB2_OwTestStart(void)
+             while (*t == ',')
+                 t++;
+         }
++    if (getenv("PKBN_OWTEST_HELD") != NULL)
++    {
++        // PKBN_OWTEST_HELD=item: party slot 0 holds it (POC-21 migration test)
++        u16 item = (u16)atoi(getenv("PKBN_OWTEST_HELD"));
++        SetMonData(&gPlayerParty[0], MON_DATA_HELD_ITEM, &item);
++    }
++    if (getenv("PKBN_TEST_MIGRATE") != NULL)
++    {
++        extern void PkbnItem_MigrateSave(void);
++        PkbnItem_MigrateSave();   // POC-21: as when an old save loads
++        printf("[pkbn-owtest] migrated: TM25 in bag %u, leftovers in bag %u, exp share in bag %u, held %u\n",
++               CountTotalItemQuantityInBag(ITEM_TM25), CountTotalItemQuantityInBag(ITEM_LEFTOVERS),
++               CountTotalItemQuantityInBag(ITEM_EXP_SHARE), (unsigned)GetMonData(&gPlayerParty[0], MON_DATA_HELD_ITEM));
++    }
+     if (getenv("PKBN_OWTEST_MONEY"))
+         SetMoney(&gSaveBlock1Ptr->money, (u32)atoi(getenv("PKBN_OWTEST_MONEY")));
+     SetWarpDestination(group, num, -1, x, y);
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index 5eeb6c2..40cb57c 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -87,7 +87,8 @@ struct PkbnSaveFile
+     struct { u32 pidA, pidB; u8 points; u8 pad[3]; } bonds[PKBN_BOND_SLOTS];   // Bonds between pairs of Pokémon
+     u8 darkOffered;                           // Dark Chip offers already made (bit per giver; YES or NO is final)
+     u8 darkTaken;                             // ... and accepted
+-    u8 pad9[2];
++    u8 expShareOff;                           // POC-21: Gen 6's Exp. Share is OFF (0 = ON, the default once you have it)
++    u8 pad9;
+     u32 darkPids[16];                         // Pokémon that used a Dark Chip (the aura while friendship is low)
+     struct { u32 hash; u16 frames; u8 bust; u8 pad; } ghostBest[PKBN_GHOST_RECORDS];   // best win per ghost
+ };
+@@ -684,6 +685,10 @@ void PkbnBond_Add(u32 pidA, u32 pidB, s32 delta)
+     sSave.bonds[i].points = v < 0 ? 0 : v > PKBN_BOND_MAX ? PKBN_BOND_MAX : v;
+ }
+ 
++// POC-21: Gen 6's Exp. Share toggle
++bool8 PkbnSave_ExpShareOn(void) { return !sSave.expShareOff; }
++void PkbnSave_SetExpShare(bool8 on) { sSave.expShareOff = !on; }
++
+ // POC-20c: Dark Chips - who already offered (bit per giver) and who was accepted
+ bool8 PkbnDark_Offered(u8 giver) { return (sSave.darkOffered >> giver) & 1; }
+ bool8 PkbnDark_Taken(u8 giver)
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index 190a11b..cace2ad 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -29,6 +29,8 @@
+ #include "pkbn/challenge.h"
+ #include "pkbn/ghost.h"
+ #include "pkbn/dark.h"
++#include "pkbn/items.h"
++#include "pkbn/ncp_table.h"
+ #include "pkbn/replay.h"
+ #include "naming_screen.h"
+ #include "overworld.h"
+@@ -353,8 +355,7 @@ static u32 TrainerMoneyOf(u16 trainerId)
+             break;
+     // gBattleStruct->moneyMultiplier: 2 if an Amulet Coin holder was sent in (battle_util.c:3310)
+     for (i = 0; i < sB.partyCount; i++)
+-        if (sB.party[i].participated && (GetItemHoldEffect(GetMonData(&gPlayerParty[i], MON_DATA_HELD_ITEM)) == HOLD_EFFECT_DOUBLE_PRIZE
+-                                       || sB.party[i].navi.amuletCoin))   // AmuletCn program
++        if (sB.party[i].participated && sB.party[i].navi.amuletCoin)   // AmuletCn program (POC-21: the item is now it)
+             multiplier = 2;
+     // NaviCust collect bug (BN6 bug type 6 limits rewards, asm/asm29.s:10816): half the prize (TUNE)
+     for (j = 0; j < sB.partyCount; j++)
+@@ -576,9 +577,26 @@ static void StepGiveCaught(void)
+     GetMonData(mon, MON_DATA_NICKNAME, nick);
+     nick[POKEMON_NAME_LENGTH] = EOS;
+     Pkbn_GameStringToAscii(name, nick, sizeof(name));
++    // POC-21: a caught Pokémon's held item that is a NaviCust program becomes that program
++    char held_note[80] = "";
++    {
++        u16 held = GetMonData(mon, MON_DATA_HELD_ITEM), none = ITEM_NONE;
++        s16 prog = held != ITEM_NONE ? PkbnItem_ProgramFor(held) : -1;
++        if (prog >= 0 && PkbnItem_Acquire(held, 1, TRUE))
++        {
++            u8 itemName[20];
++            char item[20];
++            SetMonData(mon, MON_DATA_HELD_ITEM, &none);
++            CopyItemName(held, itemName);
++            Pkbn_GameStringToAscii(item, itemName, sizeof(item));
++            snprintf(held_note, sizeof(held_note), "ITS %s BECAME THE %s PROGRAM! ", item, gPkbnNcps[prog].name);
++        }
++    }
+     // Cmd_givecaughtmon
+     if (GiveMonToPlayer(mon) != MON_GIVEN_TO_PARTY)
+-        Say(PB_EXP_NEXT, "%s WAS SENT TO %s PC.", name, FlagGet(FLAG_SYS_PC_LANETTE) ? "LANETTE'S" : "SOMEONE'S");
++        Say(PB_EXP_NEXT, "%s%s WAS SENT TO %s PC.", held_note, name, FlagGet(FLAG_SYS_PC_LANETTE) ? "LANETTE'S" : "SOMEONE'S");
++    else if (held_note[0])
++        Say(PB_EXP_NEXT, "%s", held_note);
+     else
+         sPB.step = PB_EXP_NEXT;
+ }
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index dfa2101..e13c909 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -31,6 +31,7 @@
+ #include "pokedex.h"
+ #include "pkbn/bot.h"
+ #include "pkbn/ghost.h"
++#include "pkbn/items.h"
+ #include "pkbn/navicust.h"
+ #include "pkbn/chip_pack.h"
+ #include "party_menu.h"
+@@ -449,7 +450,7 @@ static void SeedTestPack(void)
+     if ((t = getenv("PKBN_TEST_GRANT_TM")) != NULL)
+     {
+         u16 item = (u16)atoi(t), mv = ItemIdToBattleMoveId(item);
+-        PkbnPack_GrantTM(item, 1);
++        PkbnItem_Acquire(item, 1, TRUE);   // POC-21: a TM is 3 chips
+         printf("[pkbn-selftest] TM item %u -> move %u, pack copies now %u\n", item, mv, PkbnPack_Total(mv));
+     }
+     if ((t = getenv("PKBN_TEST_PACK")) != NULL)
+diff --git a/src/pokemon.c b/src/pokemon.c
+index b73c9c3..0a29eec 100644
+--- a/src/pokemon.c
++++ b/src/pokemon.c
+@@ -1,4 +1,9 @@
+ #include "global.h"
++#ifdef PORTABLE
++#include "pkbn/navicust.h"
++#include "pkbn/ncp_table.h"
++#include "pkbn/items.h"
++#endif
+ #include "malloc.h"
+ #include "apprentice.h"
+ #include "battle.h"
+@@ -4725,13 +4730,18 @@ bool8 ExecuteTableBasedItemEffect(struct Pokemon *mon, u16 item, u8 partyIndex,
+     return PokemonUseItemEffects(mon, item, partyIndex, moveIndex, FALSE);
+ }
+ 
++#ifdef PORTABLE
++#define PKBN_SOOTHE(mon) Navi_MonProgram((mon), NCPE_SOOTHE_BELL)   // pkbn POC-21: the SoothBel program
++#else
++#define PKBN_SOOTHE(mon) FALSE
++#endif
+ #define UPDATE_FRIENDSHIP_FROM_ITEM()                                                                   \
+ {                                                                                                       \
+     if ((retVal == 0 || friendshipOnly) && !ShouldSkipFriendshipChange() && friendshipChange == 0)      \
+     {                                                                                                   \
+         friendshipChange = itemEffect[itemEffectParam];                                                 \
+         friendship = GetMonData(mon, MON_DATA_FRIENDSHIP, NULL);                                        \
+-        if (friendshipChange > 0 && holdEffect == HOLD_EFFECT_FRIENDSHIP_UP)                            \
++        if (friendshipChange > 0 && (holdEffect == HOLD_EFFECT_FRIENDSHIP_UP || PKBN_SOOTHE(mon)))       \
+             friendship += 150 * friendshipChange / 100;                                                 \
+         else                                                                                            \
+             friendship += friendshipChange;                                                             \
+@@ -5521,6 +5531,10 @@ u16 GetEvolutionTargetSpecies(struct Pokemon *mon, u8 mode, u16 evolutionItem)
+     // Prevent evolution with Everstone, unless we're just viewing the party menu with an evolution item
+     if (holdEffect == HOLD_EFFECT_PREVENT_EVOLVE && mode != EVO_MODE_ITEM_CHECK)
+         return SPECIES_NONE;
++#ifdef PORTABLE
++    if (mode != EVO_MODE_ITEM_CHECK && Navi_MonProgram(mon, NCPE_EVERSTONE))
++        return SPECIES_NONE;   // pkbn POC-21: the Everstone program
++#endif
+ 
+     switch (mode)
+     {
+@@ -5966,6 +5980,10 @@ void AdjustFriendship(struct Pokemon *mon, u8 event)
+         if (mod > 0 && holdEffect == HOLD_EFFECT_FRIENDSHIP_UP)
+             // 50% increase, rounding down
+             mod = (150 * mod) / 100;
++#ifdef PORTABLE
++        else if (mod > 0 && Navi_MonProgram(mon, NCPE_SOOTHE_BELL))
++            mod = (150 * mod) / 100;   // pkbn POC-21: the SoothBel program
++#endif
+ 
+         friendship += mod;
+         if (mod > 0)
+@@ -6335,6 +6353,9 @@ u8 GetMoveRelearnerMoves(struct Pokemon *mon, u16 *moves)
+             }
+         }
+     }
++#ifdef PORTABLE
++    numMoves = PkbnRelearner_AddChipMoves(mon, moves, numMoves, PKBN_RELEARNER_MAX);   // pkbn POC-21: chips are TMs
++#endif
+ 
+     return numMoves;
+ }
+@@ -6389,6 +6410,13 @@ u8 GetNumberOfRelearnableMoves(struct Pokemon *mon)
+             }
+         }
+     }
++#ifdef PORTABLE
++    {
++        u16 all[PKBN_RELEARNER_MAX];
++        memcpy(all, moves, numMoves * sizeof(u16));
++        numMoves = PkbnRelearner_AddChipMoves(mon, all, numMoves, PKBN_RELEARNER_MAX);   // pkbn POC-21
++    }
++#endif
+ 
+     return numMoves;
+ }
+diff --git a/src/save.c b/src/save.c
+index 04027e6..37ce541 100644
+--- a/src/save.c
++++ b/src/save.c
+@@ -1,5 +1,8 @@
+ #include "global.h"
+ #ifdef PORTABLE
++#include "pkbn/items.h"
++#endif
++#ifdef PORTABLE
+ #include "pkbn/navicust.h"
+ #endif
+ #include "platform.h"
+@@ -902,6 +905,8 @@ u8 LoadGameSave(u8 saveType)
+         gSaveFileStatus = status;
+ #ifdef PORTABLE
+         PkbnSave_Read();   // pkbn: our sidecar save
++        if (status == SAVE_STATUS_OK)
++            PkbnItem_MigrateSave();   // pkbn POC-21: TMs and held items from before become chips and programs
+ #endif
+         gGameContinueCallback = NULL;
+         break;
+diff --git a/src/scrcmd.c b/src/scrcmd.c
+index d3400ed..349dc7b 100644
+--- a/src/scrcmd.c
++++ b/src/scrcmd.c
+@@ -1,5 +1,8 @@
+ #include "global.h"
+ #ifdef PORTABLE
++#include "pkbn/items.h"
++#endif
++#ifdef PORTABLE
+ #include "pkbn/chip_pack.h"
+ #endif
+ #include "frontier_util.h"
+@@ -497,11 +500,16 @@ bool8 ScrCmd_additem(struct ScriptContext *ctx)
+     u16 itemId = VarGet(ScriptReadHalfword(ctx));
+     u32 quantity = VarGet(ScriptReadHalfword(ctx));
+ 
+-    gSpecialVar_Result = AddBagItem(itemId, (u8)quantity);
+ #ifdef PORTABLE
+-    if (gSpecialVar_Result)
+-        PkbnPack_GrantTM(itemId, (u8)quantity); // pkbn: found or given TMs are chips too
++    // pkbn POC-21: a TM is 3 chips and a held item with a NaviCust program is that program - neither goes in the bag
++    // (src/pkbn/items.c; the obtain-item scripts say what it became)
++    if (PkbnItem_Acquire(itemId, (u8)quantity, FALSE))
++    {
++        gSpecialVar_Result = TRUE;
++        return FALSE;
++    }
+ #endif
++    gSpecialVar_Result = AddBagItem(itemId, (u8)quantity);
+     return FALSE;
+ }
+ 
+@@ -520,6 +528,10 @@ bool8 ScrCmd_checkitemspace(struct ScriptContext *ctx)
+     u32 quantity = VarGet(ScriptReadHalfword(ctx));
+ 
+     gSpecialVar_Result = CheckBagHasSpace(itemId, (u8)quantity);
++#ifdef PORTABLE
++    if (PkbnItem_IsTM(itemId) || (PkbnItem_ProgramFor(itemId) >= 0 && !PkbnItem_AtFrontier()))
++        gSpecialVar_Result = TRUE;   // pkbn POC-21: it won't take a bag slot
++#endif
+     return FALSE;
+ }
+ 
+diff --git a/src/shop.c b/src/shop.c
+index d9f35e7..4b6677b 100644
+--- a/src/shop.c
++++ b/src/shop.c
+@@ -1,5 +1,8 @@
+ #include "global.h"
+ #ifdef PORTABLE
++#include "pkbn/items.h"
++#endif
++#ifdef PORTABLE
+ #include "pkbn/chip_pack.h"
+ #endif
+ #include "bg.h"
+@@ -1128,11 +1131,12 @@ static void BuyMenuTryMakePurchase(u8 taskId)
+ 
+     if (sMartInfo.martType == MART_TYPE_NORMAL)
+     {
+-        if (AddBagItem(tItemId, tItemCount) == TRUE)
+-        {
++        if (
+ #ifdef PORTABLE
+-            PkbnPack_GrantTM(tItemId, tItemCount); // pkbn: a TM is a chip (design 08 §12)
++            PkbnItem_Acquire(tItemId, tItemCount, TRUE) ||   // pkbn POC-21: a TM is 3 chips, a program item its program
+ #endif
++            AddBagItem(tItemId, tItemCount) == TRUE)
++        {
+             BuyMenuDisplayMessage(taskId, gText_HereYouGoThankYou, BuyMenuSubtractMoney);
+             RecordItemPurchase(taskId);
+         }
+-- 
+2.43.0
+

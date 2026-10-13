@@ -1,0 +1,89 @@
+From 1ff93679b2232babb0809babfac536c91261b0f3 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 13 Oct 2026 17:36:02 +0300
+Subject: [PATCH 87/88] POC-21b: vitamins become their programs - HP Up,
+ Protein, Iron, Calcium, Zinc, Carbos turn into their NaviCust programs
+ everywhere, the Battle Frontier included, so vitamin EVs never stack with
+ programs; berries keep no grid-battle use
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/items.h |  1 +
+ src/pkbn/items.c     | 18 +++++++++++++++++-
+ src/scrcmd.c         |  2 +-
+ 3 files changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/include/pkbn/items.h b/include/pkbn/items.h
+index 24d755a..29df6d6 100644
+--- a/include/pkbn/items.h
++++ b/include/pkbn/items.h
+@@ -10,6 +10,7 @@ s16 PkbnItem_ProgramFor(u16 item);       // the NaviCust program an item is (-1:
+ bool8 PkbnItem_IsTM(u16 item);
+ bool8 PkbnItem_AtFrontier(void);
+ bool8 PkbnItem_BattleOnly(u16 item);      // its only effect is in battle (berries, herbs, species items)
++bool8 PkbnItem_BecomesProgram(u16 item);  // POC-21b: vitamins too, even at the Frontier
+ bool8 PkbnItem_CanHold(u16 item);         // GIVE: battle-only items only at the Battle Frontier
+ // Getting an item: TMs become chips, program items programs. TRUE: handled - it doesn't go in the bag.
+ bool8 PkbnItem_Acquire(u16 item, u16 count, bool8 quiet);
+diff --git a/src/pkbn/items.c b/src/pkbn/items.c
+index a89db19..0085b17 100644
+--- a/src/pkbn/items.c
++++ b/src/pkbn/items.c
+@@ -49,8 +49,17 @@ static const struct { u16 item; const char *program; } sItemPrograms[] = {
+     // POC-21 programs (Khaled: "everstone and soothe bell probably can be turned into programs")
+     { ITEM_EVERSTONE, "Everstone" }, { ITEM_SOOTHE_BELL, "SoothBel" }, { ITEM_SMOKE_BALL, "SmokeBal" },
+     { ITEM_CLEANSE_TAG, "SneakRun" },
++    // POC-21b vitamins (your pick "become"): EVs then come only from battles. curated programs (tools/navicust_curated.py)
++    { ITEM_HP_UP, "HP Up" }, { ITEM_PROTEIN, "Protein" }, { ITEM_IRON, "Iron" },
++    { ITEM_CALCIUM, "Calcium" }, { ITEM_ZINC, "Zinc" }, { ITEM_CARBOS, "Carbos" },
+ };
+ 
++static bool8 IsVitamin(u16 item)
++{
++    return item == ITEM_HP_UP || item == ITEM_PROTEIN || item == ITEM_IRON
++        || item == ITEM_CALCIUM || item == ITEM_ZINC || item == ITEM_CARBOS;
++}
++
+ static struct
+ {
+     u8 kind;          // PKBN_GOT_*
+@@ -92,6 +101,13 @@ bool8 PkbnItem_BattleOnly(u16 item)
+     return FALSE;
+ }
+ 
++// The item turns into its program instead of reaching the bag. At the Battle Frontier the held items stay items for
++// Emerald's own battles; vitamins never do, so their EVs can't stack with programs (your POC-21 note).
++bool8 PkbnItem_BecomesProgram(u16 item)
++{
++    return PkbnItem_ProgramFor(item) >= 0 && (!PkbnItem_AtFrontier() || IsVitamin(item));
++}
++
+ bool8 PkbnItem_CanHold(u16 item)
+ {
+     return PkbnItem_AtFrontier() || !PkbnItem_BattleOnly(item);
+@@ -127,7 +143,7 @@ bool8 PkbnItem_Acquire(u16 item, u16 count, bool8 quiet)
+         return TRUE;
+     }
+     prog = PkbnItem_ProgramFor(item);
+-    if (prog >= 0 && !PkbnItem_AtFrontier())
++    if (PkbnItem_BecomesProgram(item))
+     {
+         PkbnProgram_Grant(prog, count);
+         printf("[pkbn] item %u -> program %s x%u\n", item, gPkbnNcps[prog].name, count);
+diff --git a/src/scrcmd.c b/src/scrcmd.c
+index 349dc7b..2db154e 100644
+--- a/src/scrcmd.c
++++ b/src/scrcmd.c
+@@ -529,7 +529,7 @@ bool8 ScrCmd_checkitemspace(struct ScriptContext *ctx)
+ 
+     gSpecialVar_Result = CheckBagHasSpace(itemId, (u8)quantity);
+ #ifdef PORTABLE
+-    if (PkbnItem_IsTM(itemId) || (PkbnItem_ProgramFor(itemId) >= 0 && !PkbnItem_AtFrontier()))
++    if (PkbnItem_IsTM(itemId) || PkbnItem_BecomesProgram(itemId))
+         gSpecialVar_Result = TRUE;   // pkbn POC-21: it won't take a bag slot
+ #endif
+     return FALSE;
+-- 
+2.43.0
+

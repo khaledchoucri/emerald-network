@@ -27,12 +27,18 @@ run wild_battle 0:16:10:10 "W200,G288:4,W60,P,W400,M1500,W60,P,W10,Q" "returning
 # a wild pack (POC-11): 3 Pokémon from Route 101's own grass table, fought down one by one
 run wild_pack 0:16:10:10 "W200,J,G288:4,W60,P,W200,P,W400,M2500,W60,P,W10,Q" "down, 0 left" PKBN_OW_AUTOBATTLE=1 PKBN_TEST_PACK_EXTRA=2
 # a TM given by a script (additem) becomes 2 chips
-run tm_script 0:10:10:10 "W200,T323,W60,Q" "chip grant: TM/HM item 323"
+run tm_script 0:10:10:10 "W200,T323,W60,Q" "TM item 323 -> move"
 # the Move Relearner (Heart Scale) gives a chip in a new code (Wingull relearns Supersonic)
 OWPARTY="309:8:45/55|281:20:52/24/64/116" run relearner 5:7:4:5 "W200,U,W20,A,M2500,W10,Q" "chip grant: relearned" PKBN_OWTEST_ITEMS=111:1
 # releasing a Pokémon from the PC gives type candy (Oldale Pokémon Center PC, Withdraw, Release, Yes)
 run release_candy 2:2:10:2 "W200,U,W20,A,Y,A,Y,A,W30,Y,A,Y,A,Y,A,W60,A,W300,D,W30,D,W30,D,W30,A,W90,U,W30,A,W200,P,W10,Q" \
     "candy grant: released species 288" PKBN_OWTEST_BOX=288:35
+# POC-21: a TM from an NPC is 3 chips; Leftovers become the Leftovrs program; old saves convert on load
+run gift_items 0:10:10:10 "W200,O313,Y,M120,O200,Y,M120,W30,Q" "item 200 -> program Leftovrs" PKBN_DATA_DIR="$OUT/gift_items/"
+run migrate_items 0:10:10:10 "W60,Q" "migrated: TM25 in bag 0, leftovers in bag 0, exp share in bag 0, held 0" \
+    PKBN_DATA_DIR="$OUT/migrate_items/" PKBN_OWTEST_ITEMS="313:2,200:1" PKBN_OWTEST_HELD=209 PKBN_TEST_MIGRATE=1
+# POC-21b: a vitamin becomes its program even at the Battle Frontier, where held items stay items
+run vitamin_frontier 26:4:10:10 "W200,O64,Y,M120,W30,Q" "item 64 -> program Protein" PKBN_DATA_DIR="$OUT/vitamin_frontier/"
 # a hatching egg brings its egg moves as chips (Mudkip egg knowing Stomp and Curse, one step in Oldale)
 OWPARTY="281:20:52/24/64/116|e283:1:33/45/23/174" run egg_moves 0:10:10:10 "W200,H16R,W60,Y,A,W600,Y,A,W200,P,W10,Q" \
     "chip grant: egg move 23"
@@ -82,6 +88,8 @@ bt unison_pa "285:44:57/89/58/182|310:42:57/17/239|282:42:53/24/7/14,347:45" "Pr
 # POC-20c: Tabitha offers a Dark Chip after her fight; one used costs friendship and Bonds
 bt dark_offer "285:60:57/89/58/182|310:55:57/17/239" "DARK BLAZE offered by TABITHA: taken" PKBN_TEST_DARK=yes PKBN_TEST_TRAINER=597 PKBN_BOT=smart
 bt dark_use "285:44:57/89/58/182|310:42:57/17/239,242:50" "dark chip DARK BLAZE by SWAMPERT" PKBN_TEST_DARK_CHIPS=31 PKBN_BOT=smart PKBN_BOT_DARK=1
+# POC-21: Gen 6's Exp. Share - the Pokémon that didn't fight get half
+bt exp_share "285:40:57/89|310:30:57,288:5" "(exp share)" PKBN_TEST_EXP_SHARE=1
 # POC-14: a legendary fought as a BN boss (Kyogre's tide phase), and a NET CHALLENGE as a self-test (DEEP CURRENT)
 bt boss_kyogre "279:70:348/337/89/98|338:70:85/242/98/44,404:45" "boss phase: KYOGRE CALLS THE TIDE" PKBN_BOT=smart PKBN_TEST_LEGENDARY=1
 bt challenge_deep_current "285:70:57/89/58/182|279:70:348/337/89/98,74:5" "net challenge 7: DEEP CURRENT" PKBN_BOT=smart PKBN_TEST_CHALLENGE=7
