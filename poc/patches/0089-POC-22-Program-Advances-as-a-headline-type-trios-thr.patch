@@ -1,0 +1,862 @@
+From 4341870903e0bad1b881b24c1d43dbc77910aff6 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 13 Oct 2026 19:35:28 +0300
+Subject: [PATCH 89/90] POC-22: Program Advances as a headline - type trios
+ (three moves of one type in rising power, 70% of their power together); 18
+ new named Program Advances (31 -> 49), each usable by a Hoenn line; the PA
+ Dex (FOLDER > PA DEX) with hints, a chip for each first find, milestones
+ every 5 (folder +1 up to 43, programs, * chips) and a Busting point for a
+ Program Advance used
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/busting.h       |   1 +
+ include/pkbn/chip_pack.h     |  14 ++-
+ include/pkbn/folder.h        |   4 +-
+ include/pkbn/grid_internal.h |   3 +
+ include/pkbn/move_table.h    |  11 ++-
+ src/pkbn/busting.c           |   8 +-
+ src/pkbn/dark.c              |   2 +
+ src/pkbn/folder.c            |   6 +-
+ src/pkbn/folder_ui.c         | 143 +++++++++++++++++++++++++++-
+ src/pkbn/grid_battle.c       | 174 +++++++++++++++++++++++++++++++++++
+ src/pkbn/move_table.c        |  18 ++++
+ src/pkbn/owtest.c            |  12 +++
+ src/pkbn/pkbn_save.c         |  76 ++++++++++++---
+ src/pkbn/post_battle.c       |   6 ++
+ src/pkbn/selftest.c          |  16 +++-
+ 15 files changed, 466 insertions(+), 28 deletions(-)
+
+diff --git a/include/pkbn/busting.h b/include/pkbn/busting.h
+index a5ef766..1b44db2 100644
+--- a/include/pkbn/busting.h
++++ b/include/pkbn/busting.h
+@@ -17,6 +17,7 @@ struct PkbnBustStats
+     u8 deleteRun;        // POC-11 packs: foes deleted in the current 10-frame window
+     u8 multiDelete;      // largest such run (BN6 Unk_1b)
+     u32 deleteUntil;
++    bool8 paUsed;        // POC-22c: a Program Advance was used this battle (+1, Khaled's pick)
+ };
+ 
+ void Busting_Reset(void);
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index 1f2d8c4..ea54b43 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -15,7 +15,7 @@
+ #define PACK_LETTERS 27          // A..Z + * (LETTER_WILD)
+ #define PACK_MAX     99          // BN6 pack cap per chip/code
+ #define CANDY_MAX    9999
+-#define PKBN_FOLDER_SLOTS FOLDER_MAX
++#define PKBN_FOLDER_SLOTS 40   // the saved folders' slots (pkbn.sav v2 layout); POC-22c's bonus slots are in the v9 tail
+ #define PKBN_FOLDERS 3              // BN6: Folder 1, Folder 2, the extra folder (POC-13)
+ #define PKBN_LEADERS 8              // the eight Gym Leaders (Leader chips, POC-14)
+ 
+@@ -56,6 +56,18 @@ void PkbnDark_Mark(u32 personality);
+ bool8 PkbnGhost_Best(u32 hash, u16 *frames, u8 *bust);
+ void PkbnGhost_NoteWin(u32 hash, u16 frames, u8 bust);
+ void PkbnBeast_Note(u8 boss);
++// POC-22c: the PA Dex (pkbn_save.c). Entries: the named Program Advances (0 .. PKBN_PA_COUNT-1), then one type trio per
++// type (PKBN_PA_COUNT + TYPE_*). The bit array is a fixed 16 bytes so the save layout never moves.
++#define PKBN_PADEX_BYTES 16
++#define PKBN_PADEX_ENTRIES (PKBN_PA_COUNT + NUMBER_OF_MON_TYPES)
++bool8 PkbnPaDex_Found(u8 entry);
++bool8 PkbnPaDex_Mark(u8 entry);
++u8 PkbnPaDex_Count(void);
++u8 PkbnPaDex_Milestones(void);
++void PkbnPaDex_SetMilestones(u8 n);
++u8 PkbnSave_FolderBonus(void);
++bool8 PkbnSave_AddFolderBonus(void);
++s16 PkbnPaDex_EntryOf(u8 pa);   // grid_battle.c: the Dex entry of a Program Advance index (-1: not in the Dex)
+ u8 PkbnFolder_RegularMB(void);                                 // the biggest chip that can be Regular                               // 0-2
+ // POC-14 (src/pkbn/pkbn_save.c)
+ bool8 PkbnLibrary_Has(u16 move);
+diff --git a/include/pkbn/folder.h b/include/pkbn/folder.h
+index 50b10e5..f60a9ce 100644
+--- a/include/pkbn/folder.h
++++ b/include/pkbn/folder.h
+@@ -20,7 +20,9 @@
+ //  - Hand of 5 (BN). Used chips go to a discard pile that is reshuffled when the draw pile is empty
+ //    (our change: BN never reshuffles, but early-game folders are tiny).
+ 
+-#define FOLDER_MAX 40   // 30 + 2 per extra party Pokémon (design 08 §11.1)
++#define FOLDER_BASE_MAX 40   // 30 + 2 per extra party Pokémon (design 08 §11.1)
++#define FOLDER_BONUS_MAX 3   // POC-22c: +1 per PA Dex milestone that gives folder size (TUNE)
++#define FOLDER_MAX (FOLDER_BASE_MAX + FOLDER_BONUS_MAX)
+ #define FOLDER_RESHUFFLE_BELOW 15   // small early folders still reshuffle (design 08 §11.4)
+ #define CHIP_SHARED 0xFF
+ #define HAND_SIZE 5   // BN's base hand
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index e6a7073..3d00bd2 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -374,6 +374,9 @@ enum { STYLE_NONE, STYLE_BALANCED, STYLE_HARASSER, STYLE_BRUISER, STYLE_SNIPER,
+ enum { PH_CHARGE, PH_WAIT, PH_TRAVEL, PH_GAP, PH_UNDERGROUND }; // struct Attack phases
+ 
+ extern struct GridBattle sB;
++// POC-22c: the PA Dex lines shown after the battle (grid_battle.c PaDiscover, post_battle.c)
++struct PkbnPaDexNotes { char line[6][80]; u8 count, shown; };
++extern struct PkbnPaDexNotes gPkbnPaDexNotes;
+ 
+ // grid_battle.c
+ void SetMsg(const char *text, u16 frames);
+diff --git a/include/pkbn/move_table.h b/include/pkbn/move_table.h
+index 3e222e0..afc1a88 100644
+--- a/include/pkbn/move_table.h
++++ b/include/pkbn/move_table.h
+@@ -73,7 +73,7 @@ struct PkbnMoveInfo
+ extern const struct PkbnMoveInfo gPkbnMoveInfo[];
+ 
+ // Program Advances (tools/lanes_curated.py PROGRAM_ADVANCES + tools/attacks_curated.py PA_EFFECTS)
+-#define PKBN_PA_COUNT 31
++#define PKBN_PA_COUNT 49
+ #define PA_CONFUSE       0xFFFFFFFF // pseudo-status: confusion
+ #define PAF_CRIT         (1 << 0)
+ #define PAF_PARTYHEAL    (1 << 1)
+@@ -102,8 +102,13 @@ extern const struct PkbnProgramAdvance gPkbnProgramAdvances[];
+ extern struct PkbnProgramAdvance gPkbnUnisonPA;
+ // POC-20c: indices PA_UNISON + 1 ... are the Dark Chips (include/pkbn/dark.h, gPkbnDarkPA)
+ extern const struct PkbnProgramAdvance *Pkbn_DarkPA(u8 i);
+-#define PKBN_PA(i) (*((i) == PKBN_PA_COUNT ? &gPkbnUnisonPA : (i) > PKBN_PA_COUNT ? Pkbn_DarkPA((i) - PKBN_PA_COUNT - 1) \
+-                                                                                  : &gPkbnProgramAdvances[(i)]))
++// POC-22a: after the 5 Dark Chips (DARK_GIVERS), the type trios being formed: one per Program Advance slot
++#define PA_TRIO (PA_UNISON + 1 + 5)
++#define PA_TRIO_SLOTS 2
++extern struct PkbnProgramAdvance gPkbnTrioPA[PA_TRIO_SLOTS];
++#define PKBN_PA(i) (*((i) >= PA_TRIO ? &gPkbnTrioPA[((i) - PA_TRIO) % PA_TRIO_SLOTS] \
++                   : (i) == PKBN_PA_COUNT ? &gPkbnUnisonPA \
++                   : (i) > PKBN_PA_COUNT ? Pkbn_DarkPA((i) - PKBN_PA_COUNT - 1) : &gPkbnProgramAdvances[(i)]))
+ extern const char *const gPkbnKindNames[];
+ 
+ #endif // GUARD_PKBN_MOVE_TABLE_H
+diff --git a/src/pkbn/busting.c b/src/pkbn/busting.c
+index 7e503db..6db935a 100644
+--- a/src/pkbn/busting.c
++++ b/src/pkbn/busting.c
+@@ -171,9 +171,10 @@ static u8 Score(bool8 seconds, s32 *parts)
+     s32 t = TimePoints(seconds), h = HitPoints(), st = sB.bust.steps <= 2 ? 1 : 0;
+     s32 ch = sB.bust.multiDelete >= 2 && (sB.bust.multiDelete - 1) * 2 > sB.bust.chainPts ? (sB.bust.multiDelete - 1) * 2
+                                                                                         : sB.bust.chainPts, co = sB.bust.counters < 3 ? sB.bust.counters : 3, nf = sB.bust.fainted ? 0 : 1;
++    s32 pa = sB.bust.paUsed ? 1 : 0;   // POC-22c: a Program Advance used this battle (TUNE)
+     if (parts)
+         parts[0] = t, parts[1] = h, parts[2] = st, parts[3] = ch, parts[4] = co, parts[5] = nf;
+-    return Clamp(t + h + st + ch + co + nf);
++    return Clamp(t + h + st + ch + co + nf + pa);
+ }
+ 
+ u8 Busting_Level(void)
+@@ -183,8 +184,9 @@ u8 Busting_Level(void)
+     bool8 useSeconds = getenv("PKBN_BUST_CLOCK") != NULL && strcmp(getenv("PKBN_BUST_CLOCK"), "seconds") == 0;
+     PlayLog_SetBusting(turns, secs, a, useSeconds ? secs : turns);
+     PKBN_LOG("busting: turns-clock L%u (time %d hits %d steps %d chain %d counters %d nofaint %d), seconds-clock L%u "
+-             "(time %d), %u frames, using %s", turns, (int)a[0], (int)a[1], (int)a[2], (int)a[3], (int)a[4], (int)a[5],
+-             secs, (int)b[0], (unsigned)sB.bust.fightFrames, useSeconds ? "seconds" : "turns");
++             "(time %d), %u frames, using %s%s", turns, (int)a[0], (int)a[1], (int)a[2], (int)a[3], (int)a[4], (int)a[5],
++             secs, (int)b[0], (unsigned)sB.bust.fightFrames, useSeconds ? "seconds" : "turns",
++             sB.bust.paUsed ? " (+1 program advance)" : "");
+     return useSeconds ? secs : turns;
+ }
+ 
+diff --git a/src/pkbn/dark.c b/src/pkbn/dark.c
+index 298e45c..8eb75af 100644
+--- a/src/pkbn/dark.c
++++ b/src/pkbn/dark.c
+@@ -18,6 +18,8 @@ const struct PkbnDarkChip gPkbnDarkChips[DARK_GIVERS] = {
+     { "ARCHIE",  MOVE_HYDRO_PUMP,   { "PRIMAL SURGE",  {0}, GK_FIELD,     TYPE_WATER,  375, 1, 1, PAF_NOFAINT, 0, 0 } },   // Kyogre's power
+ };
+ 
++_Static_assert(PA_TRIO == PA_DARK0 + DARK_GIVERS, "type trios follow the Dark Chips (move_table.h)");
++
+ const struct PkbnProgramAdvance *Pkbn_DarkPA(u8 i)
+ {
+     return &gPkbnDarkChips[i < DARK_GIVERS ? i : 0].pa;
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index d2f2f29..b81538c 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -197,7 +197,7 @@ s32 PkbnPartner_PartySlot(u16 naviId)
+ u8 Chip_FolderSize(u8 partyCount)
+ {
+     u8 n = partyCount ? partyCount : 1;
+-    return 30 + 2 * (n - 1);
++    return 30 + 2 * (n - 1) + PkbnSave_FolderBonus();   // POC-22c: PA Dex milestones
+ }
+ 
+ // How much a chip is worth to one Pokémon, for the auto-builder (TUNE): damage x STAB x accuracy; status 40.
+@@ -351,8 +351,8 @@ void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party,
+     {
+         // The FOLDER screen's folder: its chips in order, while the pack still has them, someone can use them, the
+         // copy caps hold and they fit (30 + 2 per extra Pokémon).
+-        u16 em[PKBN_FOLDER_SLOTS];
+-        u8 el[PKBN_FOLDER_SLOTS], ne = PkbnFolderEdit_Get(em, el), cnt[PACK_LETTERS];
++        u16 em[FOLDER_MAX];
++        u8 el[FOLDER_MAX], ne = PkbnFolderEdit_Get(em, el), cnt[PACK_LETTERS];
+         if (ne > 0)
+         {
+             for (i = 0; i < ne && folder->count < size; i++)
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index 73c42d0..f245457 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -50,7 +50,7 @@ extern const struct Evolution gEvolutionTable[][EVOS_PER_MON];
+ #define ROW_H 11
+ #define PANEL_X 164
+ 
+-enum { PAGE_FOLDER, PAGE_PACK, PAGE_CANDY, PAGE_PARTNER, PAGE_LIBRARY, PAGE_COUNT, PAGE_SHELF = PAGE_COUNT };   // SHELF: the Poké Mart's chip shelf
++enum { PAGE_FOLDER, PAGE_PACK, PAGE_CANDY, PAGE_PARTNER, PAGE_LIBRARY, PAGE_PADEX, PAGE_COUNT, PAGE_SHELF = PAGE_COUNT };   // PADEX: POC-22c   // SHELF: the Poké Mart's chip shelf
+ 
+ struct PackRow { u16 move; u8 letter; };
+ struct CandyRow { u16 move; u8 letter; u8 needLevel; u16 species; };   // needLevel 0 = buyable now
+@@ -97,6 +97,9 @@ static struct
+     u16 gotMove;
+     u8 gotLetter;
+     u16 gotT;                  // frames since the trade (the reveal)
++    // POC-22c: the PA Dex page - Dex entries in list order (named Program Advances, then the type trios)
++    u8 dex[PKBN_PADEX_ENTRIES];
++    u8 dexCount;
+ } sF;
+ 
+ bool8 PkbnChipTrader_Roll(bool8 special, u16 *outMove, u8 *outLetter);   // chip_trader.c
+@@ -483,13 +486,131 @@ static void DrawPartnerList(u16 *fb)
+     }
+ }
+ 
++// ---- POC-22c: the PA Dex page (Khaled's picks) ------------------------------------------------------------------------
++// Found Program Advances show their name and recipe. Unfound ones are silhouettes: the chips of the recipe you own show,
++// and owning two of the three reveals the third. Type trios show their type: any three chips of it, in rising power.
++static void BuildPaDex(void)
++{
++    s32 e;
++    sF.dexCount = 0;
++    for (e = 0; e < PKBN_PADEX_ENTRIES; e++)
++        if (e != PKBN_PA_COUNT + TYPE_MYSTERY)
++            sF.dex[sF.dexCount++] = (u8)e;
++}
++
++static bool8 PaDexIsTrio(u8 e) { return e >= PKBN_PA_COUNT; }
++
++static u8 PaDexOwned(u8 e, bool8 *own)
++{
++    s32 k;
++    u8 n = 0;
++    for (k = 0; k < 3; k++)
++    {
++        own[k] = !PaDexIsTrio(e) && PkbnPack_Total(gPkbnProgramAdvances[e].recipe[k]) > 0;
++        n += own[k];
++    }
++    return n;
++}
++
++static void PaDexName(u8 e, char *out, u32 size)
++{
++    static const char *const sTypeWords[NUMBER_OF_MON_TYPES] = {
++        "NORMAL", "FIGHTING", "FLYING", "POISON", "GROUND", "ROCK", "BUG", "GHOST", "STEEL", "???",
++        "FIRE", "WATER", "GRASS", "ELECTRIC", "PSYCHIC", "ICE", "DRAGON", "DARK",
++    };
++    if (PaDexIsTrio(e))
++        snprintf(out, size, "%s TRIO", sTypeWords[e - PKBN_PA_COUNT]);
++    else if (PkbnPaDex_Found(e))
++        snprintf(out, size, "%s", gPkbnProgramAdvances[e].name);
++    else
++        snprintf(out, size, "?????");
++}
++
++static void DrawPaDexList(u16 *fb, u16 cur, u16 top)
++{
++    s32 i;
++    char line[32];
++    snprintf(line, sizeof(line), "FOUND %u/%u", PkbnPaDex_Count(), sF.dexCount);
++    Text(fb, LIST_X + 2, LIST_Y - 14, line, RGB(31, 26, 6));
++    for (i = top; i < sF.dexCount && i < top + LIST_ROWS; i++)
++    {
++        u8 e = sF.dex[i];
++        s32 y = LIST_Y + (i - top) * ROW_H;
++        bool8 found = PkbnPaDex_Found(e), own[3];
++        u8 type = PaDexIsTrio(e) ? e - PKBN_PA_COUNT : gPkbnProgramAdvances[e].type;
++        if (i == cur)
++            Pkbn_FillRect(fb, LIST_X - 1, y - 1, PANEL_X - LIST_X - 4, ROW_H, RGB(8, 14, 28));
++        Pkbn_FillRect(fb, LIST_X, y + 1, 4, ROW_H - 4, found ? Vfx_TypeColor(type) : RGB(6, 7, 10));
++        PaDexName(e, line, sizeof(line));
++        Text(fb, LIST_X + 8, y - 2, line, found ? RGB(31, 31, 31) : PaDexIsTrio(e) || PaDexOwned(e, own) >= 2
++                                                                    ? RGB(16, 18, 24) : RGB(10, 11, 14));
++    }
++    if (top > 0)
++        Text(fb, PANEL_X - 14, LIST_Y - 12, "^", RGB(31, 26, 6));
++    if (top + LIST_ROWS < sF.dexCount)
++        Text(fb, PANEL_X - 14, LIST_Y + LIST_ROWS * ROW_H - 4, "~", RGB(31, 26, 6));
++}
++
++static void DrawPaDexPanel(u16 *fb, u8 e)
++{
++    s32 x = PANEL_X, y = 24, k;
++    bool8 found = PkbnPaDex_Found(e), own[3];
++    u8 owned = PaDexOwned(e, own);
++    char line[40];
++    PaDexName(e, line, sizeof(line));
++    Pkbn_DrawEmText(fb, x + 2, y, line, PKBN_FONT_NORMAL, found ? RGB(31, 26, 6) : RGB(16, 18, 24), RGB(2, 2, 5));
++    if (PaDexIsTrio(e))
++    {
++        // three chips of the type, each at least as strong as the one before
++        struct PkbnImage icon = Gfx_TypeIcon(e - PKBN_PA_COUNT);
++        for (k = 0; k < 3; k++)
++        {
++            Gfx_Draw(fb, &icon, x + 4, y + 20 + k * 16, 0, 0, 0);
++            Pkbn_FillRect(fb, x + 40, y + 30 + k * 16 - k * 3, 4 + k * 8, 3 + k * 3, RGB(31, 26, 6));
++        }
++        return;
++    }
++    {
++        const struct PkbnProgramAdvance *pa = &gPkbnProgramAdvances[e];
++        for (k = 0; k < 3; k++)
++        {
++            bool8 show = found || own[k] || owned >= 2;
++            s32 ry = y + 18 + k * 18;
++            Pkbn_FillRect(fb, x + 2, ry, 24, 16, RGB(1, 2, 5));
++            if (show)
++            {
++                char nm[MOVE_NAME_LENGTH + 1];
++                PkbnDraw_ChipIcon(fb, x + 3, ry, pa->recipe[k], !own[k]);
++                MoveName(nm, sizeof(nm), pa->recipe[k]);
++                Text(fb, x + 30, ry + 1, nm, own[k] ? RGB(31, 31, 31) : RGB(16, 18, 24));
++            }
++            else
++                Text(fb, x + 30, ry + 1, "???", RGB(10, 11, 14));
++        }
++        if (found)
++        {
++            struct PkbnImage icon = Gfx_TypeIcon(pa->type);
++            Gfx_Draw(fb, &icon, x + 4, y + 76, 0, 0, 0);
++            snprintf(line, sizeof(line), "POW %u%s", pa->power, pa->hits > 1 ? " x" : "");
++            if (pa->hits > 1)
++                snprintf(line + strlen(line), sizeof(line) - strlen(line), "%u", pa->hits);
++            Text(fb, x + 40, y + 74, line, RGB(22, 26, 31));
++        }
++    }
++    {
++        u8 next = (u8)((PkbnPaDex_Count() / 5 + 1) * 5);
++        snprintf(line, sizeof(line), "NEXT REWARD AT %u", next);
++        Text(fb, x + 2, y + 112, line, RGB(12, 14, 20));
++    }
++}
++
+ // ---- drawing ---------------------------------------------------------------------------------------------------
+ 
+ static u16 RawCount(void)
+ {
+     return sF.page == PAGE_FOLDER ? sF.groupCount : sF.page == PAGE_PACK ? sF.packCount
+          : sF.page == PAGE_SHELF ? sF.shelfCount : sF.page == PAGE_PARTNER ? PKBN_PARTNER_SLOTS
+-         : sF.page == PAGE_LIBRARY ? sF.libCount : sF.candyCount;
++         : sF.page == PAGE_LIBRARY ? sF.libCount : sF.page == PAGE_PADEX ? sF.dexCount : sF.candyCount;
+ }
+ 
+ static void RawChip(u16 row, u16 *move, u8 *letter);
+@@ -630,13 +751,15 @@ static void RawChip(u16 row, u16 *move, u8 *letter)
+         *move = PartnerMove(row), *letter = LETTER_WILD;
+     else if (sF.page == PAGE_LIBRARY)
+         *move = sF.lib[row], *letter = gPkbnMoveInfo[sF.lib[row]].lanes[0];
++    else if (sF.page == PAGE_PADEX)
++        *move = MOVE_NONE, *letter = 0;
+     else
+         *move = sF.candy[row].move, *letter = sF.candy[row].letter;
+ }
+ 
+ static void DrawTabs(u16 *fb)
+ {
+-    static const char *const names[PAGE_COUNT] = { "FOLDER", "PACK", "CANDY", "PARTNER", "LIBRARY" };
++    static const char *const names[PAGE_COUNT] = { "FOLDER", "PACK", "CANDY", "PARTNER", "LIBRARY", "PA DEX" };
+     s32 i, x = 4;
+     char line[32];
+     if (sF.trader)
+@@ -682,12 +805,17 @@ static void DrawList(u16 *fb)
+         *top = *cur - LIST_ROWS + 1;
+     Pkbn_FillRect(fb, LIST_X - 2, LIST_Y - 2, PANEL_X - LIST_X - 2, LIST_ROWS * ROW_H + 4, RGB(2, 3, 8));
+     {
+-        static const char *const qtyHead[PAGE_COUNT + 1] = { "QTY", "IN/OWN", "CANDY", "", "OWN", "PRICE" };
++        static const char *const qtyHead[PAGE_COUNT + 1] = { "QTY", "IN/OWN", "CANDY", "", "OWN", "", "PRICE" };
+         if (sF.page == PAGE_PARTNER)
+         {
+             DrawPartnerList(fb);
+             return;
+         }
++        if (sF.page == PAGE_PADEX)
++        {
++            DrawPaDexList(fb, *cur, *top);
++            return;
++        }
+         Text(fb, LIST_X + 96, LIST_Y - 14, qtyHead[sF.page], RGB(12, 14, 20));
+         if (sF.page != PAGE_LIBRARY)
+             Text(fb, PANEL_X - 8 - Pkbn_EmTextWidth("LIMIT", PKBN_FONT_SMALL), LIST_Y - 14, "LIMIT", RGB(12, 14, 20));
+@@ -876,6 +1004,11 @@ static void DrawPanel(u16 *fb)
+     }
+     if (n == 0)
+         return;
++    if (sF.page == PAGE_PADEX)
++    {
++        DrawPaDexPanel(fb, sF.dex[Raw(sF.cursor[PAGE_PADEX])]);
++        return;
++    }
+     RowChip(sF.cursor[sF.page], &mv, &letter);
+     if (sF.page == PAGE_LIBRARY && !PkbnLibrary_Has(mv))
+     {
+@@ -947,6 +1080,7 @@ static void DrawHints(u16 *fb)
+         "A:BUY  SELECT:CODE (+2)  L/R:PAGE  B:DONE",
+         "A:POKEMON  SELECT:MOVE  L/R:PAGE  B:DONE",
+         "L/R:PAGE  B:DONE",
++        "L/R:PAGE  B:DONE",
+         "A:BUY  B:DONE",
+     };
+     Pkbn_FillRect(fb, 0, CH - 24, CW, 24, RGB(1, 2, 5));
+@@ -1634,6 +1768,7 @@ static void OpenCommon(MainCallback exitCallback)
+     BuildPack();
+     BuildCandy();
+     BuildLibrary();
++    BuildPaDex();   // POC-22c
+     LibraryMilestones();
+     sKeys = getenv("PKBN_TEST_FOLDER_KEYS");
+     sKeyClock = 0;
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 344cadc..d5d9378 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -238,6 +238,8 @@ static void LoadActiveFromParty(u8 slot)
+ 
+ static void BondEvent(u8 a, u8 b, s32 pts, const char *why);   // POC-20a
+ static bool8 UnisonPAAt(const u8 *q, u8 i);
++static bool8 TrioAt(const u8 *q, u8 i, u8 slot);   // POC-22a
++static void PaDiscover(u8 pa, u8 k);                 // POC-22c
+ #define BOND_RECENT_HIT 120   // "right after it took a hit" (frames; TUNE)
+ 
+ static void DoSwitch(u8 target, bool8 keepStages)
+@@ -786,6 +788,37 @@ static void OpenCustomInner(void)
+             sB.wishHeal[i] = 0;
+         }
+     RefillHand();
++    static bool8 sTestHandDone;
++    if (getenv("PKBN_TEST_HAND") != NULL && !sTestHandDone)
++    {
++        sTestHandDone = TRUE;
++        // self-test (POC-22): PKBN_TEST_HAND="move,move,move" - the first hand opens with these chips, all in the first
++        // one's code, so a Program Advance or trio can be picked with PKBN_TEST_PICKS
++        const char *t = getenv("PKBN_TEST_HAND");
++        s32 k = 0, j;
++        u8 letter = 0xFF;
++        while (*t && k < sB.handCount)
++        {
++            u16 mv = (u16)strtoul(t, (char **)&t, 10);
++            for (j = 0; j < sB.folder.count; j++)
++                if (sB.folder.chips[j].move == mv)
++                {
++                    s32 h;
++                    for (h = 0; h < sB.handCount; h++)   // keep the hand free of duplicates
++                        if (sB.hand[h] == j && h != k)
++                            sB.hand[h] = sB.hand[k];
++                    sB.hand[k] = j;
++                    if (letter == 0xFF)
++                        letter = sB.folder.chips[j].letter;
++                    sB.folder.chips[j].letter = letter;
++                    break;
++                }
++            k++;
++            while (*t == ',')
++                t++;
++        }
++        PKBN_LOG("test: hand forced (%d chips)", (int)k);
++    }
+     sB.state = ST_CUSTOM;
+     PlaySE(SE_WIN_OPEN);   // POC-16b
+ }
+@@ -948,6 +981,7 @@ static void Begin(void)
+     memset(&gPkbnCross, 0, sizeof(gPkbnCross));   // POC-19i
+     Busting_Reset();
+     PlayLog_Reset();
++    memset(&gPkbnPaDexNotes, 0, sizeof(gPkbnPaDexNotes));   // POC-22c
+ 
+     PkbnContract_Enter();
+     gPkbnNoWindup = getenv("PKBN_NO_WINDUP") != NULL;   // POC-15 A/B: the old instant attacks
+@@ -1413,6 +1447,12 @@ static s8 FindPA(const u8 *q, u8 n, u8 *at)
+                 return p;
+             }
+         }
++        // POC-22a: a type trio, built into the slot this Program Advance would take (named recipes come first)
++        if (sB.paCount < PA_TRIO_SLOTS && TrioAt(q, i, sB.paCount))
++        {
++            *at = i;
++            return PA_TRIO + sB.paCount;
++        }
+     }
+     return -1;
+ }
+@@ -1451,6 +1491,7 @@ static void FormProgramAdvances(void)
+         PlaySE(SE_RG_POKE_JUMP_SUCCESS);   // POC-16b: a fanfare (was SE_EXP_MAX)
+         Vis_Post(VEV_PAFORM, SIDE_PLAYER, MOVE_NONE, 0, (s8)k, 0, 0);
+         PKBN_LOG("Program Advance formed: %s", PKBN_PA(p).name);
++        PaDiscover(p, k);   // POC-22c
+     }
+ }
+ 
+@@ -1665,6 +1706,138 @@ static void BeastRush(void)
+ struct PkbnProgramAdvance gPkbnUnisonPA;
+ static char sUnisonName[24];
+ 
++// ---- POC-22a: type trios (Khaled's pick) ------------------------------------------------------------------------------
++// Any three different damaging moves of one type, picked in a row with rising (or equal) power, are a Program Advance:
++// "<TYPE> TRIO". It plays like the third move, at 70% of the three moves' power together (TUNE), as one hit. Named
++// recipes are checked first. Moves whose damage isn't their power (power 1: Seismic Toss, Magnitude...) don't count.
++// The chips still have to be picked together, so they share a code (or are *), as for any Program Advance.
++#define TRIO_POWER_PCT 70
++struct PkbnProgramAdvance gPkbnTrioPA[PA_TRIO_SLOTS];
++static char sTrioName[PA_TRIO_SLOTS][20];
++static const char *const sTypeWords[NUMBER_OF_MON_TYPES] = {
++    "NORMAL", "FIGHTING", "FLYING", "POISON", "GROUND", "ROCK", "BUG", "GHOST", "STEEL", "???",
++    "FIRE", "WATER", "GRASS", "ELECTRIC", "PSYCHIC", "ICE", "DRAGON", "DARK",
++};
++
++static bool8 TrioAt(const u8 *q, u8 i, u8 slot)
++{
++    u16 mv[3];
++    u8 type;
++    s32 k, sum = 0;
++    struct PkbnProgramAdvance *t = &gPkbnTrioPA[slot % PA_TRIO_SLOTS];
++    for (k = 0; k < 3; k++)
++    {
++        if (q[i + k] >= QUEUE_PA_BASE || q[i + k] == FOLDER_QUEUE_WILD)
++            return FALSE;
++        mv[k] = sB.folder.chips[q[i + k]].move;
++        if (mv[k] == MOVE_NONE || gBattleMoves[mv[k]].power <= 1)
++            return FALSE;
++    }
++    type = gBattleMoves[mv[0]].type;
++    if (type == TYPE_MYSTERY || mv[0] == mv[1] || mv[1] == mv[2] || mv[0] == mv[2])
++        return FALSE;
++    for (k = 0; k < 3; k++)
++    {
++        if (gBattleMoves[mv[k]].type != type)
++            return FALSE;
++        if (k > 0 && gBattleMoves[mv[k]].power < gBattleMoves[mv[k - 1]].power)
++            return FALSE;
++        sum += gBattleMoves[mv[k]].power;
++    }
++    memset(t, 0, sizeof(*t));
++    snprintf(sTrioName[slot % PA_TRIO_SLOTS], sizeof(sTrioName[0]), "%s TRIO", sTypeWords[type]);
++    t->name = sTrioName[slot % PA_TRIO_SLOTS];
++    t->recipe[0] = mv[0], t->recipe[1] = mv[1], t->recipe[2] = mv[2];
++    t->kind = gPkbnMoveInfo[mv[2]].kind;
++    t->type = type;
++    t->power = sum * TRIO_POWER_PCT / 100;
++    t->rows = gPkbnMoveInfo[mv[2]].rows ? gPkbnMoveInfo[mv[2]].rows : 1;
++    t->hits = 1;
++    t->flags = t->kind == GK_FIELD ? PAF_NOFAINT : 0;   // Explosion-like kinds: the trio doesn't cost the user
++    return TRUE;
++}
++
++// ---- POC-22c: the PA Dex (Khaled's picks) -----------------------------------------------------------------------------
++// The first time you form a Program Advance it goes in the PA Dex (FOLDER > PA DEX) and gives a copy of its rarest chip
++// (the one of its three you own fewest of, in the code it had). Every 5 found is a milestone (TUNE), in turn: +1 folder
++// size (up to FOLDER_BONUS_MAX), a NaviCust program (sMilestonePrograms in order), a * copy of that Program Advance's
++// third chip. The lines show after the battle (post_battle.c).
++struct PkbnPaDexNotes gPkbnPaDexNotes;
++#define PADEX_MILESTONE_EVERY 5
++static const char *const sMilestonePrograms[] = { "Custom1", "MegFldr1", "GigFldr1", "Custom2" };
++
++s16 PkbnPaDex_EntryOf(u8 pa)
++{
++    if (pa < PKBN_PA_COUNT)
++        return pa;
++    if (pa >= PA_TRIO)
++        return PKBN_PA_COUNT + PKBN_PA(pa).type;
++    return -1;   // the Unison pair's and the Dark Chips aren't in the Dex
++}
++
++static void PaDexNote(const char *fmt, const char *a, const char *b)
++{
++    if (gPkbnPaDexNotes.count >= ARRAY_COUNT(gPkbnPaDexNotes.line))
++        return;
++    snprintf(gPkbnPaDexNotes.line[gPkbnPaDexNotes.count++], sizeof(gPkbnPaDexNotes.line[0]), fmt, a, b);
++}
++
++static void PaDiscover(u8 pa, u8 k)
++{
++    s16 e = PkbnPaDex_EntryOf(pa);
++    const struct PkbnProgramAdvance *p = &PKBN_PA(pa);
++    char mvName[MOVE_NAME_LENGTH + 1], count[8];
++    s32 i, rare = 0;
++    u8 found, done;
++    if (e < 0 || !PkbnPaDex_Mark((u8)e))
++        return;
++    for (i = 1; i < 3; i++)
++        if (PkbnPack_Total(sB.folder.chips[sB.paQueue[k].chips[i]].move)
++          < PkbnPack_Total(sB.folder.chips[sB.paQueue[k].chips[rare]].move))
++            rare = i;
++    {
++        const struct FolderChip *c = &sB.folder.chips[sB.paQueue[k].chips[rare]];
++        PkbnPack_Add(c->move, c->letter, 1);
++        Pkbn_GameStringToAscii(mvName, gMoveNames[c->move], sizeof(mvName));
++    }
++    found = PkbnPaDex_Count();
++    snprintf(count, sizeof(count), "%u", found);
++    PKBN_LOG("pa dex: %s found (%u in the Dex), +1 %s chip", p->name, found, mvName);
++    PaDexNote("NEW IN THE PA DEX: %s! GOT 1 %s CHIP.", p->name, mvName);
++    done = PkbnPaDex_Milestones();
++    while ((u32)(done + 1) * PADEX_MILESTONE_EVERY <= found)
++    {
++        done++;
++        switch (done % 3)
++        {
++        case 1:   // +1 folder size
++            if (PkbnSave_AddFolderBonus())
++            {
++                PKBN_LOG("pa dex milestone %u: folder +1", done);
++                PaDexNote("%s PROGRAM ADVANCES FOUND! YOUR FOLDER HOLDS ONE MORE CHIP%s", count, ".");
++                break;
++            }
++            // folder bonus maxed: a program instead
++            // fall through
++        case 2:   // a NaviCust program
++        {
++            const char *prog = sMilestonePrograms[((done - 1) / 3) % ARRAY_COUNT(sMilestonePrograms)];
++            PkbnProgram_GrantByName(prog, 1);
++            PKBN_LOG("pa dex milestone %u: program %s", done, prog);
++            PaDexNote("%s PROGRAM ADVANCES FOUND! GOT THE %s PROGRAM.", count, prog);
++            break;
++        }
++        default:  // a * copy of this Program Advance's third chip
++            PkbnPack_Add(p->recipe[2], LETTER_WILD, 1);
++            Pkbn_GameStringToAscii(mvName, gMoveNames[p->recipe[2]], sizeof(mvName));
++            PKBN_LOG("pa dex milestone %u: * %s chip", done, mvName);
++            PaDexNote("%s PROGRAM ADVANCES FOUND! GOT 1 %s * CHIP.", count, mvName);
++            break;
++        }
++    }
++    PkbnPaDex_SetMilestones(done);
++}
++
+ static u32 SlotPid(u8 slot)
+ {
+     return slot == sB.active ? sB.f[SIDE_PLAYER].bm.personality : sB.party[slot].bm.personality;
+@@ -2177,6 +2350,7 @@ static void UseNextChip(void)
+             return;
+         }
+         SpendPAChips(k);
++        sB.bust.paUsed = TRUE;          // POC-22c: a Busting point for a Program Advance used this battle
+         BondNotePA(sB.paQueue[k].pa);   // POC-20a
+         if (sB.paQueue[k].pa == PA_UNISON)
+             UnisonPickType();
+diff --git a/src/pkbn/move_table.c b/src/pkbn/move_table.c
+index 1ea8c3e..44748b3 100644
+--- a/src/pkbn/move_table.c
++++ b/src/pkbn/move_table.c
+@@ -437,4 +437,22 @@ const struct PkbnProgramAdvance gPkbnProgramAdvances[PKBN_PA_COUNT] =
+     { "PHANTOM PARADE", {MOVE_CONFUSE_RAY, MOVE_NIGHT_SHADE, MOVE_SHADOW_BALL}, GK_CANNON, TYPE_GHOST, 180, 1, 1, 0, PA_CONFUSE, 0 }, // GHOST 180 cannon + confusion (Phoebe, code N)
+     { "GLACIAL TOMB", {MOVE_HAIL, MOVE_ICE_BALL, MOVE_ICE_BEAM}, GK_FIELD, TYPE_ICE, 170, 1, 1, PAF_NOFAINT, STATUS1_FREEZE, 0 }, // ICE 170 on every enemy panel + freeze (Glacia, code I)
+     { "GEYSER", {MOVE_RAIN_DANCE, MOVE_SURF, MOVE_WATER_SPOUT}, GK_FIELD, TYPE_WATER, 220, 1, 1, PAF_NOFAINT, 0, 0 }, // WATER 220 erupting under every enemy panel (Wallace, code R)
++    { "SILVER STORM", {MOVE_WHIRLWIND, MOVE_GUST, MOVE_SILVER_WIND}, GK_WAVE, TYPE_BUG, 150, 3, 1, PAF_SPEEDDOWN, 0, 0 }, // BUG 150 wind over all three rows, slows (code W)
++    { "SKY RAID", {MOVE_QUICK_ATTACK, MOVE_PECK, MOVE_WING_ATTACK}, GK_DASH, TYPE_FLYING, 130, 1, 1, 0, 0, 0 }, // FLYING 130 dive down the row (code A)
++    { "AMBUSH FANG", {MOVE_SAND_ATTACK, MOVE_BITE, MOVE_CRUNCH}, GK_LOCKON, TYPE_DARK, 160, 1, 1, PAF_ACCDOWN, 0, 0 }, // DARK 160, locks on, never misses, lowers accuracy (code N)
++    { "MAELSTROM", {MOVE_RAIN_DANCE, MOVE_WATER_GUN, MOVE_WHIRLPOOL}, GK_TORNADO, TYPE_WATER, 35, 1, 4, PAF_SPEEDDOWN, 0, 0 }, // WATER 4 x 35 whirl 2 panels ahead, slows (code R)
++    { "SPORE BLOOM", {MOVE_LEECH_SEED, MOVE_STUN_SPORE, MOVE_MEGA_DRAIN}, GK_SPREADER, TYPE_GRASS, 110, 1, 1, 0, STATUS1_PARALYSIS, 30 }, // GRASS 110 burst on the target and around it + paralysis (code G)
++    { "SUMO SLAM", {MOVE_FOCUS_ENERGY, MOVE_ARM_THRUST, MOVE_VITAL_THROW}, GK_GOLEMHIT, TYPE_FIGHTING, 140, 1, 1, PAF_CRIT, 0, 0 }, // FIGHTING 140 slam on three panels, guaranteed crit (code K)
++    { "STEEL RAM", {MOVE_METAL_SOUND, MOVE_TACKLE, MOVE_IRON_TAIL}, GK_DASH, TYPE_STEEL, 170, 1, 1, 0, 0, 0 }, // STEEL 170 charge down the row (code L)
++    { "BLADE SWARM", {MOVE_SWORDS_DANCE, MOVE_FURY_CUTTER, MOVE_SLASH}, GK_WIDESWORD, TYPE_BUG, 170, 1, 1, PAF_CRIT, 0, 0 }, // BUG 170 wide cut, guaranteed crit (code U)
++    { "ECHO BLAST", {MOVE_SUPERSONIC, MOVE_SCREECH, MOVE_HYPER_VOICE}, GK_WAVE, TYPE_NORMAL, 160, 3, 1, 0, PA_CONFUSE, 0 }, // NORMAL 160 sound wave over all three rows + confusion (code V)
++    { "TOXIC FOG", {MOVE_POISON_GAS, MOVE_SMOG, MOVE_SLUDGE}, GK_FIELD, TYPE_POISON, 120, 1, 1, PAF_NOFAINT | PAF_ACCDOWN | PAF_PANEL_POISON, 0, 0 }, // POISON 120 on every enemy panel, poisons them, lowers accuracy (code O)
++    { "QUICKSAND", {MOVE_SAND_ATTACK, MOVE_SAND_TOMB, MOVE_DIG}, GK_DIG, TYPE_GROUND, 170, 1, 1, PAF_SPEEDDOWN, 0, 0 }, // GROUND 170 from below, slows (code Q)
++    { "HAUNTING", {MOVE_ASTONISH, MOVE_SHADOW_PUNCH, MOVE_SHADOW_BALL}, GK_LOCKON, TYPE_GHOST, 170, 1, 1, PAF_CRIT, 0, 0 }, // GHOST 170, locks on, guaranteed crit (code N)
++    { "AURORA", {MOVE_POWDER_SNOW, MOVE_ICY_WIND, MOVE_AURORA_BEAM}, GK_SWEEP, TYPE_ICE, 160, 1, 1, PAF_SPEEDDOWN, 0, 0 }, // ICE 160 beam sweeping the enemy area, slows (code I)
++    { "FOSSIL FURY", {MOVE_ROCK_TOMB, MOVE_ANCIENT_POWER, MOVE_ROCK_SLIDE}, GK_GOLEMHIT, TYPE_ROCK, 180, 1, 1, PAF_PANEL_CRACK, 0, 0 }, // ROCK 180 slam on three panels, cracks them (code Q)
++    { "VERDANT EDGE", {MOVE_SWORDS_DANCE, MOVE_FURY_CUTTER, MOVE_LEAF_BLADE}, GK_LIFESWORD, TYPE_GRASS, 200, 1, 1, PAF_CRIT, 0, 0 }, // GRASS 200, two columns of blades, guaranteed crit (code U)
++    { "BLAZING FURY", {MOVE_FOCUS_ENERGY, MOVE_DOUBLE_KICK, MOVE_BLAZE_KICK}, GK_LINE3, TYPE_FIRE, 70, 1, 3, 0, STATUS1_BURN, 0 }, // FIRE 3 x 70 kicks down 3 panels + burn (code K)
++    { "SWAMP SURGE", {MOVE_MUD_SPORT, MOVE_WATER_PULSE, MOVE_MUDDY_WATER}, GK_WAVE, TYPE_WATER, 180, 3, 1, PAF_ACCDOWN, 0, 0 }, // WATER 180 wave over all three rows, lowers accuracy (code R)
++    { "DRAGONFIRE", {MOVE_SUNNY_DAY, MOVE_DRAGON_BREATH, MOVE_FLAMETHROWER}, GK_WAVE, TYPE_DRAGON, 200, 1, 1, 0, STATUS1_BURN, 0 }, // DRAGON 200 fire wave down the row + burn (code S)
+ };
+diff --git a/src/pkbn/owtest.c b/src/pkbn/owtest.c
+index bc83687..b599aaa 100644
+--- a/src/pkbn/owtest.c
++++ b/src/pkbn/owtest.c
+@@ -330,6 +330,18 @@ static void CB2_OwTestStart(void)
+                CountTotalItemQuantityInBag(ITEM_TM25), CountTotalItemQuantityInBag(ITEM_LEFTOVERS),
+                CountTotalItemQuantityInBag(ITEM_EXP_SHARE), (unsigned)GetMonData(&gPlayerParty[0], MON_DATA_HELD_ITEM));
+     }
++    if (getenv("PKBN_TEST_PADEX") != NULL)
++    {
++        // PKBN_TEST_PADEX="0,1,52": these PA Dex entries are found (POC-22c)
++        extern bool8 PkbnPaDex_Mark(u8 entry);
++        const char *t = getenv("PKBN_TEST_PADEX");
++        while (*t)
++        {
++            PkbnPaDex_Mark((u8)strtoul(t, (char **)&t, 10));
++            while (*t == ',')
++                t++;
++        }
++    }
+     if (getenv("PKBN_OWTEST_MONEY"))
+         SetMoney(&gSaveBlock1Ptr->money, (u32)atoi(getenv("PKBN_OWTEST_MONEY")));
+     SetWarpDestination(group, num, -1, x, y);
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index 40cb57c..0b25665 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -91,9 +91,17 @@ struct PkbnSaveFile
+     u8 pad9;
+     u32 darkPids[16];                         // Pokémon that used a Dark Chip (the aura while friendship is low)
+     struct { u32 hash; u16 frames; u8 bust; u8 pad; } ghostBest[PKBN_GHOST_RECORDS];   // best win per ghost
++    // ---- v9 tail (POC-22; appended fields start empty on older v9 files, PkbnSave_Read) ----
++    u8 paFound[PKBN_PADEX_BYTES];             // PA Dex: Program Advances formed at least once (bit per entry)
++    u8 paMilestones;                          // PA Dex milestones already rewarded
++    u8 folderBonus;                           // extra folder size from milestones (FOLDER_BONUS_MAX)
++    u8 pad22[2];
++    u16 bonusMove[PKBN_FOLDERS][FOLDER_BONUS_MAX];   // the saved folders' slots past PKBN_FOLDER_SLOTS
++    u8 bonusLetter[PKBN_FOLDERS][FOLDER_BONUS_MAX];
+ };
+ 
+ #define V8_SIZE offsetof(struct PkbnSaveFile, bonds)
++_Static_assert(PKBN_PADEX_ENTRIES <= PKBN_PADEX_BYTES * 8, "PA Dex outgrew its save bytes");
+ 
+ #define V7_SIZE offsetof(struct PkbnSaveFile, regMove)
+ 
+@@ -407,27 +415,40 @@ void PkbnFolder_Equip(u8 n)
+ u8 PkbnFolderEdit_Get(u16 *moves, u8 *letters)
+ {
+     u16 *m;
+-    u8 *l, *c, n;
+-    FolderStore(PkbnFolder_Equipped(), &m, &l, &c);
+-    n = *c > PKBN_FOLDER_SLOTS ? PKBN_FOLDER_SLOTS : *c;
+-    memcpy(moves, m, n * sizeof(u16));
+-    memcpy(letters, l, n);
++    u8 *l, *c, n, f = PkbnFolder_Equipped();
++    FolderStore(f, &m, &l, &c);
++    n = *c > FOLDER_MAX ? FOLDER_MAX : *c;
++    memcpy(moves, m, (n < PKBN_FOLDER_SLOTS ? n : PKBN_FOLDER_SLOTS) * sizeof(u16));
++    memcpy(letters, l, n < PKBN_FOLDER_SLOTS ? n : PKBN_FOLDER_SLOTS);
++    if (n > PKBN_FOLDER_SLOTS)   // POC-22c: the bonus slots
++    {
++        memcpy(moves + PKBN_FOLDER_SLOTS, sSave.bonusMove[f], (n - PKBN_FOLDER_SLOTS) * sizeof(u16));
++        memcpy(letters + PKBN_FOLDER_SLOTS, sSave.bonusLetter[f], n - PKBN_FOLDER_SLOTS);
++    }
+     return n;
+ }
+ 
+ void PkbnFolderEdit_Set(const u16 *moves, const u8 *letters, u8 count)
+ {
+     u16 *m;
+-    u8 *l, *c;
+-    FolderStore(PkbnFolder_Equipped(), &m, &l, &c);
+-    if (count > PKBN_FOLDER_SLOTS)
+-        count = PKBN_FOLDER_SLOTS;
++    u8 *l, *c, f = PkbnFolder_Equipped();
++    FolderStore(f, &m, &l, &c);
++    if (count > FOLDER_MAX)
++        count = FOLDER_MAX;
+     memset(m, 0, PKBN_FOLDER_SLOTS * sizeof(u16));
+     memset(l, 0, PKBN_FOLDER_SLOTS);
++    memset(sSave.bonusMove[f], 0, sizeof(sSave.bonusMove[f]));
++    memset(sSave.bonusLetter[f], 0, sizeof(sSave.bonusLetter[f]));
+     if (count)
+     {
+-        memcpy(m, moves, count * sizeof(u16));
+-        memcpy(l, letters, count);
++        u8 base = count < PKBN_FOLDER_SLOTS ? count : PKBN_FOLDER_SLOTS;
++        memcpy(m, moves, base * sizeof(u16));
++        memcpy(l, letters, base);
++        if (count > PKBN_FOLDER_SLOTS)   // POC-22c: the bonus slots
++        {
++            memcpy(sSave.bonusMove[f], moves + PKBN_FOLDER_SLOTS, (count - PKBN_FOLDER_SLOTS) * sizeof(u16));
++            memcpy(sSave.bonusLetter[f], letters + PKBN_FOLDER_SLOTS, count - PKBN_FOLDER_SLOTS);
++        }
+     }
+     *c = count;
+ }
+@@ -685,6 +706,39 @@ void PkbnBond_Add(u32 pidA, u32 pidB, s32 delta)
+     sSave.bonds[i].points = v < 0 ? 0 : v > PKBN_BOND_MAX ? PKBN_BOND_MAX : v;
+ }
+ 
++// ---- POC-22c: the PA Dex ------------------------------------------------------------------------------------------
++bool8 PkbnPaDex_Found(u8 entry)
++{
++    return entry < PKBN_PADEX_ENTRIES && ((sSave.paFound[entry / 8] >> (entry % 8)) & 1);
++}
++
++bool8 PkbnPaDex_Mark(u8 entry)   // TRUE: a first discovery
++{
++    if (entry >= PKBN_PADEX_ENTRIES || PkbnPaDex_Found(entry))
++        return FALSE;
++    sSave.paFound[entry / 8] |= 1 << (entry % 8);
++    return TRUE;
++}
++
++u8 PkbnPaDex_Count(void)
++{
++    u8 n = 0, e;
++    for (e = 0; e < PKBN_PADEX_ENTRIES; e++)
++        n += PkbnPaDex_Found(e);
++    return n;
++}
++
++u8 PkbnPaDex_Milestones(void) { return sSave.paMilestones; }
++void PkbnPaDex_SetMilestones(u8 n) { sSave.paMilestones = n; }
++u8 PkbnSave_FolderBonus(void) { return sSave.folderBonus < FOLDER_BONUS_MAX ? sSave.folderBonus : FOLDER_BONUS_MAX; }
++bool8 PkbnSave_AddFolderBonus(void)
++{
++    if (sSave.folderBonus >= FOLDER_BONUS_MAX)
++        return FALSE;
++    sSave.folderBonus++;
++    return TRUE;
++}
++
+ // POC-21: Gen 6's Exp. Share toggle
+ bool8 PkbnSave_ExpShareOn(void) { return !sSave.expShareOff; }
+ void PkbnSave_SetExpShare(bool8 on) { sSave.expShareOff = !on; }
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index cace2ad..e25e656 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -370,6 +370,12 @@ static void StepStart(void)
+     char player[16];
+     PlayerName(player, sizeof(player));
+     sPB.slot = 0xFF;
++    if (gPkbnPaDexNotes.shown < gPkbnPaDexNotes.count)
++    {
++        // POC-22c: what the PA Dex gave this battle
++        Say(PB_START, "%s", gPkbnPaDexNotes.line[gPkbnPaDexNotes.shown++]);
++        return;
++    }
+ 
+     switch (sB.outcome)
+     {
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index e13c909..6e84c1f 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -447,6 +447,18 @@ static void SeedTestPack(void)
+                     PkbnPack_Add(mv, info->lanes[k % info->laneCount], 1);
+                 PkbnPack_SetGranted(mv);
+             }
++    if ((t = getenv("PKBN_TEST_PADEX")) != NULL)
++    {
++        // POC-22c: these PA Dex entries are already found (and PKBN_TEST_PADEX_MILESTONES of its milestones paid)
++        while (*t)
++        {
++            PkbnPaDex_Mark((u8)strtoul(t, (char **)&t, 10));
++            while (*t == ',')
++                t++;
++        }
++        if (getenv("PKBN_TEST_PADEX_MILESTONES") != NULL)
++            PkbnPaDex_SetMilestones((u8)atoi(getenv("PKBN_TEST_PADEX_MILESTONES")));
++    }
+     if ((t = getenv("PKBN_TEST_GRANT_TM")) != NULL)
+     {
+         u16 item = (u16)atoi(t), mv = ItemIdToBattleMoveId(item);
+@@ -738,8 +750,8 @@ void Pkbn_SelfTestMaybeStart(void)
+         nv = PkbnSave_FindNavi((u16)atoi(getenv("PKBN_TEST_SIDECAR_READ")));
+         {
+             extern u32 PkbnSave_V3Size(void), PkbnSave_Size(void);
+-            u16 m[PKBN_FOLDER_SLOTS];
+-            u8 l[PKBN_FOLDER_SLOTS];
++            u16 m[FOLDER_MAX];
++            u8 l[FOLDER_MAX];
+             printf("[pkbn-selftest] sidecar read: navi %s (%u parts), EMBER copies %u, candy NORMAL %u, folder %u equipped, "
+                    "%u chips (v3 size %u, v4 size %u)\n", nv ? "found" : "missing", nv ? nv->count : 0,
+                    PkbnPack_Total(MOVE_EMBER), PkbnCandy_Get(TYPE_NORMAL), PkbnFolder_Equipped() + 1,
+-- 
+2.43.0
+

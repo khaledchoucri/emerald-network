@@ -123,3 +123,11 @@ run field_grass 0:35:10:10 "W200,G288:20,W60,P,W200,P,W1200,P,W10,Q" "panel reac
 # teaches the ball slot
 bt rescue_lesson "283:5:33/45" "lesson 1 done" PKBN_TEST_FIRST_BATTLE=1 PKBN_TEST_TUTORIAL=1
 bt catch_lesson "283:14:33/45,288:5:33/45" "lesson 4 done" PKBN_TEST_BALLS=4:5 PKBN_TEST_TUTORIAL=1
+# POC-22a: three Fire moves in rising power make FIRE TRIO; 22b: a new named Program Advance (Taillow's SKY RAID)
+bt trio_pa "281:30:52/172/53/24,288:20:33" "Program Advance formed: FIRE TRIO" PKBN_TEST_HAND="52,172,53" PKBN_TEST_PICKS="0,1,2"
+bt new_pa_sky_raid "304:22:98/64/17/45,288:20:33" "unleashes PROGRAM ADVANCE SKY RAID" PKBN_TEST_HAND="98,64,17" PKBN_TEST_PICKS="0,1,2"
+# POC-22c: the 5th Program Advance found is a milestone (+1 folder size); the PA DEX page in FOLDER
+bt padex_milestone "281:30:52/172/53/24,288:20:33" "pa dex milestone 1: folder +1" PKBN_TEST_PADEX="0,1,2,3" \
+    PKBN_TEST_HAND="52,172,53" PKBN_TEST_PICKS="0,1,2"
+run padex_page 0:10:10:10 "W240,S,W30,D,W15,D,W15,A,W90,>,W10,>,W10,>,W10,>,W10,>,W20,P,D,W5,D,W5,W20,P,W10,Q" "done at frame" \
+    PKBN_TEST_PADEX="0,9,10,22,50,59,60" PKBN_DATA_DIR="$OUT/padex_page/"
