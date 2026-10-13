@@ -1,0 +1,72 @@
+From 6bf931b4565d6b884d2ac1a4574a15036335c42c Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Tue, 13 Oct 2026 20:38:57 +0300
+Subject: [PATCH] POC-22e: type trios at 110% of their moves' power; a first
+ find gives one copy of each of the Program Advance's three chips
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/grid_battle.c | 22 +++++++++-------------
+ 1 file changed, 9 insertions(+), 13 deletions(-)
+
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index d5d9378..21241c9 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -1708,10 +1708,10 @@ static char sUnisonName[24];
+ 
+ // ---- POC-22a: type trios (Khaled's pick) ------------------------------------------------------------------------------
+ // Any three different damaging moves of one type, picked in a row with rising (or equal) power, are a Program Advance:
+-// "<TYPE> TRIO". It plays like the third move, at 70% of the three moves' power together (TUNE), as one hit. Named
++// "<TYPE> TRIO". It plays like the third move, at 110% of the three moves' power together (Khaled), as one hit. Named
+ // recipes are checked first. Moves whose damage isn't their power (power 1: Seismic Toss, Magnitude...) don't count.
+ // The chips still have to be picked together, so they share a code (or are *), as for any Program Advance.
+-#define TRIO_POWER_PCT 70
++#define TRIO_POWER_PCT 110   // Khaled: "Trio PA's should be at 110% move power"
+ struct PkbnProgramAdvance gPkbnTrioPA[PA_TRIO_SLOTS];
+ static char sTrioName[PA_TRIO_SLOTS][20];
+ static const char *const sTypeWords[NUMBER_OF_MON_TYPES] = {
+@@ -1758,8 +1758,8 @@ static bool8 TrioAt(const u8 *q, u8 i, u8 slot)
+ }
+ 
+ // ---- POC-22c: the PA Dex (Khaled's picks) -----------------------------------------------------------------------------
+-// The first time you form a Program Advance it goes in the PA Dex (FOLDER > PA DEX) and gives a copy of its rarest chip
+-// (the one of its three you own fewest of, in the code it had). Every 5 found is a milestone (TUNE), in turn: +1 folder
++// The first time you form a Program Advance it goes in the PA Dex (FOLDER > PA DEX) and gives one copy of each of its
++// three chips, in the codes they had (Khaled: "the first time doing it should reward one of each chip"). Every 5 found is a milestone (TUNE), in turn: +1 folder
+ // size (up to FOLDER_BONUS_MAX), a NaviCust program (sMilestonePrograms in order), a * copy of that Program Advance's
+ // third chip. The lines show after the battle (post_battle.c).
+ struct PkbnPaDexNotes gPkbnPaDexNotes;
+@@ -1787,23 +1787,19 @@ static void PaDiscover(u8 pa, u8 k)
+     s16 e = PkbnPaDex_EntryOf(pa);
+     const struct PkbnProgramAdvance *p = &PKBN_PA(pa);
+     char mvName[MOVE_NAME_LENGTH + 1], count[8];
+-    s32 i, rare = 0;
++    s32 i;
+     u8 found, done;
+     if (e < 0 || !PkbnPaDex_Mark((u8)e))
+         return;
+-    for (i = 1; i < 3; i++)
+-        if (PkbnPack_Total(sB.folder.chips[sB.paQueue[k].chips[i]].move)
+-          < PkbnPack_Total(sB.folder.chips[sB.paQueue[k].chips[rare]].move))
+-            rare = i;
++    for (i = 0; i < 3; i++)
+     {
+-        const struct FolderChip *c = &sB.folder.chips[sB.paQueue[k].chips[rare]];
++        const struct FolderChip *c = &sB.folder.chips[sB.paQueue[k].chips[i]];
+         PkbnPack_Add(c->move, c->letter, 1);
+-        Pkbn_GameStringToAscii(mvName, gMoveNames[c->move], sizeof(mvName));
+     }
+     found = PkbnPaDex_Count();
+     snprintf(count, sizeof(count), "%u", found);
+-    PKBN_LOG("pa dex: %s found (%u in the Dex), +1 %s chip", p->name, found, mvName);
+-    PaDexNote("NEW IN THE PA DEX: %s! GOT 1 %s CHIP.", p->name, mvName);
++    PKBN_LOG("pa dex: %s found (%u in the Dex), +1 of each of its 3 chips", p->name, found);
++    PaDexNote("NEW IN THE PA DEX: %s! GOT 1 OF EACH OF ITS CHIPS.%s", p->name, "");
+     done = PkbnPaDex_Milestones();
+     while ((u32)(done + 1) * PADEX_MILESTONE_EVERY <= found)
+     {
+-- 
+2.43.0
+

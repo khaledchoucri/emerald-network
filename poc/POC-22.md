@@ -2,8 +2,8 @@
 
 **Patches:** these go on top of 0001–0088.
 
-- `poc/patches/0089-POC-22-…` and `0090-POC-22d-version-0.22.patch`.
-- Applying 0001–0090 onto the pin was checked in a clean worktree.
+- `poc/patches/0089-POC-22-…`, `0090-POC-22d-version-0.22.patch` and `0091-POC-22e-…` (trios at 110%, each chip on a first find).
+- Applying 0001–0091 onto the pin was checked in a clean worktree.
 
 Your note: Program Advances should be a bigger part of the game. They should be easier to make, met early (by the second
 Gym) and rewarded through a PA Dex, and there should be more of them, "but we need to be smart about it". This POC
@@ -24,8 +24,8 @@ Values marked TUNE are our own numbers. Unless a line cites code, a rule is our 
 **The rule.** Three different damaging moves of one type, picked one after another with each at least as strong as the
 one before, are a Program Advance: FIRE TRIO, NORMAL TRIO and so on.
 
-- It plays like the third move, as one hit, at 70% of the three moves' power together (TUNE, the number on your picks
-  page). Ember → Flame Wheel → Flamethrower is FIRE TRIO 136, a LINE3 like Flamethrower.
+- It plays like the third move, as one hit, at 110% of the three moves' power together (your call after the first
+  build; it was 70%). Ember → Flame Wheel → Flamethrower is FIRE TRIO 214, a LINE3 like Flamethrower.
 - The named recipes are checked first, so a recipe that is also a trio stays the named one.
 - **Excluded:** moves whose damage isn't their power (power 1: Seismic Toss, Night Shade, Magnitude), the ??? type, and
   the same move twice.
@@ -34,8 +34,7 @@ one before, are a Program Advance: FIRE TRIO, NORMAL TRIO and so on.
 - **In code:** `TrioAt` in `src/pkbn/grid_battle.c`. A trio is built into the Program Advance slot it takes
   (`PA_TRIO`, two slots, as the Custom screen holds two Program Advances).
 
-**One thing to watch in playtests.** 70% of the three is less than the three chips would do separately. You still get
-one big hit that can't be split up, and the Busting point. If friends skip trios, raise it.
+At 110% a trio beats the three chips used one by one, so there's always a reason to line one up.
 
 **Your first one by the second Gym, without a lesson.** These are the damaging moves the Pokémon you meet before Brawly
 learn by level 19, with the code the three share (`research/poc22/early.py`):
@@ -103,8 +102,8 @@ the 17 type trios.
 - **Trios** show their type: three type icons with rising bars.
 - The page shows **FOUND n/66** and the count where the next reward comes.
 
-**First find.** The first time you form a Program Advance, you get one copy of its rarest chip: the one of its three
-you own fewest of, in the code it had.
+**First find.** The first time you form a Program Advance, you get one copy of each of its three chips, in the codes
+they had (your call; it was one copy of the rarest).
 
 **Milestones,** every 5 found, in turn (TUNE):
 
@@ -115,7 +114,7 @@ you own fewest of, in the code it had.
 | 15, 30, 45… | A `*` copy of that Program Advance's third chip |
 
 - Once the folder bonus is at +3, that turn gives a program instead.
-- What you got shows after the battle: "NEW IN THE PA DEX: FIRE TRIO! GOT 1 EMBER CHIP." and "5 PROGRAM ADVANCES FOUND!
+- What you got shows after the battle: "NEW IN THE PA DEX: FIRE TRIO! GOT 1 OF EACH OF ITS CHIPS." and "5 PROGRAM ADVANCES FOUND!
   YOUR FOLDER HOLDS ONE MORE CHIP."
 - **Busting Level:** using a Program Advance in a battle adds 1 point.
 
@@ -144,6 +143,6 @@ you own fewest of, in the code it had.
 
 ## Open / TUNE
 
-- The trio's 70%; each new Program Advance's power and effect; the milestone spacing and rewards.
+- The trio's 110%; each new Program Advance's power and effect; the milestone spacing and rewards.
 - Whether trios should also need rising power.
 - ASSET-002 (the Program Advance storyboard) is with Codex. Once it's accepted, the moment itself gets redrawn.
