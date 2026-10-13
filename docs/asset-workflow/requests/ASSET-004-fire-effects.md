@@ -5,11 +5,11 @@
 - State: delivered
 - Priority: 4
 - Assigned producer: Codex
-- Current owner: Khaled / implementation agent
+- Current owner: implementation agent
 - Brief revision: 3
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker: review the remaining four v002 source sheets. Implementation agent removes the burst halo, cleans alpha, quantizes/packs, aligns anchors and validates animations/runtime.
+- Next action / blocker: all five fire-effect source designs visually approved by Khaled. Implementation agent removes the burst halo, cleans alpha, quantizes/packs, aligns anchors and validates animations/runtime.
 
 ## Purpose and visual brief
 
@@ -103,15 +103,15 @@
 - Raw dimensions/alpha statistics/SHA-256 in `validation.json`; all four PNGs passed chunk CRCs and full decoding. Actual files are high-resolution RGBA source sheets, not exact packed native atlases. Transparent canvas pixels verified. Partial-alpha edges/residue remain.
 - Visual inspection: correct frame counts and distinct burst/jet/column/low-flame silhouettes, consistent fire colors and square particles; no visible text, logos or game characters. Exact cell spacing, anchor consistency, strict tone/pixel-grid compliance and seamless loop playback are not verified. The burst halo is a known STYLE.md deviation, not a passed check.
 - Implementation handoff: remove soft halo/stray alpha without losing square sparks, snap/quantize, extract and align frames to the targets above, pack one row per effect, check native/half-size readability and play the loops including final-to-first transition. Compare old/new effects in the requested self-test battle after integration. No preview animation or renderer test was executed here.
-- Prompts/reference record in `PROMPTS.md`. All imagery generated/edited with image_gen.imagegen; no programmatic image edits. Remaining four source sheets await visual review; production acceptance remains pending for all five effects.
+- Prompts/reference record in `PROMPTS.md`. All imagery generated/edited with image_gen.imagegen; no programmatic image edits. All five source designs are visually approved by Khaled; production acceptance remains pending for all five effects.
 
 ## Consolidated review
 
-- Reviewed delivery: v001 FIREBALL source sample
+- Reviewed delivery: v001 FIREBALL and all four remaining v002 source sheets
 - Reviewer: Khaled
 - Required changes: none
 - Optional preferences: none recorded
-- Decision and reason: user approved appearance and authorized the remaining four fire effects; animation/runtime checks remain pending.
+- Decision and reason: Khaled approved the appearance of all five source designs. No further visual revision requested; documented halo cleanup and animation/runtime checks remain required.
 
 ## Integration and acceptance (implementation agent)
 
@@ -136,3 +136,5 @@
 - 2026-10-13 — Codex — Khaled visually approved FIREBALL and requested continuation; generating the other four effects.
 
 - 2026-10-13 — Codex — delivered four remaining v002 fire source sheets; burst halo remains flagged for implementation cleanup, all animation/native/runtime checks pending. User requests independent generation be parallelized in future for speed.
+
+- 2026-10-13 — Codex — Khaled visually approved all four v002 source sheets. Source-art generation/review complete; implementation cleanup and production acceptance pending.
