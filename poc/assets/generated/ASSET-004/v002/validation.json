@@ -1,0 +1,118 @@
+[
+  {
+    "file": "fire_burst_source.png",
+    "dimensions": [
+      2048,
+      768
+    ],
+    "mode": "RGBA",
+    "sha256": "5420f850031a8c4e39cd64ce22813385350080bde98f8372d4712fe46d069588",
+    "png_crc": "passed",
+    "full_decode": "passed",
+    "alpha_zero_pixels": 1169989,
+    "alpha_partial_pixels": 402875,
+    "alpha_opaque_pixels": 0,
+    "target_cell": [
+      72,
+      108
+    ],
+    "target_frames": 4,
+    "target_sheet": [
+      288,
+      108
+    ],
+    "hold_game_frames": 6,
+    "loop": false,
+    "exact_packed_dimensions": false,
+    "playback": "unverified",
+    "anchor_alignment": "unverified",
+    "soft_halo_cleanup_required": true
+  },
+  {
+    "file": "flame_jet_source.png",
+    "dimensions": [
+      1880,
+      837
+    ],
+    "mode": "RGBA",
+    "sha256": "c0baf633f4391fc08963dcfcf08671e3e2ae3e8d802fcb5a0e90ecd0d9bca346",
+    "png_crc": "passed",
+    "full_decode": "passed",
+    "alpha_zero_pixels": 1321187,
+    "alpha_partial_pixels": 251495,
+    "alpha_opaque_pixels": 878,
+    "target_cell": [
+      232,
+      124
+    ],
+    "target_frames": 3,
+    "target_sheet": [
+      696,
+      124
+    ],
+    "hold_game_frames": 2,
+    "loop": true,
+    "exact_packed_dimensions": false,
+    "playback": "unverified",
+    "anchor_alignment": "unverified",
+    "soft_halo_cleanup_required": false
+  },
+  {
+    "file": "fire_tall_source.png",
+    "dimensions": [
+      1802,
+      872
+    ],
+    "mode": "RGBA",
+    "sha256": "589993f0da893c1a7fbbf4b4b4fdafecb089dfd886a5b75c25b1ff866ec2f81d",
+    "png_crc": "passed",
+    "full_decode": "passed",
+    "alpha_zero_pixels": 893313,
+    "alpha_partial_pixels": 677068,
+    "alpha_opaque_pixels": 963,
+    "target_cell": [
+      80,
+      116
+    ],
+    "target_frames": 3,
+    "target_sheet": [
+      240,
+      116
+    ],
+    "hold_game_frames": 2,
+    "loop": true,
+    "exact_packed_dimensions": false,
+    "playback": "unverified",
+    "anchor_alignment": "unverified",
+    "soft_halo_cleanup_required": false
+  },
+  {
+    "file": "fire_panel_source.png",
+    "dimensions": [
+      1672,
+      941
+    ],
+    "mode": "RGBA",
+    "sha256": "eaeaa7706315b6114f628bf191571a1df985080ccc249e2667f87ab136307791",
+    "png_crc": "passed",
+    "full_decode": "passed",
+    "alpha_zero_pixels": 1313012,
+    "alpha_partial_pixels": 258113,
+    "alpha_opaque_pixels": 2227,
+    "target_cell": [
+      64,
+      108
+    ],
+    "target_frames": 3,
+    "target_sheet": [
+      192,
+      108
+    ],
+    "hold_game_frames": 2,
+    "loop": true,
+    "exact_packed_dimensions": false,
+    "playback": "unverified",
+    "anchor_alignment": "unverified",
+    "soft_halo_cleanup_required": false
+  }
+]

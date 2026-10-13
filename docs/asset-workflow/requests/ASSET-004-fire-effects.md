@@ -9,7 +9,7 @@
 - Brief revision: 3
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker: review v001 FIREBALL source sample, then implementation agent packs/aligned frames and tests the loop. Other four effects remain gated on sample review.
+- Next action / blocker: review the remaining four v002 source sheets. Implementation agent removes the burst halo, cleans alpha, quantizes/packs, aligns anchors and validates animations/runtime.
 
 ## Purpose and visual brief
 
@@ -91,15 +91,27 @@
 - Visual review: white-yellow round cores, yellow/orange bodies, red-orange rear lobes, square sparks and crisp pixel clusters; faces right, no text/logo/background or other scene art. The three silhouettes/spacing differ slightly; shared anchor alignment and a seamless loop are not established.
 - File checks: all PNG chunk CRCs and full decode passed; transparent pixels present, with partial-alpha edges/residue remaining. Properties/counts and SHA-256 in `validation.json`.
 - Required implementation work: extract three sprites, clean alpha and stray edge pixels, snap/quantize according to STYLE.md, align identical projectile anchors (6 pixels left of each ball's back edge at vertical center), fit all content within 84×64 cells, pack one 252×64 row, play sequence 0→1→2→0 at 2 game frames per frame, inspect the final→first seam, then check native-size readability and renderer integration. No animation preview/playback or in-game check has been executed.
-- Sample not yet approved. FIRE_BURST, FLAME_JET, FIRE_TALL, FIRE_PANEL are not generated; wait for FIREBALL review before proceeding.
+- FIREBALL sample visually approved by Khaled; remaining four effects are now in progress. Approval is for source appearance, not verified loop/runtime behavior.
+
+### Delivery v002 — remaining four fire effects
+
+- Directory: `poc/assets/generated/ASSET-004/v002/`. FIREBALL remains in v001 and is visually approved.
+- `fire_burst_source.png`: four growing grounded impact stages; 72×108 cells, 6 game frames per stage, one-shot. Soft halo remains despite a cleanup edit; remove before production use. A separate redraw also failed that constraint and was not selected.
+- `flame_jet_source.png`: three horizontal jet phases, originating left and extending right; 232×124 cells, 2 game frames each, loop. Anchor target (46,100).
+- `fire_tall_source.png`: three tall upward flame-column phases; 80×116 cells, 2 game frames each, loop. Base target (40,106).
+- `fire_panel_source.png`: three low flame-face phases, clearly shorter/wider than the column; 64×108 cells, 2 game frames each, loop. Base target (32,92).
+- Raw dimensions/alpha statistics/SHA-256 in `validation.json`; all four PNGs passed chunk CRCs and full decoding. Actual files are high-resolution RGBA source sheets, not exact packed native atlases. Transparent canvas pixels verified. Partial-alpha edges/residue remain.
+- Visual inspection: correct frame counts and distinct burst/jet/column/low-flame silhouettes, consistent fire colors and square particles; no visible text, logos or game characters. Exact cell spacing, anchor consistency, strict tone/pixel-grid compliance and seamless loop playback are not verified. The burst halo is a known STYLE.md deviation, not a passed check.
+- Implementation handoff: remove soft halo/stray alpha without losing square sparks, snap/quantize, extract and align frames to the targets above, pack one row per effect, check native/half-size readability and play the loops including final-to-first transition. Compare old/new effects in the requested self-test battle after integration. No preview animation or renderer test was executed here.
+- Prompts/reference record in `PROMPTS.md`. All imagery generated/edited with image_gen.imagegen; no programmatic image edits. Remaining four source sheets await visual review; production acceptance remains pending for all five effects.
 
 ## Consolidated review
 
-- Reviewed delivery:
-- Reviewer:
-- Required changes:
-- Optional preferences:
-- Decision and reason:
+- Reviewed delivery: v001 FIREBALL source sample
+- Reviewer: Khaled
+- Required changes: none
+- Optional preferences: none recorded
+- Decision and reason: user approved appearance and authorized the remaining four fire effects; animation/runtime checks remain pending.
 
 ## Integration and acceptance (implementation agent)
 
@@ -120,3 +132,7 @@
 - 2026-10-13 — implementation agent (Claude) — revision 3: STYLE.md written from ASSET-001 v003; ready for Codex.
 
 - 2026-10-13 — Codex — delivered v001 three-phase FIREBALL source sample; loop/anchor/native packaging and review pending.
+
+- 2026-10-13 — Codex — Khaled visually approved FIREBALL and requested continuation; generating the other four effects.
+
+- 2026-10-13 — Codex — delivered four remaining v002 fire source sheets; burst halo remains flagged for implementation cleanup, all animation/native/runtime checks pending. User requests independent generation be parallelized in future for speed.
