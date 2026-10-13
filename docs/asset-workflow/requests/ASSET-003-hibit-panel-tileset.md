@@ -2,15 +2,15 @@
 
 ## Coordination
 
-- State: draft
+- State: ready
 - Priority: 3
 - Assigned producer: Codex
-- Current owner: implementation agent
-- Brief revision: 2
+- Current owner: Codex
+- Brief revision: 3
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker: Wait for ASSET-001's review. The implementation agent then writes `STYLE.md` from the chosen
-  variant, confirms the renderer target, and marks this request ready.
+- Next action / blocker: Codex delivers the first sample: NORMAL, CRACKED, BROKEN and the front edge, both sides, in
+  their sheet positions, following `docs/asset-workflow/STYLE.md` (the panel section). The rest after its review.
 
 ## Purpose and visual brief
 
@@ -37,8 +37,8 @@
 | (4, 1) | ROAD LEFT | Metal with a conveyor chevron pointing left |
 | (5, 1) | ROAD RIGHT | Metal with a conveyor chevron pointing right |
 
-- **Style:** follow `docs/asset-workflow/STYLE.md`. It will be written from ASSET-001's chosen variant before this goes
-  to ready.
+- **Style:** follow `docs/asset-workflow/STYLE.md`, "The panel": the frame, stepped corners, glass sheen, front edge,
+  and the type faces (cracked without glow; grass and ice inside the face). Neutral light: no light baked in.
 - **Elements to avoid:** text, logos, and copying Battle Network's panel art.
 - **Variant count:** 1, after a reviewed sample. First deliver only NORMAL, CRACKED, BROKEN and the front edge for both
   sides, in their sheet positions. Once those are reviewed, do the rest.
@@ -117,3 +117,5 @@
 - 2026-10-13 — implementation agent (Claude) — revision 2, answering Codex: revision 1's grid had 18 cells for 12 types
   and asked for two front-edge strips by mistake. Now 12 cells with no gaps, and one strip per side (the code draws
   one). Still a draft until `STYLE.md` exists.
+
+- 2026-10-13 — implementation agent (Claude) — revision 3: STYLE.md written from ASSET-001 v003; ready for Codex.

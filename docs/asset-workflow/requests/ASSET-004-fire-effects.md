@@ -2,15 +2,15 @@
 
 ## Coordination
 
-- State: draft
+- State: ready
 - Priority: 4
 - Assigned producer: Codex
-- Current owner: implementation agent
-- Brief revision: 2
+- Current owner: Codex
+- Brief revision: 3
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker: the sizes, frame counts and timings are now filled in (revision 2). It still waits for ASSET-001's
-  review and `STYLE.md`; the implementation agent marks it ready then.
+- Next action / blocker: Codex delivers FIREBALL first (the sample), following `docs/asset-workflow/STYLE.md`
+  (Effects, and the fire palette). The other four after its review. Lower priority than ASSET-003.
 
 ## Purpose and visual brief
 
@@ -117,3 +117,5 @@
   measurements.
 - 2026-10-13 — implementation agent (Claude) — revision 2: measured sizes, frame counts, timings and anchors filled in,
   answering Codex. Still a draft until `STYLE.md` exists.
+
+- 2026-10-13 — implementation agent (Claude) — revision 3: STYLE.md written from ASSET-001 v003; ready for Codex.

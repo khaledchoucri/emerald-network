@@ -9,7 +9,7 @@
 - Brief revision: 2
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker: v003 approved by Khaled. Implementation agent writes STYLE.md from the retained image before production requests proceed.
+- Next action / blocker: none; closed. STYLE.md carries the style forward.
 
 ## Purpose and visual brief
 
@@ -131,7 +131,7 @@ ASSET-004.
 ## Integration and acceptance (implementation agent)
 
 - Accepted delivery: v003, `poc/assets/generated/ASSET-001/v003/variant-a-stepped-corners.png`; user-approved concept style reference. In-game acceptance is not applicable.
-- Remaining work: write `docs/asset-workflow/STYLE.md` from the chosen variant before ASSET-003 goes to ready.
+- Remaining work: none. `docs/asset-workflow/STYLE.md` is written from v003 (2026-10-13); ASSET-003 and ASSET-004 are ready.
 
 ## Change history
 
@@ -146,3 +146,5 @@ ASSET-004.
 - 2026-10-13 — Codex — delivered v003: A with stepped inset panel corners, ready for GitHub review; not marked accepted.
 
 - 2026-10-13 — Codex — Khaled approved v003. Removed the six superseded PNGs from v001/v002 as explicitly requested; retained v003 and prompt/provenance notes.
+
+- 2026-10-13 — implementation agent (Claude) — wrote STYLE.md from v003 (palette sampled from the image, panel construction, what not to take from the concept). Closed.
