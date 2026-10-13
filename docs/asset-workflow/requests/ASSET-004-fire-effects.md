@@ -2,15 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 4
 - Assigned producer: Codex
-- Current owner: Codex
+- Current owner: Khaled / implementation agent
 - Brief revision: 3
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker: Codex delivers FIREBALL first (the sample), following `docs/asset-workflow/STYLE.md`
-  (Effects, and the fire palette). The other four after its review. Lower priority than ASSET-003.
+- Next action / blocker: review v001 FIREBALL source sample, then implementation agent packs/aligned frames and tests the loop. Other four effects remain gated on sample review.
 
 ## Purpose and visual brief
 
@@ -80,19 +79,19 @@
 
 ## Producer record
 
-- Brief revision used:
-- Assumptions / unresolved constraints:
-- Tool and generation/edit prompt:
-- References actually supplied to the tool:
+- Brief revision used: 3
+- Assumptions / unresolved constraints: choose the 3-frame option, 2 game frames per frame; source output not native packed dimensions. Loop and anchors require implementation validation.
+- Tool and generation/edit prompt: image_gen.imagegen; exact prompt in `poc/assets/generated/ASSET-004/v001/PROMPT.md`.
+- References actually supplied to the tool: approved ASSET-001 v003 only; no game screenshot/extracted effect sprite.
 
 ### Delivery v001
 
-- Exact output paths (repository-relative), or attachment plus transfer status:
-- Actual file format, dimensions, transparency, and frame layout:
-- Visual inspection performed and findings:
-- Technical checks performed and results:
-- Unchecked requirements / known limitations:
-- Conversion or integration still needed, with owner:
+- File: `poc/assets/generated/ASSET-004/v001/fireball_source.png`, available on GitHub for review.
+- Actual format: 1971×798 RGBA PNG, three visually separate right-facing fireball phases in one row on transparent canvas. This is source art; requested packed output is 252×64, three 84×64 cells, held 2 game frames each.
+- Visual review: white-yellow round cores, yellow/orange bodies, red-orange rear lobes, square sparks and crisp pixel clusters; faces right, no text/logo/background or other scene art. The three silhouettes/spacing differ slightly; shared anchor alignment and a seamless loop are not established.
+- File checks: all PNG chunk CRCs and full decode passed; transparent pixels present, with partial-alpha edges/residue remaining. Properties/counts and SHA-256 in `validation.json`.
+- Required implementation work: extract three sprites, clean alpha and stray edge pixels, snap/quantize according to STYLE.md, align identical projectile anchors (6 pixels left of each ball's back edge at vertical center), fit all content within 84×64 cells, pack one 252×64 row, play sequence 0→1→2→0 at 2 game frames per frame, inspect the final→first seam, then check native-size readability and renderer integration. No animation preview/playback or in-game check has been executed.
+- Sample not yet approved. FIRE_BURST, FLAME_JET, FIRE_TALL, FIRE_PANEL are not generated; wait for FIREBALL review before proceeding.
 
 ## Consolidated review
 
@@ -119,3 +118,5 @@
   answering Codex. Still a draft until `STYLE.md` exists.
 
 - 2026-10-13 — implementation agent (Claude) — revision 3: STYLE.md written from ASSET-001 v003; ready for Codex.
+
+- 2026-10-13 — Codex — delivered v001 three-phase FIREBALL source sample; loop/anchor/native packaging and review pending.

@@ -1,0 +1,46 @@
+[
+  {
+    "file": "panels_blue_source.png",
+    "size": [
+      2011,
+      782
+    ],
+    "mode": "RGBA",
+    "sha256": "a3eb3fbc9249fa4dca21eb3ad9b24d715fa0c49ce5b0425ac351195c25022982",
+    "png_crc": "passed",
+    "full_decode": "passed",
+    "alpha_zero_pixels": 693150,
+    "alpha_partial_pixels": 875861,
+    "alpha_opaque_pixels": 3591,
+    "broken_interior_probe": {
+      "xy": [
+        837,
+        260
+      ],
+      "alpha": 0
+    },
+    "exact_atlas_528x116": false
+  },
+  {
+    "file": "panels_red_source.png",
+    "size": [
+      2012,
+      782
+    ],
+    "mode": "RGBA",
+    "sha256": "d6a35c2248ef98faf2e6d046671c6c18c69765a6e998d992c266ccd12d8999af",
+    "png_crc": "passed",
+    "full_decode": "passed",
+    "alpha_zero_pixels": 698054,
+    "alpha_partial_pixels": 872322,
+    "alpha_opaque_pixels": 3008,
+    "broken_interior_probe": {
+      "xy": [
+        838,
+        260
+      ],
+      "alpha": 0
+    },
+    "exact_atlas_528x116": false
+  }
+]

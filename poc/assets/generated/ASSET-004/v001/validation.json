@@ -1,0 +1,33 @@
+{
+  "file": "fireball_source.png",
+  "dimensions": [
+    1971,
+    798
+  ],
+  "mode": "RGBA",
+  "sha256": "b99b630d82acd10bdf8ebda33d84d4da084e5689f9788c23186d5738c1d9c173",
+  "png_crc": "passed",
+  "full_decode": "passed",
+  "alpha_zero_pixels": 1276645,
+  "alpha_partial_pixels": 294635,
+  "alpha_opaque_pixels": 1578,
+  "alpha_bbox": [
+    43,
+    54,
+    1957,
+    772
+  ],
+  "target_cell_size": [
+    84,
+    64
+  ],
+  "target_frame_count": 3,
+  "target_frame_hold_game_frames": 2,
+  "target_sheet": [
+    252,
+    64
+  ],
+  "exact_sheet_dimensions": false,
+  "loop_playback": "unverified",
+  "anchor_alignment": "unverified"
+}

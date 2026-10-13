@@ -6,10 +6,10 @@
 - Priority: 3
 - Assigned producer: Codex
 - Current owner: Khaled / implementation agent
-- Brief revision: 3
+- Brief revision: 4
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker: review v001 red/blue source samples. Implementation agent must clean alpha, snap/quantize and pack the exact atlas before native-size/renderer acceptance. Remaining types wait for sample review.
+- Next action / blocker: review complete v002 red/blue source sets. Implementation agent normalizes border widths and packs/quantizes/cleans alpha; native-size and renderer checks remain pending.
 
 ## Purpose and visual brief
 
@@ -79,7 +79,7 @@
 
 ## Producer record
 
-- Brief revision used: 3
+- Brief revision used: 4 (complete v002 set); v001 used revision 3.
 - Assumptions / unresolved constraints: generator output is source artwork, not the requested exact packed atlas; see delivery limitations.
 - Tool and generation/edit prompt: image_gen.imagegen; exact prompts in `poc/assets/generated/ASSET-003/v001/PROMPTS.md`.
 - References actually supplied to the tool: approved ASSET-001 v003 for red; red sample for blue. No game screenshot or extracted sprites supplied.
@@ -92,15 +92,25 @@
 - Checks: all PNG chunk CRCs and full pixel decoding passed. BROKEN interior probe at (850,270) is alpha 0 in both files. Sample NORMAL/CRACKED/front-edge pixels have alpha 253–254 rather than fully opaque 255. There are also stray low-alpha pixels around/outside the artwork; clean before use. Aggregate counts, SHA-256 and bounds recorded in `validation.json`.
 - Failed/unmet production checks: exact 528×116 atlas dimensions/coordinates, fully opaque solid faces, binary crisp edges, exact matched geometry between sides. At most 16 colors per cell and strict hi-bit pixel alignment are not established. No native 88×52/half-size review or renderer test was performed because the images have not been converted/packed.
 - Implementation handoff: clean stray/partial alpha while preserving the BROKEN hole; extract the three panels and lip; establish shared geometry between red/blue; snap to the hi-bit grid and quantize to ≤16 colors per cell; pack panels at (0,0),(88,0),(176,0) with 88×52 cells and lip at (0,104) with 88×12 size into 528×116 sheets. For this initial sample only, all remaining cells and unused lip band stay alpha 0. Validate normal/cracked opacity, broken-hole alpha, exact dimensions, palette and native/half-size readability in the preview tool. Runtime acceptance follows when the renderer exists.
-- Remaining panel types are not generated. First-sample visual review pending; request is delivered for source review, not accepted or production-ready.
+- v001 samples were visually approved by Khaled with the note that blue borders appear thicker. Production acceptance remains pending. The remaining types are now supplied in v002.
+
+### Delivery v002 — complete source sets
+
+- Files: `poc/assets/generated/ASSET-003/v002/panels_red_source.png` and `panels_blue_source.png`. Blue is derived from the complete red source with explicit instructions to retain its frame geometry/width.
+- All 12 types, in order: top row NORMAL, CRACKED, BROKEN, POISON, HOLY, GRASS; bottom row ICE, LAVA, ROAD UP, DOWN, LEFT, RIGHT. One separate front edge per sheet below column 0.
+- Actual dimensions: red 2012×782, blue 2011×782, both RGBA. Generator output remains source artwork rather than the 528×116 packed atlas. The one-pixel canvas-width difference alone prevents a pixel-identical red/blue geometry claim.
+- Visual check: all types present in the requested order; square inset corners retained; dark non-glowing cracked metal contrasts with orange/yellow lava; poison bubbles, gold holy cross, green grass, flat blue ice facets and road chevrons identifiable. No text or logos. Blue frames more closely follow the red geometry, but exact border equality is not verified.
+- PNG CRC and full decode passed for both; interior probe in BROKEN is alpha 0 in both. Partial-alpha pixels and edge residue remain, as with v001; details and file hashes in `validation.json`.
+- Exact cell size/atlas placement, fully opaque non-hole faces, crisp binary alpha, palette ≤16 colors per cell, native/half-size readability and runtime acceptance remain unverified or unmet. Implementation agent must apply the v001 cleanup/packing handoff to all 12 cells and explicitly equalize the red/blue frame widths before testing.
+- Complete source review pending; sample approval does not imply approval of all new faces or renderer acceptance. Raw images copied without programmatic edits. Prompts/reference record in `v002/PROMPTS.md`.
 
 ## Consolidated review
 
-- Reviewed delivery:
-- Reviewer:
-- Required changes:
-- Optional preferences:
-- Decision and reason:
+- Reviewed delivery: v001 source samples
+- Reviewer: Khaled
+- Required changes: blue frames appear thicker; match red frame width and inner-face geometry on both sides.
+- Optional preferences: none recorded
+- Decision and reason: user approved the panel look and authorized remaining types; production acceptance remains pending.
 
 ## Integration and acceptance (implementation agent)
 
@@ -121,3 +131,7 @@
 - 2026-10-13 — implementation agent (Claude) — revision 3: STYLE.md written from ASSET-001 v003; ready for Codex.
 
 - 2026-10-13 — Codex — delivered v001 red/blue source samples with NORMAL, CRACKED, BROKEN and lip; exact atlas/alpha cleanup and sample review pending.
+
+- 2026-10-13 — Codex — brief revision 4: Khaled visually approved v001 samples, noted blue borders look thicker, and authorized continuation. Use red frame geometry for both sides.
+
+- 2026-10-13 — Codex — delivered complete v002 red/blue panel source sets using the red border as reference. Geometry/alpha/palette cleanup and full-set review remain pending.
