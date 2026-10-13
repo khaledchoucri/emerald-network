@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 7
 - Assigned producer: Codex
-- Current owner: Codex
+- Current owner: Khaled / implementation agent
 - Brief revision: 1
 - Based on repository commit: 1eb0e3d
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: Codex delivers the sample: the plate (H1) in its three colourways. After review, the rest.
+- Next action / blocker: Review H1 player/foe/FullSynchro sample; other HUD parts wait for approval. Engine/text/state checks follow in POC-24.
 
 ## Purpose and visual brief
 
@@ -91,10 +91,21 @@
 
 ## Producer record
 
-- Brief revision used:
-- Assumptions / unresolved constraints:
-- Tool and generation/edit prompt:
-- References actually supplied to the tool:
+- Brief revision used: 1.
+- Tool: image_gen.imagegen; exact prompt/reference list in the sample's PROMPT.md. Raw outputs retained under raw/ for reproducibility, not intended for runtime use.
+- Programmatic processing: authorized by PIPELINE.md Source-art rules item 7. Exact config and operations are in processing.json / validation.json; shared helper: poc/assets/generated/_tools/prepare_samples.py. Run from repository root with the sample's processing.json. Python dependencies: Pillow and NumPy.
+- Delivery scaling: native files plus exact 4× nearest-neighbor review PNGs and half-size previews. Raw generator dimensions were not native or exact integer multiples; cleanup reconstructs/packs the specified delivery geometry without claiming the raw art met that constraint.
+- Visual review performed on native and 4× samples; no visible text, logos or existing characters. User review and implementation integration remain pending.
+- References: approved red panel source for frame family. Generate one base then script-recolour to guarantee shared geometry; raw HUD 2106×747 RGBA.
+
+### Delivery v001 — initial sample
+
+- Native parts: poc/assets/generated/ASSET-007/v001/player.png, foe.png, synchro1.png, synchro2.png; each96×34. Order in h1_colorways.png: player, foe, Synchro1, Synchro2 (8px gaps).
+- Full Synchro sheet: synchro.png (200×34, two96×34 cells and8px gap); intended holds8/8 game frames, loop. Fill stays constant; rim tones pulse. Timing playback remains untested.
+- Cleanup: alpha threshold128; explicit main plate crop; 128×128 source corners mapped to8×8 native corners, edges reflowed using uniform middle samples and flat dark fill. Direct six-colour palette snapping preserves outline, shade and silver highlights; all colourways derive from the same index image, with pixel-identical alpha and material geometry. No mid-edge ornaments or fill gradients.
+- Tests: exact size, binary alpha, ≤16 colours per part, identical variant geometry and uniform nine-slice edges/fill passed. h1_stretch_preview.png exercises44×24,200×34 player and60×34 foe plates; all four8×8 corner patches preserved exactly. Dark flat text area is available; no actual font rendering test performed.
+- Review: h1_colorways_review_4x.png, h1_stretch_preview_review_4x.png, synchro_review_4x.png and half-size colourway preview.
+- Limitations: source corner/edge details were normalized by nine-slice reflow. Engine slicing/font fit, low-HP/FullSynchro state screenshots and pulse playback remain for implementation. H2/H3/H4/H5 not generated until this sample is reviewed.
 
 ## Consolidated review
 
@@ -116,3 +127,5 @@
 ## Change history
 
 - 2026-10-14 — implementation agent (Claude) — created at revision 1, ready for Codex.
+
+- 2026-10-14 — Codex — generated initial sample in parallel with ASSET-005..008; performed authorized scripted cleanup/packing and file checks; published for review, acceptance pending.

@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 8
 - Assigned producer: Codex
-- Current owner: Codex
+- Current owner: Khaled / implementation agent
 - Brief revision: 1
 - Based on repository commit: 1eb0e3d
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: Codex delivers the sample: the chip card (P1, face and back). After review, the rest.
+- Next action / blocker: Review P1 front/back; turning frames and P2..P6 remain gated on sample approval. Renderer/flip tests follow later.
 
 ## Purpose and visual brief
 
@@ -83,10 +83,21 @@
 
 ## Producer record
 
-- Brief revision used:
-- Assumptions / unresolved constraints:
-- Tool and generation/edit prompt:
-- References actually supplied to the tool:
+- Brief revision used: 1.
+- Tool: image_gen.imagegen; exact prompt/reference list in the sample's PROMPT.md. Raw outputs retained under raw/ for reproducibility, not intended for runtime use.
+- Programmatic processing: authorized by PIPELINE.md Source-art rules item 7. Exact config and operations are in processing.json / validation.json; shared helper: poc/assets/generated/_tools/prepare_samples.py. Run from repository root with the sample's processing.json. Python dependencies: Pillow and NumPy.
+- Delivery scaling: native files plus exact 4× nearest-neighbor review PNGs and half-size previews. Raw generator dimensions were not native or exact integer multiples; cleanup reconstructs/packs the specified delivery geometry without claiming the raw art met that constraint.
+- Visual review performed on native and 4× samples; no visible text, logos or existing characters. User review and implementation integration remain pending.
+- References: approved storyboard frame1 plus approved red panels. Raw two-card source1635×962 RGBA.
+
+### Delivery v001 — initial sample
+
+- Native sample: poc/assets/generated/ASSET-008/v001/card_front.png and card_back.png, each72×88; card_front_back.png is152×88 with8px gap. Front/back silhouettes share identical alpha.
+- Cleanup: explicit source crops, alpha threshold128, aspect-preserving nearest-neighbor fit72×86 with1px vertical padding, shared16-colour silver/dark/magenta palette; native front window flattened to exact40×40 at[16,16,56,56]. Blank16×16 code area at[52,68,68,84] stays inside the bottom-right rim (documented placement interpretation to preserve silhouette).
+- Window centre (36,36), eight pixels above card centre (36,44). Type symbol/code lettering deliberately absent; engine supplies them. Back retains an original plain geometric pattern, no lettering.
+- Checks: exact cell size, binary alpha, ≤16 colours per face, shared outline, blank window/tab areas and clear8px sheet gap passed. Native/4× visual review confirms a readable card silhouette and distinct front/back. Half-size preview provided.
+- Review: card_front_back_review_4x.png (608×352).
+- Limitations: no turning frames yet, hence flip playback untested. Code tab is reserved just inside the outer rim rather than flush to the absolute cell edges; implementation must use recorded coordinates or adjust its placement. P2..P6 and P1 turning frames wait for this sample's review.
 
 ## Consolidated review
 
@@ -108,3 +119,5 @@
 ## Change history
 
 - 2026-10-14 — implementation agent (Claude) — created at revision 1 from ASSET-002 v001, ready for Codex.
+
+- 2026-10-14 — Codex — generated initial sample in parallel with ASSET-005..008; performed authorized scripted cleanup/packing and file checks; published for review, acceptance pending.

@@ -1,0 +1,43 @@
+{
+  "mode": "backdrop",
+  "output_dir": "poc/assets/generated/ASSET-005/v001",
+  "items": [
+    {
+      "input": "poc/assets/generated/ASSET-005/v001/raw/backdrop.png"
+    }
+  ],
+  "palette": [
+    "#061833",
+    "#071833",
+    "#091d3d",
+    "#0b244a",
+    "#0b2d61",
+    "#093773",
+    "#083e86"
+  ],
+  "review_names": [
+    "backdrop.png"
+  ],
+  "source_horizon": 142,
+  "target_horizon": 150,
+  "sky_bands": [
+    [
+      0,
+      96,
+      "#061833"
+    ],
+    [
+      96,
+      144,
+      "#071833"
+    ],
+    [
+      144,
+      150,
+      "#091d3d"
+    ]
+  ],
+  "half_reviews": true,
+  "flatten_floor_dark": "#071833",
+  "floor_grid_blue_threshold": 100
+}

@@ -1,0 +1,430 @@
+{
+  "mode": "hit",
+  "config": {
+    "mode": "hit",
+    "output_dir": "poc/assets/generated/ASSET-006/v001",
+    "common_scale": true,
+    "minimum_component_pixels": 48,
+    "items": [
+      {
+        "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+        "crop": [
+          0,
+          180,
+          280,
+          620
+        ],
+        "trim_alpha": true
+      },
+      {
+        "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+        "crop": [
+          280,
+          180,
+          625,
+          620
+        ],
+        "trim_alpha": true
+      },
+      {
+        "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+        "crop": [
+          625,
+          180,
+          980,
+          620
+        ],
+        "trim_alpha": true
+      },
+      {
+        "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+        "crop": [
+          980,
+          180,
+          1375,
+          620
+        ],
+        "trim_alpha": true
+      },
+      {
+        "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+        "crop": [
+          1375,
+          180,
+          1740,
+          620
+        ],
+        "trim_alpha": true
+      },
+      {
+        "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+        "crop": [
+          1740,
+          180,
+          2041,
+          620
+        ],
+        "trim_alpha": true
+      }
+    ],
+    "review_names": [
+      "hit.png"
+    ],
+    "gray_thresholds": [
+      95,
+      135,
+      175,
+      225
+    ],
+    "half_reviews": true
+  },
+  "operations": [
+    {
+      "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+      "crop": [
+        0,
+        180,
+        280,
+        620
+      ],
+      "source_size_after_crop": [
+        139,
+        132
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 6894,
+      "component_minimum_source_pixels": 48,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+      "crop": [
+        280,
+        180,
+        625,
+        620
+      ],
+      "source_size_after_crop": [
+        200,
+        193
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 18519,
+      "component_minimum_source_pixels": 48,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+      "crop": [
+        625,
+        180,
+        980,
+        620
+      ],
+      "source_size_after_crop": [
+        289,
+        283
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 41773,
+      "component_minimum_source_pixels": 48,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+      "crop": [
+        980,
+        180,
+        1375,
+        620
+      ],
+      "source_size_after_crop": [
+        340,
+        344
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 69472,
+      "component_minimum_source_pixels": 48,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+      "crop": [
+        1375,
+        180,
+        1740,
+        620
+      ],
+      "source_size_after_crop": [
+        319,
+        311
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 41072,
+      "component_minimum_source_pixels": 48,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+      "crop": [
+        1740,
+        180,
+        2041,
+        620
+      ],
+      "source_size_after_crop": [
+        230,
+        265
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 11553,
+      "component_minimum_source_pixels": 48,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "operation": "common_scale_centered_frame",
+      "scale": 0.1744186046511628,
+      "original": [
+        139,
+        132
+      ],
+      "resized": [
+        24,
+        23
+      ],
+      "offset": [
+        20,
+        20
+      ]
+    },
+    {
+      "operation": "common_scale_centered_frame",
+      "scale": 0.1744186046511628,
+      "original": [
+        200,
+        193
+      ],
+      "resized": [
+        35,
+        34
+      ],
+      "offset": [
+        14,
+        15
+      ]
+    },
+    {
+      "operation": "common_scale_centered_frame",
+      "scale": 0.1744186046511628,
+      "original": [
+        289,
+        283
+      ],
+      "resized": [
+        50,
+        49
+      ],
+      "offset": [
+        7,
+        7
+      ]
+    },
+    {
+      "operation": "common_scale_centered_frame",
+      "scale": 0.1744186046511628,
+      "original": [
+        340,
+        344
+      ],
+      "resized": [
+        59,
+        60
+      ],
+      "offset": [
+        2,
+        2
+      ]
+    },
+    {
+      "operation": "common_scale_centered_frame",
+      "scale": 0.1744186046511628,
+      "original": [
+        319,
+        311
+      ],
+      "resized": [
+        56,
+        54
+      ],
+      "offset": [
+        4,
+        5
+      ]
+    },
+    {
+      "operation": "common_scale_centered_frame",
+      "scale": 0.1744186046511628,
+      "original": [
+        230,
+        265
+      ],
+      "resized": [
+        40,
+        46
+      ],
+      "offset": [
+        12,
+        9
+      ]
+    },
+    {
+      "operation": "nearest_grey_palette",
+      "palette": [
+        "#202020",
+        "#585858",
+        "#909090",
+        "#c8c8c8",
+        "#ffffff"
+      ]
+    },
+    {
+      "operation": "gray_tone_band_remap",
+      "source_thresholds": [
+        95,
+        135,
+        175,
+        225
+      ],
+      "palette": [
+        "#202020",
+        "#585858",
+        "#909090",
+        "#c8c8c8",
+        "#ffffff"
+      ],
+      "reason": "retain five source material tiers, including dark outline"
+    },
+    {
+      "operation": "pack",
+      "cell": [
+        64,
+        64
+      ],
+      "frames": 6,
+      "gap": 8,
+      "anchor": [
+        32,
+        32
+      ],
+      "times_game_frames": [
+        1,
+        1,
+        2,
+        2,
+        2,
+        2
+      ],
+      "loop": false
+    },
+    {
+      "operation": "integer_review_enlargement",
+      "source": "hit.png",
+      "scale": 4,
+      "resampler": "nearest",
+      "review_only": true
+    },
+    {
+      "operation": "half_size_review",
+      "source": "hit.png",
+      "resampler": "nearest",
+      "review_only": true
+    }
+  ],
+  "outputs": [
+    {
+      "path": "poc/assets/generated/ASSET-006/v001/hit.png",
+      "sha256": "032cb5ec32b3cb1cc674a00bf8ceb0ca9490d1991537ff49b8f63902b0cec2bd",
+      "dimensions": [
+        424,
+        64
+      ],
+      "visible_colors": [
+        "#202020",
+        "#585858",
+        "#909090",
+        "#c8c8c8",
+        "#ffffff"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "palette_membership": true,
+        "clear_frame_gaps": true,
+        "all_five_greys_used": true
+      },
+      "passed": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-006/v001/hit_review_4x.png",
+      "sha256": "1bf9aae8daebcdcf1a5bae8306250c3fe5603988f1e4ea28edc9362138e62cbb",
+      "dimensions": [
+        1696,
+        256
+      ],
+      "visible_colors": [
+        "#202020",
+        "#585858",
+        "#909090",
+        "#c8c8c8",
+        "#ffffff"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true
+      },
+      "passed": true,
+      "review_only": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-006/v001/hit_review_half.png",
+      "sha256": "1c58da736c3d71d1507560dd37addc0ab2380e2ccd5cea26d2da6ff6caf76715",
+      "dimensions": [
+        212,
+        32
+      ],
+      "visible_colors": [
+        "#202020",
+        "#585858",
+        "#909090",
+        "#c8c8c8",
+        "#ffffff"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true
+      },
+      "passed": true,
+      "review_only": true
+    }
+  ],
+  "all_checks_passed": true,
+  "limits": [
+    "Visual review and native/half-size readability remain required.",
+    "No in-game, timing playback, or renderer integration validation performed.",
+    "Component filtering is on source pixels; use minimum=1 to preserve intended sparks.",
+    "HUD edge normalization preserves corners but can change source edge detail.",
+    "Center anchors are cell centers, not proof of the artwork focal-point location."
+  ]
+}

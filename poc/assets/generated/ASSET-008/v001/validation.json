@@ -1,0 +1,410 @@
+{
+  "mode": "card",
+  "config": {
+    "mode": "card",
+    "output_dir": "poc/assets/generated/ASSET-008/v001",
+    "preserve_tab_silhouette": true,
+    "items": [
+      {
+        "name": "front",
+        "input": "poc/assets/generated/ASSET-008/v001/raw/chip_cards.png",
+        "crop": [
+          144,
+          91,
+          788,
+          856
+        ],
+        "blank_window": true
+      },
+      {
+        "name": "back",
+        "input": "poc/assets/generated/ASSET-008/v001/raw/chip_cards.png",
+        "crop": [
+          848,
+          91,
+          1492,
+          856
+        ]
+      }
+    ],
+    "tab_box": [
+      52,
+      68,
+      68,
+      84
+    ],
+    "review_names": [
+      "card_front_back.png"
+    ],
+    "palette": [
+      "#0b0a14",
+      "#161b2d",
+      "#26293e",
+      "#393c54",
+      "#535b73",
+      "#69758c",
+      "#8793ae",
+      "#b2bed2",
+      "#e1e7f3",
+      "#f4f7fc",
+      "#460c35",
+      "#8b1b58",
+      "#c9007c",
+      "#fa2d98",
+      "#ff65a5",
+      "#ffa6d1"
+    ],
+    "half_reviews": true
+  },
+  "operations": [
+    {
+      "input": "poc/assets/generated/ASSET-008/v001/raw/chip_cards.png",
+      "crop": [
+        144,
+        91,
+        788,
+        856
+      ],
+      "source_size_after_crop": [
+        644,
+        765
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 489115,
+      "component_minimum_source_pixels": 1,
+      "removed_component_pixels": 0,
+      "trim_alpha": false
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        644,
+        765
+      ],
+      "native": [
+        72,
+        88
+      ],
+      "scale": 0.11180124223602485,
+      "resized": [
+        72,
+        86
+      ],
+      "offset": [
+        0,
+        1
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "nearest_fixed_palette",
+      "palette": [
+        "#0b0a14",
+        "#161b2d",
+        "#26293e",
+        "#393c54",
+        "#535b73",
+        "#69758c",
+        "#8793ae",
+        "#b2bed2",
+        "#e1e7f3",
+        "#f4f7fc",
+        "#460c35",
+        "#8b1b58",
+        "#c9007c",
+        "#fa2d98",
+        "#ff65a5",
+        "#ffa6d1"
+      ],
+      "dither": false
+    },
+    {
+      "operation": "flatten_blank_symbol_window_and_code_tab",
+      "window_xyxy": [
+        16,
+        16,
+        56,
+        56
+      ],
+      "code_tab_xyxy": [
+        52,
+        68,
+        68,
+        84
+      ],
+      "tab_assumption": "16\u00d716 interior bottom-right reservation, avoiding outer silhouette"
+    },
+    {
+      "input": "poc/assets/generated/ASSET-008/v001/raw/chip_cards.png",
+      "crop": [
+        848,
+        91,
+        1492,
+        856
+      ],
+      "source_size_after_crop": [
+        644,
+        765
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 489157,
+      "component_minimum_source_pixels": 1,
+      "removed_component_pixels": 0,
+      "trim_alpha": false
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        644,
+        765
+      ],
+      "native": [
+        72,
+        88
+      ],
+      "scale": 0.11180124223602485,
+      "resized": [
+        72,
+        86
+      ],
+      "offset": [
+        0,
+        1
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "nearest_fixed_palette",
+      "palette": [
+        "#0b0a14",
+        "#161b2d",
+        "#26293e",
+        "#393c54",
+        "#535b73",
+        "#69758c",
+        "#8793ae",
+        "#b2bed2",
+        "#e1e7f3",
+        "#f4f7fc",
+        "#460c35",
+        "#8b1b58",
+        "#c9007c",
+        "#fa2d98",
+        "#ff65a5",
+        "#ffa6d1"
+      ],
+      "dither": false
+    },
+    {
+      "operation": "pack",
+      "cell": [
+        72,
+        88
+      ],
+      "frames": [
+        "front",
+        "back"
+      ],
+      "gap": 8,
+      "anchor": [
+        36,
+        44
+      ],
+      "turning_frames": "not_in_sample"
+    },
+    {
+      "operation": "integer_review_enlargement",
+      "source": "card_front_back.png",
+      "scale": 4,
+      "resampler": "nearest",
+      "review_only": true
+    },
+    {
+      "operation": "half_size_review",
+      "source": "card_front_back.png",
+      "resampler": "nearest",
+      "review_only": true
+    }
+  ],
+  "outputs": [
+    {
+      "path": "poc/assets/generated/ASSET-008/v001/card_front.png",
+      "sha256": "0d1867364a23b1df5a9a8a328aa521381c7d130a8417f44e57d1d166e30c3d7d",
+      "dimensions": [
+        72,
+        88
+      ],
+      "visible_colors": [
+        "#0b0a14",
+        "#161b2d",
+        "#26293e",
+        "#393c54",
+        "#460c35",
+        "#535b73",
+        "#69758c",
+        "#8793ae",
+        "#8b1b58",
+        "#b2bed2",
+        "#c9007c",
+        "#e1e7f3",
+        "#f4f7fc",
+        "#fa2d98",
+        "#ff65a5",
+        "#ffa6d1"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "window_40x40_flat": true,
+        "tab_16x16_flat_visible_fill": true
+      },
+      "passed": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-008/v001/card_back.png",
+      "sha256": "43cf55777bf9af6d9feead310f93f3a2c37a5efe18218ebf56a1a0dcd697f7a1",
+      "dimensions": [
+        72,
+        88
+      ],
+      "visible_colors": [
+        "#0b0a14",
+        "#161b2d",
+        "#26293e",
+        "#393c54",
+        "#460c35",
+        "#535b73",
+        "#69758c",
+        "#8793ae",
+        "#8b1b58",
+        "#b2bed2",
+        "#c9007c",
+        "#e1e7f3",
+        "#f4f7fc",
+        "#fa2d98",
+        "#ff65a5",
+        "#ffa6d1"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true
+      },
+      "passed": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-008/v001/card_front_back.png",
+      "sha256": "35c85cf7e470394c4c0949588b1d823432554e0a0ac28b01942fb747c2583573",
+      "dimensions": [
+        152,
+        88
+      ],
+      "visible_colors": [
+        "#0b0a14",
+        "#161b2d",
+        "#26293e",
+        "#393c54",
+        "#460c35",
+        "#535b73",
+        "#69758c",
+        "#8793ae",
+        "#8b1b58",
+        "#b2bed2",
+        "#c9007c",
+        "#e1e7f3",
+        "#f4f7fc",
+        "#fa2d98",
+        "#ff65a5",
+        "#ffa6d1"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "clear_frame_gaps": true,
+        "shared_front_back_outline_alpha": true
+      },
+      "passed": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-008/v001/card_front_back_review_4x.png",
+      "sha256": "3383bd28d5888b848b8ec50761cca58867cd5eb9efdc5b8ec96d77eecd3b6a49",
+      "dimensions": [
+        608,
+        352
+      ],
+      "visible_colors": [
+        "#0b0a14",
+        "#161b2d",
+        "#26293e",
+        "#393c54",
+        "#460c35",
+        "#535b73",
+        "#69758c",
+        "#8793ae",
+        "#8b1b58",
+        "#b2bed2",
+        "#c9007c",
+        "#e1e7f3",
+        "#f4f7fc",
+        "#fa2d98",
+        "#ff65a5",
+        "#ffa6d1"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true
+      },
+      "passed": true,
+      "review_only": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-008/v001/card_front_back_review_half.png",
+      "sha256": "dbce6a2cab445234e4bd7f55f11950faaee8d6ed3f9a0dbcab68e3b13a8f5e83",
+      "dimensions": [
+        76,
+        44
+      ],
+      "visible_colors": [
+        "#0b0a14",
+        "#161b2d",
+        "#26293e",
+        "#393c54",
+        "#460c35",
+        "#535b73",
+        "#69758c",
+        "#8793ae",
+        "#8b1b58",
+        "#b2bed2",
+        "#c9007c",
+        "#e1e7f3",
+        "#f4f7fc",
+        "#fa2d98",
+        "#ff65a5",
+        "#ffa6d1"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true
+      },
+      "passed": true,
+      "review_only": true
+    }
+  ],
+  "all_checks_passed": true,
+  "limits": [
+    "Visual review and native/half-size readability remain required.",
+    "No in-game, timing playback, or renderer integration validation performed.",
+    "Component filtering is on source pixels; use minimum=1 to preserve intended sparks.",
+    "HUD edge normalization preserves corners but can change source edge detail.",
+    "Center anchors are cell centers, not proof of the artwork focal-point location."
+  ]
+}

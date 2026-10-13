@@ -1,0 +1,56 @@
+{
+  "mode": "card",
+  "output_dir": "poc/assets/generated/ASSET-008/v001",
+  "preserve_tab_silhouette": true,
+  "items": [
+    {
+      "name": "front",
+      "input": "poc/assets/generated/ASSET-008/v001/raw/chip_cards.png",
+      "crop": [
+        144,
+        91,
+        788,
+        856
+      ],
+      "blank_window": true
+    },
+    {
+      "name": "back",
+      "input": "poc/assets/generated/ASSET-008/v001/raw/chip_cards.png",
+      "crop": [
+        848,
+        91,
+        1492,
+        856
+      ]
+    }
+  ],
+  "tab_box": [
+    52,
+    68,
+    68,
+    84
+  ],
+  "review_names": [
+    "card_front_back.png"
+  ],
+  "palette": [
+    "#0b0a14",
+    "#161b2d",
+    "#26293e",
+    "#393c54",
+    "#535b73",
+    "#69758c",
+    "#8793ae",
+    "#b2bed2",
+    "#e1e7f3",
+    "#f4f7fc",
+    "#460c35",
+    "#8b1b58",
+    "#c9007c",
+    "#fa2d98",
+    "#ff65a5",
+    "#ffa6d1"
+  ],
+  "half_reviews": true
+}

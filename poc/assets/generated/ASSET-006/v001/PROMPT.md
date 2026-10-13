@@ -1,0 +1,9 @@
+# ASSET-006 — sample generation
+
+Brief revision: 1. Tool: image_gen.imagegen. Generated in parallel with the other initial samples. References supplied: `poc/assets/generated/ASSET-004/v001/fireball_source.png`.
+
+Raw generator output retained under `raw/`. Scripted cleanup/packing is authorized by PIPELINE.md Source-art rules, item 7. Exact operations and validation are recorded in processing.json and validation.json after processing. Final sample files, rather than raw outputs, are the delivery targets.
+
+## Exact prompt
+
+Create ONE ORIGINAL SIX-FRAME neutral GRAYSCALE HIT IMPACT spritesheet. Attachedapproved fireballisONLYpixelcluster/outline/squareparticle style; NO firecolors,no fireballshapes. Exactly SIX sprites evenly spaced LEFT TO RIGHT in ONE horizontalrow, eachinsquare64x64nativecell,8nativepixeltransparentgapsbetweencells, target424x64. Samecenteranchorall6. ONESHOTphysicalimpact10gameframes, phaseholds1/1/2/2/2/2. Sixstages:1tinywhiteflash,2compactroundflash,3strongroundimpactcorewith6–8angularrays,4expandedround6–8rayflash,5corebreaksapartintosquare sparkring,6smallerfadingdetachedsquarefragments. Firsttwoshapescompactnotlinearstar, distinctflashgrowthtobreakingintosparks. Only EXACTsolidgraytones#202020,#585858,#909090,#c8c8c8,#ffffff, plusalpha0. ZEROcoloredpixels. Fullyopaqueinteriorwithhardpixeloutlines, outsidevisibleburst/sparksfullytransparent, NO blurredhalos,softalpha,glowclouds,darkmatte,checkerboardsdrawnintopixels. Everygrayarea flat, no gradient/noantialiasing.2–3tonespluswhitecore; crisp chunkyretrohi-bit. Sparse1–2nativepixelsquaresparks, containedintheir owncell. Generouscleangaps,nooverlap. Originalphysicalimpact, notcopied sprites. No text/numbers/labels/frameboxes/logos/scene. Outputone transparentPNG containing EXACTsixstages; drawnatwhole-numbernativecellscale.

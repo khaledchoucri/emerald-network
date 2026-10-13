@@ -1,0 +1,66 @@
+{
+  "mode": "hud",
+  "output_dir": "poc/assets/generated/ASSET-007/v001",
+  "alpha_threshold": 128,
+  "minimum_component_pixels": 1,
+  "items": [
+    {
+      "input": "poc/assets/generated/ASSET-007/v001/raw/hud_plate.png",
+      "crop": [
+        135,
+        172,
+        1972,
+        571
+      ]
+    }
+  ],
+  "base_palette": [
+    "#0b0a14",
+    "#061833",
+    "#283653",
+    "#536787",
+    "#9db0ca",
+    "#edf2fa"
+  ],
+  "colorways": {
+    "player": [
+      "#0b0a14",
+      "#061833",
+      "#283653",
+      "#536787",
+      "#9db0ca",
+      "#edf2fa"
+    ],
+    "foe": [
+      "#0b0a14",
+      "#26101b",
+      "#56243b",
+      "#8c4560",
+      "#d77b96",
+      "#ffe5eb"
+    ],
+    "synchro1": [
+      "#0b0a14",
+      "#24190d",
+      "#614018",
+      "#a6772a",
+      "#e4b85a",
+      "#fff2b8"
+    ],
+    "synchro2": [
+      "#0b0a14",
+      "#24190d",
+      "#614018",
+      "#bb903b",
+      "#f4cf75",
+      "#fff9d7"
+    ]
+  },
+  "source_corner": 128,
+  "review_names": [
+    "h1_colorways.png",
+    "synchro.png",
+    "h1_stretch_preview.png"
+  ],
+  "half_reviews": true
+}

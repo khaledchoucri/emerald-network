@@ -1,0 +1,9 @@
+# ASSET-005 — sample generation
+
+Brief revision: 1. Tool: image_gen.imagegen. Generated in parallel with the other initial samples. References supplied: `poc/assets/generated/ASSET-001/v003/variant-a-stepped-corners.png`.
+
+Raw generator output retained under `raw/`. Scripted cleanup/packing is authorized by PIPELINE.md Source-art rules, item 7. Exact operations and validation are recorded in processing.json and validation.json after processing. Final sample files, rather than raw outputs, are the delivery targets.
+
+## Exact prompt
+
+Create ONE ORIGINAL static NET BACKDROP, isolating and redrawing ONLY the digital background from attached approved pixel-art battle concept. Delete all panels, red/blue frames, fighters, attacks, HUDframes, text strip, flames, grass,ice. OPAQUE full-frame landscape3:2 PNG, request528x352 or exact integer enlargement1056x704/1584x1056. Deepnavy flat sky tones#061833,#071833, darker#040d20; a crisp receding blue grid floor with straight lines#083e86 and veryrestrainedhorizonband. Horizonat42.6%imageheight (=y150/352), grid converges into depth behind battlepanelswhichwill covery164..333later. Interestinthe upperhalf: empty dark cyberspace calmnegative space, crisp subtle depth,no floating motes,no vertical datastreams (separate moving layers later), no stars,moon,clouds,landscape,buildings,circuitsicons,letters,readabletext,logos. Grid lines1nativepixelthick and pixeldiscrete staircases. Broadhorizontalflatcolorbands only, NO smoothgradients,bloom,blur,antialiasing,light spill or glowsbakedatfuturepanelpositions. The actualgamepanelsmust remain brighter thanbackground. Atmost16palettecolors, pixelart528x352grid, not vectorphotorealism. Perspectivegridextendsquietlytobottomedge; NO foregroundtilepanels. No gamecharacters orexistingfranchiseart. Completeopaque backgroundonly.

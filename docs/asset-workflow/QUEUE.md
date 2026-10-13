@@ -9,7 +9,7 @@ Lower priority numbers run first. Request files contain the detailed record.
 | ASSET-002 | 2 | [requests/ASSET-002-program-advance-moment.md](requests/ASSET-002-program-advance-moment.md) | 1 | accepted | implementation agent | Storyboard approved; production art is ASSET-008 |
 | ASSET-003 | 3 | [requests/ASSET-003-hibit-panel-tileset.md](requests/ASSET-003-hibit-panel-tileset.md) | 4 | delivered | implementation agent | Source look approved; implementation review done (2026-10-14); pack/test in POC-24 |
 | ASSET-004 | 4 | [requests/ASSET-004-fire-effects.md](requests/ASSET-004-fire-effects.md) | 3 | delivered | implementation agent | All source looks approved; implementation review done (2026-10-14); clean/pack/align/test in POC-24 |
-| ASSET-005 | 5 | [requests/ASSET-005-net-backdrop.md](requests/ASSET-005-net-backdrop.md) | 1 | ready | Codex | Deliver part A (backdrop) sample |
-| ASSET-006 | 6 | [requests/ASSET-006-impacts-and-type-ramps.md](requests/ASSET-006-impacts-and-type-ramps.md) | 1 | ready | Codex | Deliver HIT + type ramp sheet sample |
-| ASSET-007 | 7 | [requests/ASSET-007-battle-hud.md](requests/ASSET-007-battle-hud.md) | 1 | ready | Codex | Deliver H1 plate sample (3 colourways) |
-| ASSET-008 | 8 | [requests/ASSET-008-program-advance-production.md](requests/ASSET-008-program-advance-production.md) | 1 | ready | Codex | Deliver P1 chip card sample |
+| ASSET-005 | 5 | [requests/ASSET-005-net-backdrop.md](requests/ASSET-005-net-backdrop.md) | 1 | delivered | Khaled / implementation agent | Review cleaned backdrop A; B/C after approval |
+| ASSET-006 | 6 | [requests/ASSET-006-impacts-and-type-ramps.md](requests/ASSET-006-impacts-and-type-ramps.md) | 1 | delivered | Khaled / implementation agent | Review native HIT +17 type ramps; remaining impacts after approval |
+| ASSET-007 | 7 | [requests/ASSET-007-battle-hud.md](requests/ASSET-007-battle-hud.md) | 1 | delivered | Khaled / implementation agent | Review H1 colourways/stretch preview; rest after approval |
+| ASSET-008 | 8 | [requests/ASSET-008-program-advance-production.md](requests/ASSET-008-program-advance-production.md) | 1 | delivered | Khaled / implementation agent | Review P1 front/back; rest after approval |

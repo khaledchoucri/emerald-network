@@ -1,0 +1,9 @@
+# ASSET-007 — sample generation
+
+Brief revision: 1. Tool: image_gen.imagegen. Generated in parallel with the other initial samples. References supplied: `poc/assets/generated/ASSET-003/v002/panels_red_source.png`.
+
+Raw generator output retained under `raw/`. Scripted cleanup/packing is authorized by PIPELINE.md Source-art rules, item 7. Exact operations and validation are recorded in processing.json and validation.json after processing. Final sample files, rather than raw outputs, are the delivery targets.
+
+## Exact prompt
+
+Create ONE ORIGINAL battle HUD H1 PLATE, ONLY ONE BASE PLAYER COLORWAY. AttachedpanelsareONLYdesign-familyreference: squaredsteppedinsetcorners andsharpflatpixelmetalframe. ONE horizontal96x34nativepixelrectangle (aspect48:17), atinteger4x384x136 or8x768x272 ifneeded. Thinblue-silverrim, calmlydarknavyfill,1pxnearnavyoutline; flat2–3tones edgehighlightonTOP/LEFT, shadeBOTTOM/RIGHT. NO gradients,halo,blurs,softtransparency,lightingfromscene. EntireinsidefillplainflatnavywithNO text/icons/numbers/letters/ornaments. A blankH1platewillhold16pixel-talltextlater. Steppedcornergeometrystrictlyinside8x8nativecorners, no bolts,circles,diagonalchamfersorrounding. Acrossmiddlebetweenleft/rightcorners: TOP edge perfectlyuniformalongwidth,BOTTOMedgeperfectlyuniform,left/rightmiddleedgeuniform,heightconstantfill, so9-slicestretchworksfrom44x24to200x34later. No mid-edge decorations, no shinebands crossingfill. Blue-silverrimquieterthanplayerpanels. Choose limitedpalette<=16colors withclearrole-separatedtones, navyfilldifferentfromrimshades. Allvisiblepixelsopaque255, alloutsideplatealpha0,no scatteredparticles. One straightonplateonlyNOTbattleHUDmockup,perspectivecard, multipleplates/variants, framecatalog, orwholepanel. Sourceplainplate,100%legibleemptydarktextroom. Latervariantswill be scriptrecolors withidenticalgeometry.

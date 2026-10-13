@@ -1,0 +1,632 @@
+{
+  "mode": "hud",
+  "config": {
+    "mode": "hud",
+    "output_dir": "poc/assets/generated/ASSET-007/v001",
+    "alpha_threshold": 128,
+    "minimum_component_pixels": 1,
+    "items": [
+      {
+        "input": "poc/assets/generated/ASSET-007/v001/raw/hud_plate.png",
+        "crop": [
+          135,
+          172,
+          1972,
+          571
+        ]
+      }
+    ],
+    "base_palette": [
+      "#0b0a14",
+      "#061833",
+      "#283653",
+      "#536787",
+      "#9db0ca",
+      "#edf2fa"
+    ],
+    "colorways": {
+      "player": [
+        "#0b0a14",
+        "#061833",
+        "#283653",
+        "#536787",
+        "#9db0ca",
+        "#edf2fa"
+      ],
+      "foe": [
+        "#0b0a14",
+        "#26101b",
+        "#56243b",
+        "#8c4560",
+        "#d77b96",
+        "#ffe5eb"
+      ],
+      "synchro1": [
+        "#0b0a14",
+        "#24190d",
+        "#614018",
+        "#a6772a",
+        "#e4b85a",
+        "#fff2b8"
+      ],
+      "synchro2": [
+        "#0b0a14",
+        "#24190d",
+        "#614018",
+        "#bb903b",
+        "#f4cf75",
+        "#fff9d7"
+      ]
+    },
+    "source_corner": 128,
+    "review_names": [
+      "h1_colorways.png",
+      "synchro.png",
+      "h1_stretch_preview.png"
+    ],
+    "half_reviews": true
+  },
+  "operations": [
+    {
+      "input": "poc/assets/generated/ASSET-007/v001/raw/hud_plate.png",
+      "crop": [
+        135,
+        172,
+        1972,
+        571
+      ],
+      "source_size_after_crop": [
+        1837,
+        399
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 726380,
+      "component_minimum_source_pixels": 1,
+      "removed_component_pixels": 0,
+      "trim_alpha": false
+    },
+    {
+      "operation": "reflow_generated_9slice",
+      "source_corner_square": 128,
+      "native_corner": [
+        8,
+        8
+      ],
+      "native_size": [
+        96,
+        34
+      ],
+      "detail": "uniform middle edge samples;flatcenter;preservedcornerpatches"
+    },
+    {
+      "operation": "normalize_nineslice",
+      "corner": [
+        8,
+        8
+      ],
+      "detail": "keep corners; repeat central edge samples; flatten central fill"
+    },
+    {
+      "operation": "9slice_stretch_preview",
+      "sizes": [
+        [
+          44,
+          24
+        ],
+        [
+          200,
+          34
+        ],
+        [
+          60,
+          34
+        ]
+      ],
+      "colorways": [
+        "player",
+        "player",
+        "foe"
+      ],
+      "corner": [
+        8,
+        8
+      ],
+      "gap": 8,
+      "review_only": true
+    },
+    {
+      "operation": "recolor_single_indexed_base",
+      "base_palette": [
+        "#0b0a14",
+        "#061833",
+        "#283653",
+        "#536787",
+        "#9db0ca",
+        "#edf2fa"
+      ],
+      "colorways": {
+        "player": [
+          "#0b0a14",
+          "#061833",
+          "#283653",
+          "#536787",
+          "#9db0ca",
+          "#edf2fa"
+        ],
+        "foe": [
+          "#0b0a14",
+          "#26101b",
+          "#56243b",
+          "#8c4560",
+          "#d77b96",
+          "#ffe5eb"
+        ],
+        "synchro1": [
+          "#0b0a14",
+          "#24190d",
+          "#614018",
+          "#a6772a",
+          "#e4b85a",
+          "#fff2b8"
+        ],
+        "synchro2": [
+          "#0b0a14",
+          "#24190d",
+          "#614018",
+          "#bb903b",
+          "#f4cf75",
+          "#fff9d7"
+        ]
+      },
+      "corner": [
+        8,
+        8
+      ],
+      "synchro_timing_game_frames": [
+        8,
+        8
+      ],
+      "loop": true
+    },
+    {
+      "operation": "integer_review_enlargement",
+      "source": "h1_colorways.png",
+      "scale": 4,
+      "resampler": "nearest",
+      "review_only": true
+    },
+    {
+      "operation": "half_size_review",
+      "source": "h1_colorways.png",
+      "resampler": "nearest",
+      "review_only": true
+    },
+    {
+      "operation": "integer_review_enlargement",
+      "source": "synchro.png",
+      "scale": 4,
+      "resampler": "nearest",
+      "review_only": true
+    },
+    {
+      "operation": "half_size_review",
+      "source": "synchro.png",
+      "resampler": "nearest",
+      "review_only": true
+    },
+    {
+      "operation": "integer_review_enlargement",
+      "source": "h1_stretch_preview.png",
+      "scale": 4,
+      "resampler": "nearest",
+      "review_only": true
+    },
+    {
+      "operation": "half_size_review",
+      "source": "h1_stretch_preview.png",
+      "resampler": "nearest",
+      "review_only": true
+    }
+  ],
+  "outputs": [
+    {
+      "path": "poc/assets/generated/ASSET-007/v001/player.png",
+      "sha256": "b948aaf7fc8ba9cac86f156512a2adfab6e2be3d284553e7a3288f8e4abbc824",
+      "dimensions": [
+        96,
+        34
+      ],
+      "visible_colors": [
+        "#061833",
+        "#0b0a14",
+        "#283653",
+        "#536787",
+        "#9db0ca",
+        "#edf2fa"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "uniform_top_edge": true,
+        "uniform_bottom_edge": true,
+        "uniform_left_edge": true,
+        "uniform_right_edge": true,
+        "uniform_center_fill": true
+      },
+      "passed": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-007/v001/foe.png",
+      "sha256": "460db526977f01752e14a12a98e951a737f9def4649c325514cb22e08839d3fb",
+      "dimensions": [
+        96,
+        34
+      ],
+      "visible_colors": [
+        "#0b0a14",
+        "#26101b",
+        "#56243b",
+        "#8c4560",
+        "#d77b96",
+        "#ffe5eb"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "uniform_top_edge": true,
+        "uniform_bottom_edge": true,
+        "uniform_left_edge": true,
+        "uniform_right_edge": true,
+        "uniform_center_fill": true
+      },
+      "passed": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-007/v001/synchro1.png",
+      "sha256": "af9ffaa2acc3c65e69366e5a4fe341db3d7a299c44b29144995976e484aa5b3c",
+      "dimensions": [
+        96,
+        34
+      ],
+      "visible_colors": [
+        "#0b0a14",
+        "#24190d",
+        "#614018",
+        "#a6772a",
+        "#e4b85a",
+        "#fff2b8"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "uniform_top_edge": true,
+        "uniform_bottom_edge": true,
+        "uniform_left_edge": true,
+        "uniform_right_edge": true,
+        "uniform_center_fill": true
+      },
+      "passed": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-007/v001/synchro2.png",
+      "sha256": "327d62a2751a2528787bfbbbf0ab78b3c85f3b758d3d573df33fd2778959d724",
+      "dimensions": [
+        96,
+        34
+      ],
+      "visible_colors": [
+        "#0b0a14",
+        "#24190d",
+        "#614018",
+        "#bb903b",
+        "#f4cf75",
+        "#fff9d7"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "uniform_top_edge": true,
+        "uniform_bottom_edge": true,
+        "uniform_left_edge": true,
+        "uniform_right_edge": true,
+        "uniform_center_fill": true
+      },
+      "passed": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-007/v001/h1_colorways.png",
+      "sha256": "b9512df229f460e9f4573963bba52e16ce65b44c4b15bf878c42b31898287cfa",
+      "dimensions": [
+        408,
+        34
+      ],
+      "visible_colors": [
+        "#061833",
+        "#0b0a14",
+        "#24190d",
+        "#26101b",
+        "#283653",
+        "#536787",
+        "#56243b",
+        "#614018",
+        "#8c4560",
+        "#9db0ca",
+        "#a6772a",
+        "#bb903b",
+        "#d77b96",
+        "#e4b85a",
+        "#edf2fa",
+        "#f4cf75",
+        "#ffe5eb",
+        "#fff2b8",
+        "#fff9d7"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "clear_frame_gaps": true,
+        "identical_alpha_geometry": true,
+        "identical_material_geometry": true
+      },
+      "passed": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-007/v001/synchro.png",
+      "sha256": "d8ac2ef5b0a1ebc8eb5349c429f23b1aa6d12260db20d23c61facc4daf795960",
+      "dimensions": [
+        200,
+        34
+      ],
+      "visible_colors": [
+        "#0b0a14",
+        "#24190d",
+        "#614018",
+        "#a6772a",
+        "#bb903b",
+        "#e4b85a",
+        "#f4cf75",
+        "#fff2b8",
+        "#fff9d7"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "clear_frame_gaps": true
+      },
+      "passed": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-007/v001/h1_stretch_preview.png",
+      "sha256": "f79faa6ad6cd4f5b49df0447377da15440d8c7f9f1b42fcb69bc52bd5c3b507b",
+      "dimensions": [
+        320,
+        34
+      ],
+      "visible_colors": [
+        "#061833",
+        "#0b0a14",
+        "#26101b",
+        "#283653",
+        "#536787",
+        "#56243b",
+        "#8c4560",
+        "#9db0ca",
+        "#d77b96",
+        "#edf2fa",
+        "#ffe5eb"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "preserved_8x8_corners": true,
+        "stretch_uniform_edges_fill": true
+      },
+      "passed": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-007/v001/h1_colorways_review_4x.png",
+      "sha256": "1183ad8b629c8d71da64893e4178cc28ccc4aca0c8dfeb4028288583145ebdb0",
+      "dimensions": [
+        1632,
+        136
+      ],
+      "visible_colors": [
+        "#061833",
+        "#0b0a14",
+        "#24190d",
+        "#26101b",
+        "#283653",
+        "#536787",
+        "#56243b",
+        "#614018",
+        "#8c4560",
+        "#9db0ca",
+        "#a6772a",
+        "#bb903b",
+        "#d77b96",
+        "#e4b85a",
+        "#edf2fa",
+        "#f4cf75",
+        "#ffe5eb",
+        "#fff2b8",
+        "#fff9d7"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true
+      },
+      "passed": true,
+      "review_only": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-007/v001/h1_colorways_review_half.png",
+      "sha256": "ead07e6b742b1628e5826953df4fe15c310fa3a0d54fa80d11714edcc2ca2bf4",
+      "dimensions": [
+        204,
+        17
+      ],
+      "visible_colors": [
+        "#061833",
+        "#24190d",
+        "#26101b",
+        "#283653",
+        "#536787",
+        "#56243b",
+        "#614018",
+        "#8c4560",
+        "#9db0ca",
+        "#a6772a",
+        "#bb903b",
+        "#d77b96",
+        "#e4b85a",
+        "#edf2fa",
+        "#f4cf75",
+        "#ffe5eb",
+        "#fff2b8",
+        "#fff9d7"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true
+      },
+      "passed": true,
+      "review_only": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-007/v001/synchro_review_4x.png",
+      "sha256": "a85bbd2b0342d764f02c68b5e888bb42b349a8ede4f0b8bb981101245033bf80",
+      "dimensions": [
+        800,
+        136
+      ],
+      "visible_colors": [
+        "#0b0a14",
+        "#24190d",
+        "#614018",
+        "#a6772a",
+        "#bb903b",
+        "#e4b85a",
+        "#f4cf75",
+        "#fff2b8",
+        "#fff9d7"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true
+      },
+      "passed": true,
+      "review_only": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-007/v001/synchro_review_half.png",
+      "sha256": "8021afbfce22155fa4bfc9da6ddad649ba75f69554d6ae1b40a519958aa7939b",
+      "dimensions": [
+        100,
+        17
+      ],
+      "visible_colors": [
+        "#24190d",
+        "#614018",
+        "#a6772a",
+        "#bb903b",
+        "#e4b85a",
+        "#f4cf75",
+        "#fff2b8",
+        "#fff9d7"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true
+      },
+      "passed": true,
+      "review_only": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-007/v001/h1_stretch_preview_review_4x.png",
+      "sha256": "9faae971248c3893c858ed1084fcc2a92e6b3f920a7509042683f0c5313cbf27",
+      "dimensions": [
+        1280,
+        136
+      ],
+      "visible_colors": [
+        "#061833",
+        "#0b0a14",
+        "#26101b",
+        "#283653",
+        "#536787",
+        "#56243b",
+        "#8c4560",
+        "#9db0ca",
+        "#d77b96",
+        "#edf2fa",
+        "#ffe5eb"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true
+      },
+      "passed": true,
+      "review_only": true
+    },
+    {
+      "path": "poc/assets/generated/ASSET-007/v001/h1_stretch_preview_review_half.png",
+      "sha256": "c0d9c0c0490bab47008866d0adc8bcf40e9007137fe7a4d821a78a8d418257c3",
+      "dimensions": [
+        160,
+        17
+      ],
+      "visible_colors": [
+        "#061833",
+        "#26101b",
+        "#283653",
+        "#536787",
+        "#56243b",
+        "#8c4560",
+        "#9db0ca",
+        "#d77b96",
+        "#edf2fa",
+        "#ffe5eb"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true
+      },
+      "passed": true,
+      "review_only": true
+    }
+  ],
+  "all_checks_passed": true,
+  "limits": [
+    "Visual review and native/half-size readability remain required.",
+    "No in-game, timing playback, or renderer integration validation performed.",
+    "Component filtering is on source pixels; use minimum=1 to preserve intended sparks.",
+    "HUD edge normalization preserves corners but can change source edge detail.",
+    "Center anchors are cell centers, not proof of the artwork focal-point location."
+  ]
+}

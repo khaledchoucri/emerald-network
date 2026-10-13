@@ -1,0 +1,78 @@
+{
+  "mode": "hit",
+  "output_dir": "poc/assets/generated/ASSET-006/v001",
+  "common_scale": true,
+  "minimum_component_pixels": 48,
+  "items": [
+    {
+      "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+      "crop": [
+        0,
+        180,
+        280,
+        620
+      ],
+      "trim_alpha": true
+    },
+    {
+      "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+      "crop": [
+        280,
+        180,
+        625,
+        620
+      ],
+      "trim_alpha": true
+    },
+    {
+      "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+      "crop": [
+        625,
+        180,
+        980,
+        620
+      ],
+      "trim_alpha": true
+    },
+    {
+      "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+      "crop": [
+        980,
+        180,
+        1375,
+        620
+      ],
+      "trim_alpha": true
+    },
+    {
+      "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+      "crop": [
+        1375,
+        180,
+        1740,
+        620
+      ],
+      "trim_alpha": true
+    },
+    {
+      "input": "poc/assets/generated/ASSET-006/v001/raw/hit.png",
+      "crop": [
+        1740,
+        180,
+        2041,
+        620
+      ],
+      "trim_alpha": true
+    }
+  ],
+  "review_names": [
+    "hit.png"
+  ],
+  "gray_thresholds": [
+    95,
+    135,
+    175,
+    225
+  ],
+  "half_reviews": true
+}

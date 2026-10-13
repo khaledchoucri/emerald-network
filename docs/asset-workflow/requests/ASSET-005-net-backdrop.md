@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 5
 - Assigned producer: Codex
-- Current owner: Codex
+- Current owner: Khaled / implementation agent
 - Brief revision: 1
 - Based on repository commit: 1eb0e3d
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: Codex delivers the backdrop sample (part A). After review, the motes and data streams (B, C).
+- Next action / blocker: Review backdrop A on GitHub; B/C remain gated on sample review. Integration/layering checks follow in POC-24.
 
 ## Purpose and visual brief
 
@@ -67,10 +67,20 @@
 
 ## Producer record
 
-- Brief revision used:
-- Assumptions / unresolved constraints:
-- Tool and generation/edit prompt:
-- References actually supplied to the tool:
+- Brief revision used: 1.
+- Tool: image_gen.imagegen; exact prompt/reference list in the sample's PROMPT.md. Raw outputs retained under raw/ for reproducibility, not intended for runtime use.
+- Programmatic processing: authorized by PIPELINE.md Source-art rules item 7. Exact config and operations are in processing.json / validation.json; shared helper: poc/assets/generated/_tools/prepare_samples.py. Run from repository root with the sample's processing.json. Python dependencies: Pillow and NumPy.
+- Delivery scaling: native files plus exact 4× nearest-neighbor review PNGs and half-size previews. Raw generator dimensions were not native or exact integer multiples; cleanup reconstructs/packs the specified delivery geometry without claiming the raw art met that constraint.
+- Visual review performed on native and 4× samples; no visible text, logos or existing characters. User review and implementation integration remain pending.
+- References: approved ASSET-001 v003 only. Raw backdrop 1536×1024 RGB.
+
+### Delivery v001 — initial sample
+
+- Native asset: poc/assets/generated/ASSET-005/v001/backdrop.png, exactly 528×352, fully opaque, ≤16 colours in a dark sky-blue palette.
+- Review: backdrop_review_4x.png (2112×1408) and backdrop_review_half.png.
+- Processing: nearest-neighbor fit preserving 3:2 aspect, fixed palette snapping; flat sky bands replace source grain; grid is translated 8 pixels down, cropping the overflow at the bottom, to set the horizon at y150. No motes, streams, HUD, panels or fighters are baked into A.
+- Checks: dimensions, palette limit, full opacity, nonempty content and preview scaling passed in validation.json. Visible scene reads as a receding grid floor behind a calm sky; no light baked onto future panels.
+- Limitations: pixel raster line thickness varies at perspective stair steps; actual layered contrast with integrated panels/HUD and in-game screenshot remain for POC-24. B/C particles and streams not generated until A is reviewed.
 
 ## Consolidated review
 
@@ -92,3 +102,5 @@
 ## Change history
 
 - 2026-10-14 — implementation agent (Claude) — created at revision 1, ready for Codex.
+
+- 2026-10-14 — Codex — generated initial sample in parallel with ASSET-005..008; performed authorized scripted cleanup/packing and file checks; published for review, acceptance pending.

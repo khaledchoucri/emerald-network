@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 6
 - Assigned producer: Codex
-- Current owner: Codex
+- Current owner: Khaled / implementation agent
 - Brief revision: 1
 - Based on repository commit: 1eb0e3d
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: Codex delivers the sample: HIT (part A) and the ramp sheet (part C). After review, the rest.
+- Next action / blocker: Review HIT and type ramps; generate remaining six impacts after approval. Playback/tint/runtime tests remain with implementation.
 
 ## Purpose and visual brief
 
@@ -114,10 +114,44 @@ Ice, Dragon, Dark. Also write the hex values as a table in the producer record.
 
 ## Producer record
 
-- Brief revision used:
-- Assumptions / unresolved constraints:
-- Tool and generation/edit prompt:
-- References actually supplied to the tool:
+- Brief revision used: 1.
+- Tool: image_gen.imagegen; exact prompt/reference list in the sample's PROMPT.md. Raw outputs retained under raw/ for reproducibility, not intended for runtime use.
+- Programmatic processing: authorized by PIPELINE.md Source-art rules item 7. Exact config and operations are in processing.json / validation.json; shared helper: poc/assets/generated/_tools/prepare_samples.py. Run from repository root with the sample's processing.json. Python dependencies: Pillow and NumPy.
+- Delivery scaling: native files plus exact 4× nearest-neighbor review PNGs and half-size previews. Raw generator dimensions were not native or exact integer multiples; cleanup reconstructs/packs the specified delivery geometry without claiming the raw art met that constraint.
+- Visual review performed on native and 4× samples; no visible text, logos or existing characters. User review and implementation integration remain pending.
+- References: approved original FIREBALL source for pixel energy/particles only; no extracted effect sprites. Type palette proposals are numeric original designs, rendered deterministically as exact swatches; Fire is fixed by STYLE.md. Raw HIT 2041×771 RGBA.
+
+### Delivery v001 — initial sample
+
+- Native HIT: poc/assets/generated/ASSET-006/v001/hit.png, 424×64, six 64×64 cells with 8px empty gaps; order left-to-right. Centre anchor (32,32); intended holds 1/1/2/2/2/2 game frames, 10 total, one-shot.
+- Cleanup: explicit frame partitions, alpha threshold128 and small-component filtering, one shared scale across all phases to preserve relative growth, centre placement, exact five-gray band mapping. No semi-transparent halo/fringe remains in the delivered native PNG. Details in processing.json/validation.json.
+- Palette: type_ramps.png, 80×272, 17 rows in request order and five16×16 swatches per row; exact hex table below and machine-readable type_ramps.json. All ramps have monotonic linear luminance and Fire exactly matches STYLE.md. Equal perceptual brightness steps are not claimed.
+- Tint review: hit_all_types.png (17 animation-strip rows), hit_types_side_by_side.png (same peak frame in 17 colourways). Exact grey-index replacement preserves geometry. Fourfold review previews provided for HIT, ramps and peak colours.
+- Checks: native dimensions, binary alpha, ≤5 visible colours and exact five-grey membership, all five greys used, six nonempty stages and clear8px gaps passed. Palette/tint checks passed in ramps_validation.json. Rerun ramps_processing.json after processing.json to reproduce ramp/tint outputs.
+- Visual review: flash grows into a strong round/rayed impact and breaks into square fragments; native stages remain distinct, 17 peak previews show proposed type colours. Half-size review provided.
+- Limitations: cell-centre alignment is verified as packing, not exact semantic focal-point tracking; actual animation timing/playback and old/new self-test clips unrun. Other six effects remain gated on HIT/ramp review.
+
+### Type ramp hex values
+
+| Type | Outline | Shade | Base | Light | Highlight |
+| --- | --- | --- | --- | --- | --- |
+| Normal | `#302c25` | `#6d6553` | `#b4a68e` | `#ded1b4` | `#fff2dc` |
+| Fighting | `#39131b` | `#7d2434` | `#c94250` | `#ef8b87` | `#ffe2d6` |
+| Flying | `#1e2b45` | `#53688f` | `#91aacf` | `#c5d8f0` | `#f0f7ff` |
+| Poison | `#2c123e` | `#5c2877` | `#9744b5` | `#cb87df` | `#f2d6fa` |
+| Ground | `#302014` | `#68442a` | `#ad7945` | `#dca563` | `#fbe2b6` |
+| Rock | `#302922` | `#665542` | `#a48d68` | `#d3bd91` | `#f4e4c5` |
+| Bug | `#1f3014` | `#4b6420` | `#8fa83c` | `#c8db75` | `#edf7c9` |
+| Ghost | `#15132f` | `#39345f` | `#65568f` | `#9c89c2` | `#ddd1f2` |
+| Steel | `#172b34` | `#47636c` | `#819aa4` | `#b5d0d8` | `#edf9fc` |
+| Fire | `#9d220f` | `#dc4b24` | `#fc871f` | `#fef237` | `#fefdf2` |
+| Water | `#092b46` | `#125786` | `#248fc4` | `#75c8ea` | `#d6f3ff` |
+| Grass | `#103019` | `#245f31` | `#45a64a` | `#8cd979` | `#dff7cb` |
+| Electric | `#3c2c06` | `#826011` | `#d5a21b` | `#f6da57` | `#fff4b5` |
+| Psychic | `#3e1634` | `#81245f` | `#c84c98` | `#ed97cb` | `#ffe0f3` |
+| Ice | `#163b43` | `#33747d` | `#77c3cc` | `#b7e9ed` | `#eaffff` |
+| Dragon | `#1c164c` | `#44318b` | `#745bd0` | `#aa97f0` | `#e4dcff` |
+| Dark | `#141722` | `#34394b` | `#5b6377` | `#919bb0` | `#d6dfec` |
 
 ## Consolidated review
 
@@ -139,3 +173,5 @@ Ice, Dragon, Dark. Also write the hex values as a table in the producer record.
 ## Change history
 
 - 2026-10-14 — implementation agent (Claude) — created at revision 1, ready for Codex.
+
+- 2026-10-14 — Codex — generated initial sample in parallel with ASSET-005..008; performed authorized scripted cleanup/packing and file checks; published for review, acceptance pending.
