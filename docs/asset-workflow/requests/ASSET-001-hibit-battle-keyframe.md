@@ -6,10 +6,10 @@
 - Priority: 1
 - Assigned producer: Codex
 - Current owner: Khaled
-- Brief revision: 1
+- Brief revision: 2
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker: Khaled reviews v002 on GitHub and chooses A/B/C or requests changes. User authorized publishing these review candidates after chat previews failed.
+- Next action / blocker: Khaled reviews v003, A with C-style squared stepped inset panel corners. Revised candidate pending approval.
 
 ## Purpose and visual brief
 
@@ -61,6 +61,10 @@
 - **Accepted creative freedom:** colours within the red/blue sides, the sky motif, the effect styling, and the panel
   surface detail.
 
+## Revision 2 — user style selection
+
+Khaled selected A's crisp direction with C's squared inset panel corners. Use A as the base for composition, shading, palette and lighting. Borrow only C's right-angle stepped recesses on panel-face corners, replacing A's corner bolt details. Do not import C's stronger skyline or other styling. Final revised candidate remains subject to user review.
+
 ## Technical target (required for production assets)
 
 Not applicable: this is a concept. Deliver at **1056×704** (4× the game's 264×176 canvas, so each hi-bit pixel is a 2×2
@@ -99,7 +103,7 @@ ASSET-004.
 - Outputs: `poc/assets/generated/ASSET-001/v001/variant-a-crisp-hibit.png`, `variant-b-lit-hibit.png`, `variant-c-handheld-hibit.png` (same directory).
 - Three PNGs, each 1536×1024 RGB, opaque. Initial candidates had wrong fighter cells and were revised with image generation. Originals retained as superseded candidates.
 
-### Delivery v002 (current review set)
+### Delivery v002 (base style review)
 
 - Outputs: `poc/assets/generated/ASSET-001/v002/variant-a-crisp-hibit.png`, `variant-b-lit-hibit.png`, `variant-c-handheld-hibit.png` (same directory). Published for GitHub review at the user’s request after chat previews failed. No variant has been selected or accepted.
 - Actual properties: all PNG, 1536×1024, RGB (opaque). Single scene per image, no animation.
@@ -108,13 +112,21 @@ ASSET-004.
 - Remaining brief deviations: tool returned 1536×1024 instead of 1056×704; grid/HUD positions are approximate, not exact guide coordinates; fighter size is smaller than requested. B/C retain a taller bottom text zone than the guide. Cracked panels have glowing warm fissures that could read as lava. A has more tonal detail than the requested 2–3-tone flat shading. Palette limits and exact pixel-grid alignment are not verified. These are style candidates, not fully compliant final art.
 - No in-game acceptance applies to this concept. Khaled chooses the visual direction or requests revisions; implementation agent writes STYLE.md from the reviewed choice. Keep ASSET-003/004 as drafts until that step is complete.
 
+### Delivery v003 (current review candidate; brief revision 2)
+
+- Output: `poc/assets/generated/ASSET-001/v003/variant-a-stepped-corners.png`.
+- Tool: image_gen.imagegen; references: v002 A as the base, v002 C solely for the inset panel-corner design. Exact edit prompt in GENERATION.md.
+- Actual properties: PNG, 1536×1024 RGB, opaque. PNG fully decoded; original tool bytes copied without programmatic image edits.
+- Visual review: preserves A's composition, lighting, fighters, fireball and sky; changes panel faces to squared right-angle corner recesses and removes corner bolts. All 18 panels retained. Ice/grass partially obscure some corners. No readable text or logos.
+- Limitations from v002 remain: dimensions and exact guide/pixel-grid alignment are not production compliant; this is a style concept. Final choice of revised image remains pending Khaled's review.
+
 ## Consolidated review
 
-- Reviewed delivery:
-- Reviewer:
-- Required changes:
-- Optional preferences:
-- Decision and reason:
+- Reviewed delivery: v002 A and C
+- Reviewer: Khaled
+- Required changes: use A's crisp look with C's squared inset panel corners.
+- Optional preferences: none recorded.
+- Decision and reason: A selected as base direction; v003 revision delivered for confirmation.
 
 ## Integration and acceptance (implementation agent)
 
@@ -128,3 +140,7 @@ ASSET-004.
 - 2026-10-13 — Codex — generated three v001 style candidates and v002 layout corrections; delivered locally for chat review; no commit/push at user request.
 
 - 2026-10-13 — Codex — user authorized committing/pushing candidates for GitHub review; all variants remain unaccepted. Verified PNG chunk CRCs and full pixel decoding for each v002 image.
+
+- 2026-10-13 — Codex — brief revision 2: Khaled selected A’s crisp direction with C’s squared inset panel corners; generating a hybrid candidate.
+
+- 2026-10-13 — Codex — delivered v003: A with stepped inset panel corners, ready for GitHub review; not marked accepted.
