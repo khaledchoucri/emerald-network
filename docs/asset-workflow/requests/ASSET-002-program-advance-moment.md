@@ -2,15 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 2
 - Assigned producer: Codex
-- Current owner: Codex
+- Current owner: Khaled
 - Brief revision: 1
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker: Codex generates the 3-frame storyboard after ASSET-001's delivery. Use the approved
-  ASSET-001 v003 style: crisp A with squared stepped inset panel corners.
+- Next action / blocker: Khaled reviews the three v001 storyboard frames on GitHub; not yet accepted.
 
 ## Purpose and visual brief
 
@@ -72,19 +71,22 @@ request.
 
 ## Producer record
 
-- Brief revision used:
-- Assumptions / unresolved constraints:
-- Tool and generation/edit prompt:
-- References actually supplied to the tool:
+- Brief revision used: 1, resolved to approved ASSET-001 v003 and STYLE.md.
+- Assumptions / unresolved constraints: concept frames; exact requested dimensions and strict production pixel/palette rules are not met.
+- Tool and generation/edit prompt: image_gen.imagegen; exact prompts in `poc/assets/generated/ASSET-002/v001/PROMPTS.md`.
+- References actually supplied to the tool: approved ASSET-001 v003, project-authored layout guide, and prior generated storyboard frames for continuity. Game screenshot not supplied.
 
 ### Delivery v001
 
-- Exact output paths (repository-relative), or attachment plus transfer status:
-- Actual file format, dimensions, transparency, and frame layout:
-- Visual inspection performed and findings:
-- Technical checks performed and results:
-- Unchecked requirements / known limitations:
-- Conversion or integration still needed, with owner:
+- Output directory: `poc/assets/generated/ASSET-002/v001/`.
+  - `frame1.png`: CONVERGE — three separate fire cards approaching a common point over a dimmed field.
+  - `frame2.png`: FUSE — one fire emblem with radial streaks and a wide empty name banner.
+  - `frame3.png`: RELEASE — closer battle framing, a large fire beam through the middle row, warm panel illumination and a dark cracked-panel shockwave.
+- Actual properties: three opaque RGB PNGs, each 1536×1024 (rather than requested 1056×704). Single full scene per image.
+- Visual inspection: all three retain red/blue sides, stepped inset panel corners, original capsule fighters, fire motifs and empty HUD frames. Converge/fuse/release are distinct; no visible readable text or logos. Name-banner visible bounds are about 70% of frame width, exceeding the requested approximate 60%; exact font fitting is untested.
+- File checks: PNG chunk CRCs and full pixel decode passed for every file; SHA-256 and properties saved in `validation.json`. Files copied directly from tool outputs without resizing or other programmatic image edits.
+- Limitations: frame positions and silhouettes drift slightly between shots; release punch-in is illustrative rather than a verified exact 1.25× transform. Strict hi-bit pixel alignment, tone counts, and absence of all smooth lighting transitions are not certified. Ice crystals retain the concept's raised shape rather than the flat production-tile rule. These are storyboard source concepts, not production sheets or an implemented animation.
+- No in-game test applies to this concept. Khaled reviews the storyboard; implementation agent creates the production requests and checks banner/font fit and camera behavior in the renderer later. Delivery is not acceptance.
 
 ## Consolidated review
 
@@ -104,3 +106,5 @@ request.
 - 2026-10-13 — implementation agent (Claude) — created at revision 1, ready.
 
 - 2026-10-13 — Codex — resolved the style-reference selection to approved ASSET-001 v003 after Khaled’s review; storyboard content unchanged.
+
+- 2026-10-13 — Codex — delivered three sequentially generated v001 storyboard concepts, file checks passed; published for GitHub review, approval pending.

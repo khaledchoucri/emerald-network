@@ -1,0 +1,38 @@
+[
+  {
+    "file": "frame1.png",
+    "format": "PNG",
+    "dimensions": [
+      1536,
+      1024
+    ],
+    "mode": "RGB",
+    "sha256": "3f71ab86744b188b26fe2420917a604014eb025db2298a8792987fbe4e783ac0",
+    "png_crc": "passed",
+    "full_decode": "passed"
+  },
+  {
+    "file": "frame2.png",
+    "format": "PNG",
+    "dimensions": [
+      1536,
+      1024
+    ],
+    "mode": "RGB",
+    "sha256": "44aef6a02e3d47c52a4b9eba22744b6723996735dd944497c1593d240940c063",
+    "png_crc": "passed",
+    "full_decode": "passed"
+  },
+  {
+    "file": "frame3.png",
+    "format": "PNG",
+    "dimensions": [
+      1536,
+      1024
+    ],
+    "mode": "RGB",
+    "sha256": "483b056ecb449724e7b1410a819fab73866c112e93f753af5fee1f45e7084748",
+    "png_crc": "passed",
+    "full_decode": "passed"
+  }
+]
