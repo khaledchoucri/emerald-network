@@ -6,13 +6,11 @@
 - Priority: 4
 - Assigned producer: Codex
 - Current owner: implementation agent
-- Brief revision: 1
+- Brief revision: 2
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker:
-  - Wait for ASSET-001's review and `STYLE.md`.
-  - The implementation agent then measures today's effect frames (their bounds, frame counts and timings, from
-    `tools/gen_bn6_gfx.py --preview`) and fills in the exact cell sizes below before marking this ready.
+- Next action / blocker: the sizes, frame counts and timings are now filled in (revision 2). It still waits for ASSET-001's
+  review and `STYLE.md`; the implementation agent marks it ready then.
 
 ## Purpose and visual brief
 
@@ -40,9 +38,28 @@
 
 - **Integration:** the hi-bit renderer's effect atlas (roadmap round 3). The code that plays effects is `Fx`/`PlayLoop`
   in `src/pkbn/grid_vfx.c`.
-- **Cell sizes, frame counts and timing:** to be filled in by the implementation agent from the measured BN6 frames,
-  doubled. Proposal only, not confirmed: FIREBALL 64×64, 6 frames at 4 game frames each, looping.
-- **Anchor:** the centre of the cell's bottom edge for panel effects; the cell centre for projectiles.
+- **Cell sizes, frame counts and timing.** Measured from today's frames (`sBn6Frames` and the animation table that
+  `tools/gen_bn6_gfx.py` generates into `include/pkbn/bn6_gfx_data.h`), then doubled and rounded up to even numbers.
+  Times are in game frames at 60 per second.
+
+| Effect | Today: frames, sizes (1×), time per frame, loop | Cell at 2× | Frames to deliver |
+|---|---|---|---|
+| FIREBALL | 3: 40×27, 42×32, 30×32; 2 each; loops | 84×64 | 3 (or 6 at 1 frame each) |
+| FIRE_BURST | 4: 24×16, 29×24, 31×39, 34×53, growing; 6 each; plays once | 72×108 | 4 |
+| FLAME_JET | 3: 116×60, 116×61, 113×61; 2 each; loops | 232×124 | 3 (or 6) |
+| FIRE_TALL | 3: 32×55, 35×56, 39×57; 2 each; loops | 80×116 | 3 (or 6) |
+| FIRE_PANEL | 3: 32×47, 32×52, 32×54; 2 each; loops | 64×108 | 3 (or 6) |
+
+  Doubling the frame count, with each frame held half as long, is welcome for smoother loops. Keep the art inside the
+  cell; empty space is fine.
+- **Anchor.** The point the engine draws at, in the cell, at 2×:
+  - FIRE_BURST and FIRE_PANEL: horizontally centred; the flames' base is 16 px above the cell's bottom edge.
+  - FIRE_TALL: horizontally centred; the base is 10 px above the bottom edge.
+  - FLAME_JET: drawn facing right, the anchor is where the jet starts: 46 px from the cell's left edge and 24 px above
+    its bottom edge. The jet extends to the right; the engine mirrors it for the foe.
+  - FIREBALL: the anchor is just behind the ball, 6 px left of its back edge, at its vertical centre. The ball travels to
+    the right.
+  - The implementation agent fine-tunes the offsets in code. These are close enough to draw to.
 - **Sheet layout:** frames left to right in one row per effect, one PNG per effect.
 - **Format:** PNG with alpha (transparent background).
 - **Palette:** per `STYLE.md`; quantized by the implementation agent.
@@ -98,3 +115,5 @@
 
 - 2026-10-13 — implementation agent (Claude) — created at revision 1 as a draft; it waits on ASSET-001 and frame
   measurements.
+- 2026-10-13 — implementation agent (Claude) — revision 2: measured sizes, frame counts, timings and anchors filled in,
+  answering Codex. Still a draft until `STYLE.md` exists.

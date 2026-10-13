@@ -6,7 +6,7 @@
 - Priority: 3
 - Assigned producer: Codex
 - Current owner: implementation agent
-- Brief revision: 1
+- Brief revision: 2
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
 - Next action / blocker: Wait for ASSET-001's review. The implementation agent then writes `STYLE.md` from the chosen
@@ -22,35 +22,39 @@
   - an inner face that shows the panel type.
 - **Panel types** (`include/pkbn/grid_internal.h:73-91`). For each, the face and what the player must read from it:
 
-| Row | Type | Face and what the player must read |
+| Cell (column, row) | Type | Face and what the player must read |
 |---|---|---|
-| 0 | NORMAL | Silvery glossy metal |
-| 0 | CRACKED | Metal with crack lines: it will break |
-| 0 | BROKEN | A hole with a jagged rim; transparent centre |
-| 1 | POISON | Purple with bubbles: it hurts |
-| 1 | HOLY | Gold with a glinting cross: it protects |
-| 1 | GRASS | Green with blades |
-| 2 | ICE | Pale blue with a glint: it's slippery |
-| 2 | LAVA | Glowing orange-red: it burns |
-| 2 | ROAD UP / DOWN / LEFT / RIGHT | Metal with a conveyor chevron pointing that way |
+| (0, 0) | NORMAL | Silvery glossy metal |
+| (1, 0) | CRACKED | Metal with crack lines: it will break |
+| (2, 0) | BROKEN | A hole with a jagged rim; transparent centre |
+| (3, 0) | POISON | Purple with bubbles: it hurts |
+| (4, 0) | HOLY | Gold with a glinting cross: it protects |
+| (5, 0) | GRASS | Green with blades |
+| (0, 1) | ICE | Pale blue with a glint: it's slippery |
+| (1, 1) | LAVA | Glowing orange-red: it burns |
+| (2, 1) | ROAD UP | Metal with a conveyor chevron pointing up |
+| (3, 1) | ROAD DOWN | Metal with a conveyor chevron pointing down |
+| (4, 1) | ROAD LEFT | Metal with a conveyor chevron pointing left |
+| (5, 1) | ROAD RIGHT | Metal with a conveyor chevron pointing right |
 
 - **Style:** follow `docs/asset-workflow/STYLE.md`. It will be written from ASSET-001's chosen variant before this goes
   to ready.
 - **Elements to avoid:** text, logos, and copying Battle Network's panel art.
-- **Variant count:** 1, after a reviewed sample. First deliver only NORMAL, CRACKED and BROKEN for both sides. Once those
-  are reviewed, do the rest.
+- **Variant count:** 1, after a reviewed sample. First deliver only NORMAL, CRACKED, BROKEN and the front edge for both
+  sides, in their sheet positions. Once those are reviewed, do the rest.
 
 ## Technical target (required for production assets)
 
 - **Integration:** the hi-bit renderer (roadmap round 3; not yet in code). Until it exists, this sheet is checked by the
   implementation agent's preview tool, not in game.
-- **Cell size:** 88×52 per panel (2× of 44×26), plus a separate front-edge strip of 88×12 per side (2× of `PANEL_LIP` 6)
-  for the bottom row.
+- **Cell size:** 88×52 per panel (2× of 44×26).
+- **Front edge:** one 88×12 strip per side (2× of `PANEL_LIP` 6). The engine draws it under every bottom-row panel
+  except BROKEN, which has none (`DrawPanel`, `src/pkbn/grid_draw.c:199-208` and `:338-344`). It uses the side's frame
+  colour, the same for every panel type.
 - **Anchor:** the top-left of each cell. The panel fills the cell edge to edge.
-- **Sheet layout:** one sheet per side (`panels_red.png`, `panels_blue.png`):
-  - 6 columns × 3 rows of 88×52 cells, following the row order above, left to right;
-  - the two front-edge strips in a fourth row;
-  - total 528×168.
+- **Sheet layout:** one sheet per side (`panels_red.png`, `panels_blue.png`), 528×116:
+  - rows 0 and 1: 6 columns × 2 rows of 88×52 cells, at the positions in the table above (no empty cells);
+  - row 2 (y 104-115): the front-edge strip at x 0-87; the rest of that row is transparent.
 - **Format:** PNG with alpha. Panels are opaque except BROKEN's hole.
 - **Palette:** at most 16 colours per panel cell (TUNE; the implementation agent checks this and quantizes).
 - **Animation:** none in this request. Grass sway, bubbles and glints come later as separate overlays.
@@ -110,3 +114,6 @@
 ## Change history
 
 - 2026-10-13 — implementation agent (Claude) — created at revision 1 as a draft; it waits on ASSET-001.
+- 2026-10-13 — implementation agent (Claude) — revision 2, answering Codex: revision 1's grid had 18 cells for 12 types
+  and asked for two front-edge strips by mistake. Now 12 cells with no gaps, and one strip per side (the code draws
+  one). Still a draft until `STYLE.md` exists.
