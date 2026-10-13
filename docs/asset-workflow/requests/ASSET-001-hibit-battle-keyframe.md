@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 1
 - Assigned producer: Codex
-- Current owner: Codex
+- Current owner: Khaled
 - Brief revision: 1
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker: Codex generates 3 variants (see below) and records the delivery.
+- Next action / blocker: Khaled reviews v002 on GitHub and chooses A/B/C or requests changes. User authorized publishing these review candidates after chat previews failed.
 
 ## Purpose and visual brief
 
@@ -89,19 +89,24 @@ ASSET-004.
 
 ## Producer record
 
-- Brief revision used:
-- Assumptions / unresolved constraints:
-- Tool and generation/edit prompt:
-- References actually supplied to the tool:
+- Brief revision used: 1
+- Assumptions / unresolved constraints: concept style review only; exact output dimensions and guide alignment remain unmet.
+- Tool and generation/edit prompt: image_gen.imagegen; complete prompts in `poc/assets/generated/ASSET-001/GENERATION.md`.
+- References actually supplied to the tool: project-authored `docs/asset-workflow/references/hibit_battle_layout_528x352.png`; correction pass also used each generated candidate. Mood image inspected but not passed to the tool.
 
-### Delivery v001
+### Delivery v001 (superseded for review)
 
-- Exact output paths (repository-relative), or attachment plus transfer status:
-- Actual file format, dimensions, transparency, and frame layout:
-- Visual inspection performed and findings:
-- Technical checks performed and results:
-- Unchecked requirements / known limitations:
-- Conversion or integration still needed, with owner:
+- Outputs: `poc/assets/generated/ASSET-001/v001/variant-a-crisp-hibit.png`, `variant-b-lit-hibit.png`, `variant-c-handheld-hibit.png` (same directory).
+- Three PNGs, each 1536×1024 RGB, opaque. Initial candidates had wrong fighter cells and were revised with image generation. Originals retained as superseded candidates.
+
+### Delivery v002 (current review set)
+
+- Outputs: `poc/assets/generated/ASSET-001/v002/variant-a-crisp-hibit.png`, `variant-b-lit-hibit.png`, `variant-c-handheld-hibit.png` (same directory). Published for GitHub review at the user’s request after chat previews failed. No variant has been selected or accepted.
+- Actual properties: all PNG, 1536×1024, RGB (opaque). Single scene per image, no animation.
+- Visual checks: all show a straight 6×3 grid, red left/blue right, orange and teal original capsule placeholders on the second and fifth columns of the middle row, distinct cracked/grass/ice panels, a rightward fireball and impact, warm reflected light, Net backdrop and empty HUD frames. No visible readable text or logos.
+- Technical checks: PNG decode/integrity, dimensions and color mode checked with Pillow. Files copied byte-for-byte from tool outputs. No resizing or other programmatic image editing performed.
+- Remaining brief deviations: tool returned 1536×1024 instead of 1056×704; grid/HUD positions are approximate, not exact guide coordinates; fighter size is smaller than requested. B/C retain a taller bottom text zone than the guide. Cracked panels have glowing warm fissures that could read as lava. A has more tonal detail than the requested 2–3-tone flat shading. Palette limits and exact pixel-grid alignment are not verified. These are style candidates, not fully compliant final art.
+- No in-game acceptance applies to this concept. Khaled chooses the visual direction or requests revisions; implementation agent writes STYLE.md from the reviewed choice. Keep ASSET-003/004 as drafts until that step is complete.
 
 ## Consolidated review
 
@@ -119,3 +124,7 @@ ASSET-004.
 ## Change history
 
 - 2026-10-13 — implementation agent (Claude) — created at revision 1, ready.
+
+- 2026-10-13 — Codex — generated three v001 style candidates and v002 layout corrections; delivered locally for chat review; no commit/push at user request.
+
+- 2026-10-13 — Codex — user authorized committing/pushing candidates for GitHub review; all variants remain unaccepted. Verified PNG chunk CRCs and full pixel decoding for each v002 image.
