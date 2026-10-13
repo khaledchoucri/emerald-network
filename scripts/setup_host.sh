@@ -3,6 +3,7 @@
 # Run inside WSL from the project folder:
 #   bash scripts/setup_host.sh            # Linux build (needs WSLg to show a window) - shows [pkbn] logs
 #   bash scripts/setup_host.sh windows    # Windows .exe (copied to poc/bin/)
+#   bash scripts/setup_host.sh web        # POC-23: the browser build (copied to poc/bin/web/; needs Emscripten)
 # The host source lives on the WSL filesystem (default ~/pkbn/emerald-host): building on /mnt/c is very slow.
 set -euo pipefail
 
@@ -22,8 +23,12 @@ need python3 "sudo apt install python3"
 pkg-config --exists libpng || { echo "Missing libpng. sudo apt install libpng-dev"; exit 1; }
 case "$TARGET" in
   linux)   pkg-config --exists sdl2 || { echo "Missing SDL2. sudo apt install libsdl2-dev"; exit 1; } ;;
+  web)     pkg-config --exists sdl2 || { echo "Missing SDL2. sudo apt install libsdl2-dev"; exit 1; }
+           need emcc "Install Emscripten 3.1.6 (the tested version): git clone https://github.com/emscripten-core/emsdk ~/emsdk && ~/emsdk/emsdk install 3.1.6 && ~/emsdk/emsdk activate 3.1.6, then: source ~/emsdk/emsdk_env.sh"
+           need as "sudo apt install binutils"
+           python3 -c "import elftools" 2>/dev/null || { echo "Missing pyelftools. sudo apt install python3-pyelftools"; exit 1; } ;;
   windows) need x86_64-w64-mingw32-gcc "sudo apt install g++-mingw-w64-x86-64"; need curl "sudo apt install curl"; need unzip "sudo apt install unzip" ;;
-  *) echo "Usage: $0 [linux|windows]"; exit 1 ;;
+  *) echo "Usage: $0 [linux|windows|web]"; exit 1 ;;
 esac
 
 # 1. Fetch the pinned upstream commit (once)
@@ -56,12 +61,25 @@ python3 "$PROJECT_DIR/tools/gen_bn6_results.py" "$PROJECT_DIR/upstream/bn6f" "$H
 # Linux and Windows builds share build/pc64, so objects from one can't be linked into the other (mingw then fails
 # with "undefined reference to `stderr'"). Switching target clears them; the converted graphics in build/assets stay.
 STAMP="$HOST_DIR/.pkbn_build_target"
-if [ "$(cat "$STAMP" 2>/dev/null || echo none)" != "$TARGET" ] && [ -d build/pc64 ]; then
-  echo "==> Target changed to $TARGET: clearing build/pc64"
+PC_TARGET="$TARGET"; [ "$TARGET" = web ] && PC_TARGET=linux   # the web build needs the Linux build's tools and assets
+if [ "$(cat "$STAMP" 2>/dev/null || echo none)" != "$PC_TARGET" ] && [ -d build/pc64 ]; then
+  echo "==> Target changed to $PC_TARGET: clearing build/pc64"
   rm -rf build/pc64
 fi
-echo "$TARGET" > "$STAMP"
-if [ "$TARGET" = linux ]; then
+echo "$PC_TARGET" > "$STAMP"
+if [ "$TARGET" = web ]; then
+  echo "==> Building the Linux binary first: its tools and converted assets (-j$JOBS)"
+  make linux -j"$JOBS"
+  echo "==> Building the browser version (-j$JOBS)"
+  make -f web.mk -j"$JOBS"
+  OUT="$PROJECT_DIR/poc/bin/web"
+  rm -rf "$OUT"; mkdir -p "$OUT"
+  cp build/web/dist/index.html build/web/dist/pokeemerald.js build/web/dist/pokeemerald.wasm "$OUT/"
+  echo
+  echo "Done: $OUT (index.html, pokeemerald.js, pokeemerald.wasm)"
+  echo "Try it: cd $OUT && python3 -m http.server 8000   then open http://localhost:8000"
+  echo "It holds the built game: host it only where your testers alone can reach it (docs: poc/POC-23.md)."
+elif [ "$TARGET" = linux ]; then
   echo "==> Building Linux binary (-j$JOBS)"
   make linux -j"$JOBS"
   echo

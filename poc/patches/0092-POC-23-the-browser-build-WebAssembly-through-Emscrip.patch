@@ -1,0 +1,1043 @@
+From e472752e4501c4bd67c38eb04d98be85be398324 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 14 Oct 2026 00:24:42 +0300
+Subject: [PATCH 92/93] POC-23: the browser build - WebAssembly through
+ Emscripten (web.mk): the asm data converted object by object
+ (tools/web/elf2wasm.py), the SDL2 loop one step per browser frame, saves in
+ IndexedDB with backup/restore, touch controls for phones, ?env= self-tests
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ .gitignore                |   1 +
+ include/platform.h        |   1 +
+ src/field_player_avatar.c |   8 +-
+ src/main.c                |   2 +
+ src/mystery_gift_client.c |   6 +
+ src/pkbn/ghost.c          |   2 +
+ src/pkbn/pkbn_save.c      |   2 +
+ src/pkbn/replay.c         |   2 +
+ src/platform/sdl2.c       | 196 +++++++++++++++++++++++----------
+ src/pokedex.c             |   3 +
+ src/stub.c                |   9 +-
+ tools/web/elf2wasm.py     | 126 +++++++++++++++++++++
+ web.mk                    |  72 ++++++++++++
+ web/pkbn_web.js           |  93 ++++++++++++++++
+ web/shell.html            | 224 ++++++++++++++++++++++++++++++++++++++
+ 15 files changed, 683 insertions(+), 64 deletions(-)
+ create mode 100644 tools/web/elf2wasm.py
+ create mode 100644 web.mk
+ create mode 100644 web/pkbn_web.js
+ create mode 100644 web/shell.html
+
+diff --git a/.gitignore b/.gitignore
+index 910b06e..644fcdc 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -52,3 +52,4 @@ pkbn_playlog.jsonl
+ pkbn_log.txt
+ pkbn.sav
+ pkbn.sav.*
++!web/*.js
+diff --git a/include/platform.h b/include/platform.h
+index 3d53a5a..abb0481 100755
+--- a/include/platform.h
++++ b/include/platform.h
+@@ -5,6 +5,7 @@
+ #include "siirtc.h"
+ 
+ void Platform_StoreSaveFile(void);
++void Platform_Persist(void);   // pkbn POC-23: files were written (the browser build saves them to IndexedDB)
+ void Platform_ReadFlash(u16 sectorNum, u32 offset, u8 *dest, u32 size);
+ void Platform_QueueAudio(float *audioBuffer, s32 samplesPerFrame);
+ u16 Platform_GetKeyInput(void);
+diff --git a/src/field_player_avatar.c b/src/field_player_avatar.c
+index 5b22ff7..5d1fd42 100644
+--- a/src/field_player_avatar.c
++++ b/src/field_player_avatar.c
+@@ -38,7 +38,7 @@ EWRAM_DATA struct ObjectEvent gObjectEvents[OBJECT_EVENTS_COUNT] = {};
+ EWRAM_DATA struct PlayerAvatar gPlayerAvatar = {};
+ 
+ // static declarations
+-static u8 ObjectEventCB2_NoMovement2(void);
++static u8 ObjectEventCB2_NoMovement2(struct ObjectEvent *, struct Sprite *);
+ static bool8 TryInterruptObjectEventSpecialAnim(struct ObjectEvent *, u8);
+ static void npc_clear_strange_bits(struct ObjectEvent *);
+ static void MovePlayerAvatarUsingKeypadInput(u8, u16, u16);
+@@ -321,11 +321,11 @@ static bool8 (*const sPlayerAvatarSecretBaseMatSpin[])(struct Task *, struct Obj
+ 
+ void MovementType_Player(struct Sprite *sprite)
+ {
+-    UpdateObjectEventCurrentMovement(&gObjectEvents[sprite->data[0]], sprite, (bool8 (*)(struct ObjectEvent *, struct Sprite *))ObjectEventCB2_NoMovement2);
++    UpdateObjectEventCurrentMovement(&gObjectEvents[sprite->data[0]], sprite, ObjectEventCB2_NoMovement2);
+ }
+ 
+-static u8 ObjectEventCB2_NoMovement2(void)
+-{
++static u8 ObjectEventCB2_NoMovement2(struct ObjectEvent *objectEvent, struct Sprite *sprite)
++{   // (PKBN: takes the callback's arguments; WebAssembly traps on a call through a mismatched pointer type)
+     return 0;
+ }
+ 
+diff --git a/src/main.c b/src/main.c
+index e633013..d61b755 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -320,7 +320,9 @@ void InitIntrHandlers(void)
+     for (i = 0; i < INTR_COUNT; i++)
+         gIntrTable[i] = gIntrTableTemplate[i];
+ 
++#ifndef __EMSCRIPTEN__   // pkbn POC-23: WebAssembly can't read code as data (and the PC port never runs it)
+     DmaCopy32(3, IntrMain, IntrMain_Buffer, sizeof(IntrMain_Buffer));
++#endif
+ 
+     INTR_VECTOR = IntrMain_Buffer;
+ 
+diff --git a/src/mystery_gift_client.c b/src/mystery_gift_client.c
+index 78937d6..b2735b3 100644
+--- a/src/mystery_gift_client.c
++++ b/src/mystery_gift_client.c
+@@ -277,8 +277,14 @@ static u32 Client_RunMysteryEventScript(struct MysteryGiftClient *client)
+ static u32 Client_RunBufferScript(struct MysteryGiftClient *client)
+ {
+     // exec arbitrary code
++#ifdef __EMSCRIPTEN__
++    // (WebAssembly can't run bytes from memory: the compiler turns this call into a direct call to a data symbol,
++    // which the linker can't resolve. Mystery Gift has no link partner in the browser anyway.)
++    if (TRUE)
++#else
+     u32 (*func)(u32 *, struct SaveBlock2 *, struct SaveBlock1 *) = (void *)gDecompressionBuffer;
+     if (func(&client->param, gSaveBlock2Ptr, gSaveBlock1Ptr) == 1)
++#endif
+     {
+         client->funcId = FUNC_RUN;
+         client->funcState = 0;
+diff --git a/src/pkbn/ghost.c b/src/pkbn/ghost.c
+index 8cafa08..35573a2 100644
+--- a/src/pkbn/ghost.c
++++ b/src/pkbn/ghost.c
+@@ -11,6 +11,7 @@
+ //   IVs 6 x 5 bits (4 bytes), EVs 6 bytes, part count, parts 3 bytes each (prog 7, colour 5, x+1 3, y+1 3, rot 2).
+ #include "pkbn/grid_vfx.h"   // first: it pulls in <stdlib.h> before global.h's macros
+ #include "global.h"
++#include "platform.h"
+ #include "pokemon.h"
+ #include "random.h"
+ #include "string_util.h"
+@@ -334,6 +335,7 @@ s32 PkbnGhost_Add(const char *code)
+         fprintf(f, "%s\n", clean);
+     }
+     fclose(f);
++    Platform_Persist();   // POC-23
+     printf("[pkbn] ghost added: %s\n", g.name);
+     return 1;
+ }
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index 0b25665..7ea048f 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -6,6 +6,7 @@
+ // loads (LoadGameSave), reset on a new game (NewGameInitData).
+ #include <stdlib.h>
+ #include "global.h"
++#include "platform.h"
+ #include "pokemon.h"
+ #include "pokemon_storage_system.h"
+ #include "pkbn/navicust.h"
+@@ -245,6 +246,7 @@ void PkbnSave_Write(void)
+     rename(PKBN_SAVE_PATH, PKBN_SAVE_BAK);   // (fails harmlessly when there's no pkbn.sav yet)
+     if (rename(PKBN_SAVE_TMP, PKBN_SAVE_PATH) != 0)
+         rename(PKBN_SAVE_BAK, PKBN_SAVE_PATH);
++    Platform_Persist();   // POC-23: the browser build keeps it in IndexedDB
+ }
+ 
+ struct PkbnNavi *PkbnSave_FindNavi(u16 id)
+diff --git a/src/pkbn/replay.c b/src/pkbn/replay.c
+index 85650d9..2997be3 100644
+--- a/src/pkbn/replay.c
++++ b/src/pkbn/replay.c
+@@ -8,6 +8,7 @@
+ #include "battle_setup.h"
+ #include "pkbn/grid_internal.h"
+ #include "pkbn/replay.h"
++#include "platform.h"
+ 
+ #ifdef PORTABLE
+ #include <stdio.h>
+@@ -178,6 +179,7 @@ void PkbnReplay_End(void)
+         fwrite(sR.enemy, sizeof(sR.enemy), 1, f);
+         fwrite(sR.keys, sizeof(struct ReplayKeys), sR.at, f);
+         fclose(f);
++        Platform_Persist();   // POC-23: the browser keeps it
+         printf("[pkbn] replay saved: %u frames\n", (unsigned)sR.at);
+     }
+ }
+diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
+index 35dc67c..7b3a336 100644
+--- a/src/platform/sdl2.c
++++ b/src/platform/sdl2.c
+@@ -11,6 +11,13 @@
+ #endif
+ 
+ #include <SDL2/SDL.h>
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++// pkbn POC-23: the browser build (web.mk). Saves live in IndexedDB, mounted at /save/ by web/pkbn_web.js; the page's
++// touch buttons come in through Web_SetTouchKeys; the loop runs once per browser frame (emscripten_set_main_loop).
++static uint16_t sWebKeys;
++static int sWebFast;
++#endif
+ 
+ #include "global.h"
+ #include "platform.h"
+@@ -71,6 +78,10 @@ static void InitDataDir(void)
+ {
+     const char *env = getenv("PKBN_DATA_DIR");
+     char *base;
++#ifdef __EMSCRIPTEN__
++    if (env == NULL)
++        env = "/save/";   // IndexedDB (web/pkbn_web.js)
++#endif
+     if (env != NULL)
+     {
+         snprintf(sDataDir, sizeof(sDataDir), "%s%s", env, (env[0] && env[strlen(env) - 1] != '/' && env[strlen(env) - 1] != '\\') ? "/" : "");
+@@ -111,7 +122,12 @@ bool8 Platform_SetClipboard(const char *text)
+         printf("[pkbn] clipboard set: %s\n", text);
+         return TRUE;
+     }
++#ifdef __EMSCRIPTEN__
++    EM_ASM({ if (Module.pkbnCopy) Module.pkbnCopy(UTF8ToString($0)); }, text);
++    return TRUE;
++#else
+     return SDL_SetClipboardText(text) == 0;
++#endif
+ }
+ 
+ bool8 Platform_GetClipboard(char *out, u32 size)
+@@ -122,6 +138,22 @@ bool8 Platform_GetClipboard(char *out, u32 size)
+         snprintf(out, size, "%s", getenv("PKBN_TEST_CLIPBOARD"));
+         return TRUE;
+     }
++#ifdef __EMSCRIPTEN__
++    // a browser can't read the clipboard synchronously: the page asks for the code (web/pkbn_web.js)
++    t = (char *)(intptr_t)EM_ASM_INT({
++        var s = Module.pkbnPaste ? Module.pkbnPaste() : null;
++        if (!s) return 0;
++        var n = lengthBytesUTF8(s) + 1;
++        var p = _malloc(n);
++        stringToUTF8(s, p, n);
++        return p;
++    });
++    if (t == NULL)
++        return FALSE;
++    snprintf(out, size, "%s", t);
++    free(t);
++    return out[0] != '\0';
++#endif
+     t = SDL_GetClipboardText();
+     if (t == NULL)
+         return FALSE;
+@@ -196,7 +228,20 @@ static void CloseSaveFile(void);
+ 
+ static void UpdateInternalClock(void);
+ 
++static void LoopOnce(void);
++
++#ifdef __EMSCRIPTEN__
++// pkbn POC-23: this Emscripten's linker only finds a main() without arguments (clang names main(argc, argv)
++// __main_argc_argv), so the browser build enters through a wrapper.
++static int PkbnMain(int argc, char **argv);
++int main(void)
++{
++    return PkbnMain(0, NULL);
++}
++static int PkbnMain(int argc, char **argv)
++#else
+ int main(int argc, char **argv)
++#endif
+ {
+     InitDataDir();
+ #ifdef _WIN32
+@@ -286,87 +331,99 @@ int main(int argc, char **argv)
+     AgbMain();
+     Pkbn_SelfTestMaybeStart(); // PKBN: headless grid-battle test when PKBN_SELFTEST is set
+ 
+-    double accumulator = 0.0;
+ 
+     memset(&internalClock, 0, sizeof(internalClock));
+     internalClock.status = SIIRTCINFO_24HOUR;
+     UpdateInternalClock();
+ 
+-    bool isGameStepDrawn = false;
++#ifdef __EMSCRIPTEN__
++    emscripten_set_main_loop(LoopOnce, 0, 1);   // pkbn POC-23: one iteration per browser frame; never returns
++#else
+     while (isRunning)
+-    {
+-        double deltaTime;
++        LoopOnce();
++#endif
+ 
+-        ProcessEvents();
++    CloseSaveFile();
+ 
+-        if (sAudioDump != NULL)
+-        {
+-            // pkbn: a recording - every tick drawn and heard, as fast as the machine goes
+-            ENTER_VBLANK();
+-            MainLoop();
+-            VDraw(sdlTexture);
+-            RunDMAsAndVBlank();
+-            AudioUpdate();
+-            continue;
+-        }
++    SDL_DestroyWindow(sdlWindow);
++    SDL_Quit();
++    return 0;
++}
+ 
+-        curGameTime = SDL_GetPerformanceCounter();
+-        deltaTime = (double)((curGameTime - lastGameTime) / (double)SDL_GetPerformanceFrequency());
+-        deltaTime *= timeScale; //apply speedup
++// The main loop's body: input, as many 60 Hz game ticks as the time since the last call holds, one picture, audio.
++static double sAccumulator = 0.0;
++static bool sGameStepDrawn = false;
++static void LoopOnce(void)
++{
++    double deltaTime;
+ 
+-        if (!paused)
+-        {
+-            accumulator += deltaTime;
++    ProcessEvents();
+ 
+-            isGameStepDrawn = false;
++    if (sAudioDump != NULL)
++    {
++        // pkbn: a recording - every tick drawn and heard, as fast as the machine goes
++        ENTER_VBLANK();
++        MainLoop();
++        VDraw(sdlTexture);
++        RunDMAsAndVBlank();
++        AudioUpdate();
++        return;
++    }
+ 
+-            while (accumulator >= fixedTimestep)
+-            {
+-                //run game logic, draw frame and process DMAs and vblank
+-                ENTER_VBLANK(); //you must be in VBlank before running a game tick
+-                MainLoop();
+-                if (!isGameStepDrawn)
+-                {
+-                    VDraw(sdlTexture);
+-                    //SDL_RenderClear(sdlRenderer);
+-                    isGameStepDrawn = true;
+-                }
+-                RunDMAsAndVBlank();
++    curGameTime = SDL_GetPerformanceCounter();
++    deltaTime = (double)((curGameTime - lastGameTime) / (double)SDL_GetPerformanceFrequency());
++#ifdef __EMSCRIPTEN__
++    if (deltaTime > 0.25)
++        deltaTime = 0.25;   // a hidden tab doesn't run: don't race to catch up when it comes back
++#endif
++    deltaTime *= timeScale; //apply speedup
+ 
+-                accumulator -= fixedTimestep;
+-            }
++    if (!paused)
++    {
++        sAccumulator += deltaTime;
+ 
+-            //samples per frame is 701, that gets multipled by two when being queued and then multipled by four because samples are float32 which are 4 bytes long hence the divide by 8
+-            //this number is then checked against samples per frame multipled by three rounded down to 2000 to give it enough margin of error while not desyncing
+-            //this is all done to sync audio to gameplay
+-            if (SDL_GetQueuedAudioSize(1)/8 < 2000)
+-            {
+-                AudioUpdate();
+-            }
++        sGameStepDrawn = false;
+ 
+-            if (videoScaleChanged)
++        while (sAccumulator >= fixedTimestep)
++        {
++            //run game logic, draw frame and process DMAs and vblank
++            ENTER_VBLANK(); //you must be in VBlank before running a game tick
++            MainLoop();
++            if (!sGameStepDrawn)
+             {
+-                SDL_SetWindowSize(sdlWindow, PKBN_CANVAS_W * videoScale, PKBN_CANVAS_H * videoScale);
+-                videoScaleChanged = false;
++                VDraw(sdlTexture);
++                //SDL_RenderClear(sdlRenderer);
++                sGameStepDrawn = true;
+             }
++            RunDMAsAndVBlank();
++
++            sAccumulator -= fixedTimestep;
+         }
+ 
+-        if (paused && sKeysDirty)
++        //samples per frame is 701, that gets multipled by two when being queued and then multipled by four because samples are float32 which are 4 bytes long hence the divide by 8
++        //this number is then checked against samples per frame multipled by three rounded down to 2000 to give it enough margin of error while not desyncing
++        //this is all done to sync audio to gameplay
++        if (SDL_GetQueuedAudioSize(1)/8 < 2000)
+         {
+-            VDraw(sdlTexture);   // pkbn POC-18: draw the keys card over the paused frame
+-            sKeysDirty = false;
++            AudioUpdate();
+         }
+-        lastGameTime = curGameTime;
+ 
+-        SDL_RenderCopy(sdlRenderer, sdlTexture, NULL, NULL);
+-        SDL_RenderPresent(sdlRenderer);
++        if (videoScaleChanged)
++        {
++            SDL_SetWindowSize(sdlWindow, PKBN_CANVAS_W * videoScale, PKBN_CANVAS_H * videoScale);
++            videoScaleChanged = false;
++        }
+     }
+ 
+-    CloseSaveFile();
++    if (paused && sKeysDirty)
++    {
++        VDraw(sdlTexture);   // pkbn POC-18: draw the keys card over the paused frame
++        sKeysDirty = false;
++    }
++    lastGameTime = curGameTime;
+ 
+-    SDL_DestroyWindow(sdlWindow);
+-    SDL_Quit();
+-    return 0;
++    SDL_RenderCopy(sdlRenderer, sdlTexture, NULL, NULL);
++    SDL_RenderPresent(sdlRenderer);
+ }
+ 
+ static void ReadSaveFile(char *path)
+@@ -409,9 +466,33 @@ static void StoreSaveFile()
+         fseek(sSaveFile, 0, SEEK_SET);
+         fwrite(FLASH_BASE, 1, sizeof(FLASH_BASE), sSaveFile);
+         fflush(sSaveFile);
++        Platform_Persist();
+     }
+ }
+ 
++// pkbn POC-23: files were written - the browser build copies /save/ to IndexedDB (desktop: nothing to do)
++void Platform_Persist(void)
++{
++#ifdef __EMSCRIPTEN__
++    EM_ASM({ if (Module.pkbnPersist) Module.pkbnPersist(); });
++#endif
++}
++
++#ifdef __EMSCRIPTEN__
++// The page's touch buttons: bits are the GBA keys (A_BUTTON...), 0x400 = fast-forward (held)
++EMSCRIPTEN_KEEPALIVE void Web_SetTouchKeys(int k)
++{
++    bool fast = (k & 0x400) != 0;
++    sWebKeys = (u16)(k & 0x3FF);
++    if (fast != sWebFast)
++    {
++        sWebFast = fast;
++        speedUp = fast;
++        timeScale = fast ? 5.0 : 1.0;
++    }
++}
++#endif
++
+ void Platform_StoreSaveFile(void)
+ {
+     StoreSaveFile();
+@@ -637,6 +718,9 @@ u16 Platform_GetKeyInput(void)
+     {
+         // pkbn POC-18: the pad and the keyboard together (the port ignored the keyboard while a pad button was held)
+         u16 padKeys = GetPadKeys();
++#ifdef __EMSCRIPTEN__
++        padKeys |= sWebKeys;   // POC-23: the page's touch buttons
++#endif
+         if (padKeys)
+             return keys | padKeys;
+     }
+diff --git a/src/pokedex.c b/src/pokedex.c
+index 55b8a13..1acb9fb 100644
+--- a/src/pokedex.c
++++ b/src/pokedex.c
+@@ -29,6 +29,9 @@
+ #include "constants/rgb.h"
+ #include "constants/songs.h"
+ 
++#ifdef PAGE_SIZE
++#undef PAGE_SIZE   // pkbn POC-23: the browser build's libc defines PAGE_SIZE (WebAssembly's 64 KiB)
++#endif
+ enum
+ {
+     PAGE_MAIN,
+diff --git a/src/stub.c b/src/stub.c
+index d722929..f314c55 100644
+--- a/src/stub.c
++++ b/src/stub.c
+@@ -1,6 +1,7 @@
+ #ifdef PORTABLE
+ #include "global.h"
+ #include "main.h"
++#include "libgcnmultiboot.h"   // pkbn POC-23: the real prototypes (WebAssembly checks call signatures)
+ 
+ #include <stdio.h>
+ 
+@@ -15,10 +16,10 @@ STUB_FUNC(int MultiBoot(struct MultiBootParam *mp))
+ STUB_FUNC(void RegisterRamReset(u32 resetFlags))
+ STUB_FUNC(void IntrMain())
+ STUB_FUNC(void GameCubeMultiBoot_Hash())
+-STUB_FUNC_QUIET(void GameCubeMultiBoot_Main())
+-STUB_FUNC(void GameCubeMultiBoot_ExecuteProgram())
+-STUB_FUNC(void GameCubeMultiBoot_Init())
+-STUB_FUNC(void GameCubeMultiBoot_HandleSerialInterrupt())
++STUB_FUNC_QUIET(void GameCubeMultiBoot_Main(struct GcmbStruct *pStruct))
++STUB_FUNC(void GameCubeMultiBoot_ExecuteProgram(struct GcmbStruct *pStruct))
++STUB_FUNC(void GameCubeMultiBoot_Init(struct GcmbStruct *pStruct))
++STUB_FUNC(void GameCubeMultiBoot_HandleSerialInterrupt(struct GcmbStruct *pStruct))
+ STUB_FUNC(void GameCubeMultiBoot_Quit())
+ STUB_FUNC(void rfu_initializeAPI())
+ STUB_FUNC(void InitRFUAPI(void))
+diff --git a/tools/web/elf2wasm.py b/tools/web/elf2wasm.py
+new file mode 100644
+index 0000000..bcd1581
+--- /dev/null
++++ b/tools/web/elf2wasm.py
+@@ -0,0 +1,126 @@
++#!/usr/bin/env python3
++"""POC-23: turn a 32-bit x86 ELF object of pure data (the host `as --32` output of data/*.s and the songs) into
++WebAssembly assembly that emcc can assemble, keeping every byte, every symbol at its offset (so tables that run into
++each other stay contiguous) and every pointer (R_386_32 relocations become .int32 sym+addend).
++
++usage: elf2wasm.py <in.o> <out.s> <functions.txt>
++  functions.txt: names of the functions defined in the C objects (llvm-nm); a pointer to one of them becomes a function
++  table reference (.functype), anything else a data reference.
++"""
++import struct, sys
++from elftools.elf.elffile import ELFFile
++from elftools.elf.relocation import RelocationSection
++
++src, dst, fnlist = sys.argv[1:4]
++funcs = set(open(fnlist).read().split())
++tag = ''.join(c if c.isalnum() else '_' for c in src.split('/')[-1].rsplit('.', 1)[0])
++
++with open(src, 'rb') as fh:
++    elf = ELFFile(fh)
++    assert elf.elfclass == 32 and elf['e_machine'] == 'EM_386', 'expects an ELF32 i386 object (as --32)'
++    symtab = elf.get_section_by_name('.symtab')
++    syms = list(symtab.iter_symbols())
++    secs = list(elf.iter_sections())
++
++    # which sections carry data
++    keep = {}
++    for i, s in enumerate(secs):
++        if not (s['sh_flags'] & 0x2):          # SHF_ALLOC
++            continue
++        if s['sh_type'] not in ('SHT_PROGBITS', 'SHT_NOBITS'):
++            continue
++        if s['sh_size'] == 0 and not any(sym['st_shndx'] == i and sym.name and
++                                         sym['st_info']['type'] not in ('STT_SECTION', 'STT_FILE') for sym in syms):
++            continue   # empty and unnamed (an empty section that only carries Start/End labels is kept)
++        keep[i] = s
++
++    # labels per section: global and local named symbols, plus a base label for section-relative relocations
++    labels = {i: {} for i in keep}
++    for sym in syms:
++        sh = sym['st_shndx']
++        if not isinstance(sh, int) or sh not in keep or sym['st_info']['type'] in ('STT_SECTION', 'STT_FILE'):
++            continue
++        if not sym.name:
++            continue
++        labels[sh].setdefault(sym['st_value'], []).append((sym.name, sym['st_info']['bind'] == 'STB_GLOBAL'))
++    base = {i: f'.Lsec_{tag}_{i}' for i in keep}
++
++    # relocations: section index -> {offset: (target, addend)}
++    relocs = {i: {} for i in keep}
++    for rs in secs:
++        if not isinstance(rs, RelocationSection):
++            continue
++        tgt = rs['sh_info']
++        if tgt not in keep:
++            continue
++        data = keep[tgt].data()
++        for r in rs.iter_relocations():
++            rtype = r['r_info_type']
++            if rtype == 20:   # R_386_16: GBA-address halves in the Mystery Gift / e-Reader blobs; WebAssembly has no
++                print(f'elf2wasm: {src}: 16-bit relocation at {r["r_offset"]:#x} left as raw bytes', file=sys.stderr)
++                continue      # 16-bit data relocation, and those features don't run on the PC port
++            assert rtype == 1, f'{src}: relocation type {rtype} (only R_386_32 data pointers expected)'
++            off = r['r_offset']
++            addend = struct.unpack_from('<i', data, off)[0]
++            sym = syms[r['r_info_sym']]
++            if sym['st_info']['type'] == 'STT_SECTION' or (not sym.name and isinstance(sym['st_shndx'], int)):
++                name = base.get(sym['st_shndx'])
++                assert name, f'{src}: reloc against a section that holds no data'
++                addend += sym['st_value']
++            else:
++                name = sym.name
++                if isinstance(sym['st_shndx'], int) and sym['st_shndx'] in keep and sym['st_info']['bind'] != 'STB_GLOBAL':
++                    pass   # a local label in this object: emitted as a label, referenced by name
++            relocs[tgt][off] = (name, addend)
++
++    out = []
++    used_funcs = sorted({n for r in relocs.values() for n, _ in r.values() if n in funcs})
++    for f in used_funcs:
++        out.append(f'\t.functype {f} () -> ()')
++
++    def esc(b):
++        return ''.join(chr(c) if 32 <= c < 127 and c not in (34, 92) else '\\%03o' % c for c in b)
++
++    for i, s in keep.items():
++        name = s.name.lstrip('.') or 'data'
++        kind = '.bss' if s['sh_type'] == 'SHT_NOBITS' else ('.data' if s['sh_flags'] & 0x1 else '.rodata')
++        out.append(f'\t.section {kind}.{tag}.{i}.{"".join(c if c.isalnum() else "_" for c in name)},"",@')
++        align = max(1, s['sh_addralign'])
++        out.append(f'\t.p2align {align.bit_length() - 1}')
++        size = s['sh_size']
++        offsets = sorted(set(labels[i]) | {0})
++        sizes = {}
++        for k, o in enumerate(offsets):
++            sizes[o] = (offsets[k + 1] if k + 1 < len(offsets) else size) - o
++        out.append(f'{base[i]}:')
++        data = None if kind == '.bss' else s.data()
++        pos = 0
++        cuts = sorted(set(offsets) | set(relocs[i]) | {size})
++        for o in cuts:
++            if o > pos:
++                if data is None:
++                    out.append(f'\t.skip {o - pos}')
++                else:
++                    chunk = data[pos:o]
++                    for k in range(0, len(chunk), 64):
++                        out.append(f'\t.ascii "{esc(chunk[k:k + 64])}"')
++                pos = o
++            for lab, glob in labels[i].get(o, []):
++                if glob:
++                    out.append(f'\t.globl {lab}')
++                out.append(f'\t.type {lab},@object')
++                out.append(f'{lab}:')
++            if o == size:
++                if size == 0:
++                    out.append('\t.int8 0')   # a WebAssembly data segment can't be empty
++                break
++            if o in relocs[i]:
++                assert data is not None, 'pointer in .bss'
++                n, a = relocs[i][o]
++                out.append(f'\t.int32 {n}{"+%d" % a if a > 0 else ("%d" % a if a < 0 else "")}')
++                pos = o + 4
++        out.append(f'\t.size {base[i]}, {max(size, 1) if size == 0 else size}')
++        for o, labs in labels[i].items():
++            for lab, _ in labs:
++                out.append(f'\t.size {lab}, {max(sizes.get(o, 0), 0)}')
++    open(dst, 'w').write('\n'.join(out) + '\n')
+diff --git a/web.mk b/web.mk
+new file mode 100644
+index 0000000..c90728f
+--- /dev/null
++++ b/web.mk
+@@ -0,0 +1,72 @@
++# POC-23: the browser build (WebAssembly, Emscripten + its SDL2 port).
++#   make -f web.mk -j4          ->  build/web/dist/ (index.html, pokeemerald.js, pokeemerald.wasm)
++# Needs the normal `make linux` once first: it builds the tools and the assets (build/assets, sound/songs/midi/*.s).
++# scripts/setup_host.sh web does both. Tested with Emscripten 3.1.6 (emsdk install 3.1.6).
++#
++# C is compiled by emcc (32-bit wasm, so the data's pointers are 4 bytes as in the 32-bit build). The data written in
++# assembly (data/*.s, the songs) is assembled by the host's `as --32` exactly as the PC build does, then
++# tools/web/elf2wasm.py turns each object into WebAssembly assembly with the same bytes, symbols and pointers.
++
++SHELL     := bash -o pipefail
++EMCC      ?= emcc
++EMNM      ?= emnm
++HOST_AS   ?= as
++PREPROC   := tools/preproc/preproc
++ASSETS    := build/assets
++OUT       := build/web
++DIST      := $(OUT)/dist
++
++DEFS      := -D NONMATCHING -D PORTABLE -D PLATFORM_SDL2 -D RENDERER_EASY_DRAW -D UBFIX -DMODERN=1 -D PKBN_WEB
++CPPFLAGS  := -iquote include -Wno-trigraphs $(DEFS) -sUSE_SDL=2
++CFLAGS    := -O2 -std=gnu99 -fno-builtin -fno-strict-aliasing -Wno-everything
++ASFLAGS   := --32 --defsym VER_64BIT=0 --defsym MODERN=1 --defsym PORTABLE=1 --defsym UBFIX=1
++
++C_SRCS_IN := $(wildcard src/*.c src/*/*.c src/*/*/*.c)
++C_SRCS    := $(filter-out %.inc.c src/platform/win32.c,$(C_SRCS_IN))
++C_OBJS    := $(patsubst src/%.c,$(OUT)/src/%.o,$(C_SRCS))
++DATA_SRCS := $(wildcard data/*.s)
++MID_SRCS  := $(wildcard sound/songs/midi/*.s)
++ASM_ELF   := $(patsubst %.s,$(OUT)/elf/%.o,$(DATA_SRCS) $(MID_SRCS))
++ASM_OBJS  := $(patsubst %.s,$(OUT)/wasm/%.o,$(DATA_SRCS) $(MID_SRCS))
++
++LDFLAGS   := -O2 $(WEB_LDEXTRA) -sUSE_SDL=2 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=134217728 -sTOTAL_STACK=1048576 \
++             -sEXPORTED_RUNTIME_METHODS=['FS','ENV','callMain','addRunDependency','removeRunDependency'] -sEXPORTED_FUNCTIONS=['_main','_Web_SetTouchKeys','_malloc','_free'] \
++             -sEMULATE_FUNCTION_POINTER_CASTS=1 -sFORCE_FILESYSTEM=1 -lidbfs.js -sENVIRONMENT=web
++
++.PHONY: all clean
++.PRECIOUS: $(OUT)/elf/%.o $(OUT)/wasm/%.s
++all: $(DIST)/index.html
++
++$(OUT)/src/%.o: src/%.c
++	@mkdir -p $(dir $@)
++	@$(EMCC) -E $(CPPFLAGS) $< | $(PREPROC) -i -g $(ASSETS) $< charmap.txt > $(@:.o=.i)
++	@$(EMCC) -x c -c $(CFLAGS) $(@:.o=.i) -o $@ || (echo "FAILED: $<"; exit 1)
++
++$(OUT)/elf/sound/songs/midi/%.o: sound/songs/midi/%.s
++	@mkdir -p $(dir $@)
++	@sed -e 's/\.4byte/\.int/g;s/\.2byte/\.short/g' $< | $(HOST_AS) $(ASFLAGS) -I sound -o $@
++
++$(OUT)/elf/%.o: %.s
++	@mkdir -p $(dir $@)
++	@$(PREPROC) $< charmap.txt | cpp -iquote include - | $(PREPROC) -ie $< charmap.txt \
++	  | sed -e 's/\.4byte/\.int/g;s/\.2byte/\.short/g' | $(HOST_AS) $(ASFLAGS) -o $@
++
++$(OUT)/functions.txt: $(C_OBJS)
++	@$(EMNM) --defined-only $(C_OBJS) 2>/dev/null | awk '$$2 ~ /^[Tt]$$/ {print $$3}' | sort -u > $@
++
++$(OUT)/wasm/%.o: $(OUT)/elf/%.o $(OUT)/functions.txt
++	@mkdir -p $(dir $@)
++	@python3 tools/web/elf2wasm.py $< $(@:.o=.s) $(OUT)/functions.txt
++	@$(EMCC) -c $(@:.o=.s) -o $@
++
++$(DIST)/pokeemerald.js: $(C_OBJS) $(ASM_OBJS) web/pkbn_web.js
++	@mkdir -p $(DIST)
++	$(EMCC) $(LDFLAGS) --pre-js web/pkbn_web.js $(C_OBJS) $(ASM_OBJS) -o $@
++
++# (the page is written here rather than by emcc --shell-file: this Emscripten's HTML minifier step is broken)
++$(DIST)/index.html: web/shell.html $(DIST)/pokeemerald.js
++	@sed -e 's#{{{ SCRIPT }}}#<script async src="pokeemerald.js"></script>#' web/shell.html > $@
++	@ls -la $(DIST)
++
++clean:
++	rm -rf $(OUT)
+diff --git a/web/pkbn_web.js b/web/pkbn_web.js
+new file mode 100644
+index 0000000..0890278
+--- /dev/null
++++ b/web/pkbn_web.js
+@@ -0,0 +1,93 @@
++// POC-23: the page side of the browser build (linked in with --pre-js; web.mk).
++//  - Saves: /save/ is IndexedDB (IDBFS). It's loaded before the game starts and written back whenever the game saves
++//    (Platform_Persist -> Module.pkbnPersist), every 30 seconds, and when the tab is hidden or closed.
++//  - Backups: Module.pkbnExport() downloads every save file as one .json; Module.pkbnImport(file) restores one.
++//  - Self-tests: ?env=KEY=VALUE (repeatable) sets environment variables, as the desktop tests do; ?autostart=1 starts
++//    without the tap.
++var Module = typeof Module !== 'undefined' ? Module : {};
++(function () {
++  var query = new URLSearchParams(location.search);
++  Module.noInitialRun = true;
++  Module.preRun = (Module.preRun || []).concat(function () {
++    query.getAll('env').forEach(function (kv) {
++      var i = kv.indexOf('=');
++      if (i > 0) ENV[kv.slice(0, i)] = kv.slice(i + 1);
++    });
++    if (ENV.PKBN_DATA_DIR) FS.mkdirTree(ENV.PKBN_DATA_DIR);   // (self-tests that use their own save folder)
++    FS.mkdir('/save');
++    FS.mount(IDBFS, {}, '/save');
++    addRunDependency('pkbn-saves');
++    FS.syncfs(true, function (err) {
++      if (err) console.error('[pkbn] loading saves:', err);
++      removeRunDependency('pkbn-saves');
++    });
++  });
++
++  var dirty = false, syncing = false;
++  function flush(force) {
++    if ((!dirty && !force) || syncing || typeof FS === 'undefined') return;
++    dirty = false;
++    syncing = true;
++    FS.syncfs(false, function (err) {
++      syncing = false;
++      if (err) console.error('[pkbn] saving:', err);
++      if (Module.pkbnOnSaved) Module.pkbnOnSaved(err);
++    });
++  }
++  Module.pkbnPersist = function () { dirty = true; setTimeout(flush, 50); };
++  setInterval(function () { flush(true); }, 30000);   // the play log and replay are written without a call
++  addEventListener('pagehide', function () { flush(true); });
++  document.addEventListener('visibilitychange', function () { if (document.hidden) flush(true); });
++
++  // Ghost codes: a browser can't read the clipboard synchronously, so pasting asks for the code
++  Module.pkbnCopy = function (text) {
++    if (navigator.clipboard && navigator.clipboard.writeText)
++      navigator.clipboard.writeText(text).catch(function () { prompt('Your ghost code:', text); });
++    else
++      prompt('Your ghost code:', text);
++  };
++  Module.pkbnPaste = function () { return prompt('Paste a ghost code:'); };
++
++  function b64(bytes) {
++    var s = '';
++    for (var i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
++    return btoa(s);
++  }
++  Module.pkbnExport = function () {
++    var out = { game: 'pkbn', version: 1, files: {} };
++    FS.readdir('/save').forEach(function (name) {
++      if (name === '.' || name === '..') return;
++      var path = '/save/' + name;
++      if (FS.isFile(FS.stat(path).mode)) out.files[name] = b64(FS.readFile(path));
++    });
++    var blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
++    var a = document.createElement('a');
++    a.href = URL.createObjectURL(blob);
++    a.download = 'pkbn-saves-' + new Date().toISOString().slice(0, 10) + '.json';
++    a.click();
++    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
++  };
++  Module.pkbnImport = function (file, done) {
++    file.text().then(function (text) {
++      var data = JSON.parse(text);
++      if (!data || data.game !== 'pkbn' || !data.files) throw new Error('not a save backup');
++      Object.keys(data.files).forEach(function (name) {
++        if (name.indexOf('/') >= 0) return;
++        var bin = atob(data.files[name]), bytes = new Uint8Array(bin.length);
++        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
++        FS.writeFile('/save/' + name, bytes);
++      });
++      FS.syncfs(false, function (err) { done(err); });
++    }).catch(function (err) { done(err); });
++  };
++  Module.pkbnStart = function () {
++    if (Module.pkbnStarted) return;
++    Module.pkbnStarted = true;
++    if (Module.pkbnOnStart) Module.pkbnOnStart();
++    Module.callMain([]);
++  };
++  Module.onRuntimeInitialized = function () {
++    if (Module.pkbnReady) Module.pkbnReady();
++    if (query.get('autostart') === '1') Module.pkbnStart();
++  };
++})();
+diff --git a/web/shell.html b/web/shell.html
+new file mode 100644
+index 0000000..834cf58
+--- /dev/null
++++ b/web/shell.html
+@@ -0,0 +1,224 @@
++<!doctype html>
++<html lang="en">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
++<meta name="theme-color" content="#0b1220">
++<link rel="icon" href="data:,">
++<title>Pokémon × Battle Network</title>
++<style>
++  :root { --bg: #0b1220; --panel: #121c2e; --ink: #e6edf7; --muted: #93a2bb; --line: #24324a; --accent: #f2b84b;
++          --btn: #1a2740; --btn-on: #2c4470; --a: #c8323a; --b: #2f5fd0; }
++  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
++  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
++               font: 14px/1.4 "Segoe UI", system-ui, -apple-system, sans-serif; overflow: hidden; touch-action: none; }
++  #app { height: 100%; display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); }
++  header { display: flex; align-items: center; gap: 6px; padding: 6px 10px; padding-top: max(6px, env(safe-area-inset-top));
++           border-bottom: 1px solid var(--line); background: var(--panel); }
++  header b { font-size: 13px; letter-spacing: .02em; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
++  header button { font: inherit; font-size: 12px; color: var(--ink); background: var(--btn); border: 1px solid var(--line);
++                  border-radius: 6px; padding: 4px 8px; cursor: pointer; }
++  header button:focus-visible { outline: 2px solid var(--accent); }
++  #status { font-size: 12px; color: var(--muted); min-width: 0; }
++  #stage { position: relative; min-height: 0; display: grid; place-items: center; padding: 8px; }
++  canvas#canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; background: #000;
++                  width: min(100%, calc((100dvh - 120px) * 1.5)); aspect-ratio: 3 / 2; height: auto; border-radius: 4px; }
++  canvas#canvas:focus { outline: none; }
++  #start { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(11, 18, 32, .86); cursor: pointer; }
++  #start div { text-align: center; }
++  #start h1 { margin: 0 0 6px; font-size: 22px; }
++  #start p { margin: 0; color: var(--muted); }
++  #start .go { margin-top: 14px; display: inline-block; padding: 10px 18px; border-radius: 999px; background: var(--accent);
++               color: #1b1300; font-weight: 700; }
++  /* touch controls: below the screen in portrait, beside it in landscape */
++  #pad { --u: min(50px, 10.5vw); display: none; padding: 6px 12px calc(10px + env(safe-area-inset-bottom));
++         user-select: none; -webkit-user-select: none; }
++  body.touch #pad { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
++  .shoulders { grid-column: 1 / -1; display: flex; justify-content: space-between; }
++  .k { display: grid; place-items: center; background: var(--btn); border: 1px solid var(--line); color: var(--ink);
++       font-weight: 700; font-size: 14px; border-radius: 10px; touch-action: none; }
++  .k.on { background: var(--btn-on); border-color: var(--accent); }
++  .sh { width: calc(var(--u) * 1.8); height: 38px; border-radius: 10px 10px 14px 14px; }
++  #dpad { position: relative; width: calc(var(--u) * 3); height: calc(var(--u) * 3); justify-self: start; }
++  #dpad .k { position: absolute; width: var(--u); height: var(--u); border-radius: 8px; }
++  #dpad .u { left: var(--u); top: 0; } #dpad .d { left: var(--u); bottom: 0; } #dpad .l { left: 0; top: var(--u); } #dpad .r { right: 0; top: var(--u); }
++  #dpad .c { left: var(--u); top: var(--u); background: var(--panel); border-radius: 4px; }
++  .mid { display: grid; gap: 8px; justify-items: center; }
++  .mid .row { display: grid; gap: 8px; }
++  .pill { width: 64px; height: 28px; border-radius: 999px; font-size: 11px; }
++  .ff { width: 52px; height: 28px; border-radius: 999px; font-size: 13px; }
++  #ab { position: relative; width: calc(var(--u) * 3); height: calc(var(--u) * 2.6); justify-self: end; }
++  #ab .k { position: absolute; width: calc(var(--u) * 1.28); height: calc(var(--u) * 1.28); border-radius: 50%; font-size: 18px; }
++  #ab .a { right: 0; top: 8px; background: var(--a); } #ab .b { left: 0; bottom: 4px; background: var(--b); }
++  @media (orientation: landscape) and (max-height: 520px) {
++    body.touch #app { grid-template-rows: auto 1fr; }
++    /* the pad sits beside the screen: L and the D-pad on the left, R and A/B on the right, SELECT/START/» under it */
++    body.touch #pad { --u: 50px; position: fixed; inset: 44px 0 0 0; pointer-events: none; background: none;
++                      grid-template-rows: auto 1fr; padding-left: max(12px, env(safe-area-inset-left));
++                      padding-right: max(12px, env(safe-area-inset-right)); }
++    body.touch #pad .k { pointer-events: auto; opacity: .85; }
++    body.touch .mid { align-self: end; grid-auto-flow: column; }
++    body.touch .mid .row { grid-auto-flow: column; }
++    body.touch canvas#canvas { width: min(calc(100% - 2 * 160px), calc((100dvh - 100px) * 1.5)); margin-bottom: 36px; }
++  }
++  dialog { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; max-width: 420px; }
++  dialog table { border-collapse: collapse; width: 100%; } dialog td { padding: 3px 8px; border-bottom: 1px solid var(--line); }
++  kbd { font: 600 12px ui-monospace, Consolas, monospace; background: var(--btn); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
++  input[type=file] { display: none; }
++</style>
++</head>
++<body>
++<div id="app">
++  <header>
++    <b>Pokémon × Battle Network</b>
++    <span id="status">Loading…</span>
++    <button id="btnFull" type="button" title="Fullscreen">⛶</button>
++    <button id="btnKeys" type="button">Keys</button>
++    <button id="btnSaves" type="button">Saves</button>
++  </header>
++  <div id="stage">
++    <canvas id="canvas" width="792" height="528" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
++    <div id="start" role="button" tabindex="0" aria-label="Start the game">
++      <div><h1>Pokémon × Battle Network</h1><p id="startMsg">Loading the game…</p><span class="go" id="go" hidden>Tap to start</span></div>
++    </div>
++  </div>
++  <div id="pad" aria-hidden="true">
++    <div class="shoulders"><div class="k sh" data-k="512">L</div><div class="k sh" data-k="256">R</div></div>
++    <div id="dpad"><div class="k u">▲</div><div class="k l">◀</div><div class="k c"></div><div class="k r">▶</div><div class="k d">▼</div></div>
++    <div class="mid">
++      <div class="row"><div class="k pill" data-k="4">SELECT</div><div class="k pill" data-k="8">START</div></div>
++      <div class="k ff" data-k="1024">»</div>
++    </div>
++    <div id="ab"><div class="k b" data-k="2">B</div><div class="k a" data-k="1">A</div></div>
++  </div>
++</div>
++
++<dialog id="dlgKeys">
++  <table>
++    <tr><td>A</td><td><kbd>Z</kbd></td></tr><tr><td>B</td><td><kbd>X</kbd></td></tr>
++    <tr><td>L / R</td><td><kbd>A</kbd> / <kbd>S</kbd></td></tr><tr><td>START</td><td><kbd>Enter</kbd></td></tr>
++    <tr><td>SELECT</td><td><kbd>Backspace</kbd></td></tr><tr><td>+Control Pad</td><td>Arrow keys</td></tr>
++    <tr><td>Fast-forward (hold)</td><td><kbd>Space</kbd></td></tr><tr><td>Pause</td><td><kbd>Ctrl</kbd>+<kbd>P</kbd></td></tr>
++  </table>
++  <p>Gamepads work too: plug one in and press a button.</p>
++  <form method="dialog"><button>Close</button></form>
++</dialog>
++
++<dialog id="dlgSaves">
++  <p>Your game saves in this browser on this device. Keep a backup, or move it to another browser.</p>
++  <p><button id="btnExport" type="button">Download a backup</button>
++     <button id="btnImport" type="button">Restore a backup…</button></p>
++  <input id="fileImport" type="file" accept=".json,application/json">
++  <p id="saveMsg"></p>
++  <form method="dialog"><button>Close</button></form>
++</dialog>
++
++<script>
++(function () {
++  var statusEl = document.getElementById('status'), start = document.getElementById('start');
++  var startMsg = document.getElementById('startMsg'), go = document.getElementById('go');
++  var touch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
++  if (touch) document.body.classList.add('touch');
++
++  window.Module = window.Module || {};
++  Module.canvas = document.getElementById('canvas');
++  Module.print = function (t) { console.log(t); };
++  Module.printErr = function (t) { console.warn(t); };
++  Module.setStatus = function (t) {
++    var m = /\((\d+(\.\d+)?)\/(\d+)\)/.exec(t || '');
++    statusEl.textContent = m ? 'Loading ' + Math.round(100 * m[1] / m[3]) + '%' : (t || '');
++  };
++  Module.pkbnReady = function () {
++    statusEl.textContent = '';
++    startMsg.textContent = touch ? 'Touch controls are below the screen.' : 'Keyboard or gamepad. Keys are under “Keys”.';
++    go.hidden = false;
++    go.textContent = touch ? 'Tap to start' : 'Click or press a key to start';
++  };
++  Module.pkbnOnSaved = function (err) {
++    statusEl.textContent = err ? 'Couldn’t save in this browser' : 'Saved';
++    clearTimeout(Module._st); Module._st = setTimeout(function () { statusEl.textContent = ''; }, 1500);
++  };
++  Module.pkbnOnStart = function () {   // (also runs for ?autostart=1)
++    if (start.parentNode) start.remove();
++    Module.canvas.focus();
++  };
++  function begin() {
++    if (go.hidden) return;
++    Module.pkbnStart();
++  }
++  start.addEventListener('click', begin);
++  addEventListener('keydown', function (e) { if (document.getElementById('start')) { e.preventDefault(); begin(); } });
++
++  // ---- touch controls -> Module._Web_SetTouchKeys(mask): GBA key bits, 1024 = fast-forward
++  var pointers = {};
++  function keyAt(x, y) {
++    var el = document.elementFromPoint(x, y);
++    if (!el) return 0;
++    var dp = document.getElementById('dpad');
++    if (dp.contains(el)) {
++      var r = dp.getBoundingClientRect(), dx = x - (r.left + r.width / 2), dy = y - (r.top + r.height / 2), k = 0;
++      if (Math.hypot(dx, dy) < 12) return 0;
++      var a = Math.atan2(dy, dx) * 180 / Math.PI;   // 0 = right, 90 = down
++      if (a > -67.5 && a < 67.5) k |= 16;           // right
++      if (a > 112.5 || a < -112.5) k |= 32;         // left
++      if (a < -22.5 && a > -157.5) k |= 64;         // up
++      if (a > 22.5 && a < 157.5) k |= 128;          // down
++      return k;
++    }
++    return +(el.dataset && el.dataset.k) || 0;
++  }
++  function update() {
++    var mask = 0;
++    for (var id in pointers) mask |= pointers[id];
++    document.querySelectorAll('#pad .k').forEach(function (el) {
++      var k = +el.dataset.k || ({ u: 64, d: 128, l: 32, r: 16 }[el.classList[1]] || 0);
++      el.classList.toggle('on', !!(k && (mask & k) === k));
++    });
++    if (Module._Web_SetTouchKeys) Module._Web_SetTouchKeys(mask);
++  }
++  var pad = document.getElementById('pad');
++  pad.addEventListener('pointerdown', function (e) {
++    e.preventDefault();
++    pointers[e.pointerId] = keyAt(e.clientX, e.clientY);
++    if (navigator.vibrate && pointers[e.pointerId]) navigator.vibrate(8);
++    update();
++  });
++  addEventListener('pointermove', function (e) {
++    if (!(e.pointerId in pointers)) return;
++    var k = keyAt(e.clientX, e.clientY);
++    if (k !== pointers[e.pointerId]) { pointers[e.pointerId] = k; update(); }
++  });
++  ['pointerup', 'pointercancel'].forEach(function (t) {
++    addEventListener(t, function (e) { if (e.pointerId in pointers) { delete pointers[e.pointerId]; update(); } });
++  });
++
++  // ---- header buttons
++  document.getElementById('btnFull').onclick = function () {
++    var el = document.documentElement;
++    if (document.fullscreenElement) document.exitFullscreen();
++    else if (el.requestFullscreen) el.requestFullscreen().then(function () {
++      if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(function () {});
++    }).catch(function () {});
++  };
++  document.getElementById('btnKeys').onclick = function () { document.getElementById('dlgKeys').showModal(); };
++  document.getElementById('btnSaves').onclick = function () { document.getElementById('dlgSaves').showModal(); };
++  document.getElementById('btnExport').onclick = function () {
++    if (!Module.pkbnExport) return;
++    try { Module.pkbnExport(); document.getElementById('saveMsg').textContent = 'Backup downloaded.'; }
++    catch (e) { document.getElementById('saveMsg').textContent = 'Nothing to back up yet.'; }
++  };
++  var fi = document.getElementById('fileImport');
++  document.getElementById('btnImport').onclick = function () { fi.click(); };
++  fi.onchange = function () {
++    if (!fi.files[0]) return;
++    if (!confirm('Replace the save in this browser with the backup? The game restarts.')) return;
++    Module.pkbnImport(fi.files[0], function (err) {
++      if (err) document.getElementById('saveMsg').textContent = 'That file isn’t a save backup.';
++      else location.reload();
++    });
++  };
++})();
++</script>
++{{{ SCRIPT }}}
++</body>
++</html>
+-- 
+2.43.0
+
