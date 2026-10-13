@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: delivered
+- State: accepted
 - Priority: 1
 - Assigned producer: Codex
-- Current owner: Khaled
+- Current owner: implementation agent
 - Brief revision: 2
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker: Khaled reviews v003, A with C-style squared stepped inset panel corners. Revised candidate pending approval.
+- Next action / blocker: v003 approved by Khaled. Implementation agent writes STYLE.md from the retained image before production requests proceed.
 
 ## Purpose and visual brief
 
@@ -63,7 +63,7 @@
 
 ## Revision 2 — user style selection
 
-Khaled selected A's crisp direction with C's squared inset panel corners. Use A as the base for composition, shading, palette and lighting. Borrow only C's right-angle stepped recesses on panel-face corners, replacing A's corner bolt details. Do not import C's stronger skyline or other styling. Final revised candidate remains subject to user review.
+Khaled selected A's crisp direction with C's squared inset panel corners. Use A as the base for composition, shading, palette and lighting. Borrow only C's right-angle stepped recesses on panel-face corners, replacing A's corner bolt details. Do not import C's stronger skyline or other styling. Khaled approved the revised v003 image: this is the selected style reference.
 
 ## Technical target (required for production assets)
 
@@ -93,44 +93,44 @@ ASSET-004.
 
 ## Producer record
 
-- Brief revision used: 1
+- Brief revision used: 2 (v003)
 - Assumptions / unresolved constraints: concept style review only; exact output dimensions and guide alignment remain unmet.
 - Tool and generation/edit prompt: image_gen.imagegen; complete prompts in `poc/assets/generated/ASSET-001/GENERATION.md`.
 - References actually supplied to the tool: project-authored `docs/asset-workflow/references/hibit_battle_layout_528x352.png`; correction pass also used each generated candidate. Mood image inspected but not passed to the tool.
 
-### Delivery v001 (superseded for review)
+### Delivery v001 (superseded; images removed from current tree at user request)
 
 - Outputs: `poc/assets/generated/ASSET-001/v001/variant-a-crisp-hibit.png`, `variant-b-lit-hibit.png`, `variant-c-handheld-hibit.png` (same directory).
-- Three PNGs, each 1536×1024 RGB, opaque. Initial candidates had wrong fighter cells and were revised with image generation. Originals retained as superseded candidates.
+- Three PNGs, each 1536×1024 RGB, opaque. Initial candidates had wrong fighter cells and were revised with image generation. Originals removed from the current tree at Khaled’s request; historical files remain in commit 3cd92d9.
 
-### Delivery v002 (base style review)
+### Delivery v002 (superseded; images removed from current tree at user request)
 
-- Outputs: `poc/assets/generated/ASSET-001/v002/variant-a-crisp-hibit.png`, `variant-b-lit-hibit.png`, `variant-c-handheld-hibit.png` (same directory). Published for GitHub review at the user’s request after chat previews failed. No variant has been selected or accepted.
+- Outputs: `poc/assets/generated/ASSET-001/v002/variant-a-crisp-hibit.png`, `variant-b-lit-hibit.png`, `variant-c-handheld-hibit.png` (same directory). Published for GitHub review at the user’s request after chat previews failed. These candidates were superseded by approved v003; historical files remain in commit 3cd92d9.
 - Actual properties: all PNG, 1536×1024, RGB (opaque). Single scene per image, no animation.
 - Visual checks: all show a straight 6×3 grid, red left/blue right, orange and teal original capsule placeholders on the second and fifth columns of the middle row, distinct cracked/grass/ice panels, a rightward fireball and impact, warm reflected light, Net backdrop and empty HUD frames. No visible readable text or logos.
 - Technical checks: PNG decode/integrity, dimensions and color mode checked with Pillow. Files copied byte-for-byte from tool outputs. No resizing or other programmatic image editing performed.
-- Remaining brief deviations: tool returned 1536×1024 instead of 1056×704; grid/HUD positions are approximate, not exact guide coordinates; fighter size is smaller than requested. B/C retain a taller bottom text zone than the guide. Cracked panels have glowing warm fissures that could read as lava. A has more tonal detail than the requested 2–3-tone flat shading. Palette limits and exact pixel-grid alignment are not verified. These are style candidates, not fully compliant final art.
-- No in-game acceptance applies to this concept. Khaled chooses the visual direction or requests revisions; implementation agent writes STYLE.md from the reviewed choice. Keep ASSET-003/004 as drafts until that step is complete.
+- Remaining brief deviations: tool returned 1536×1024 instead of 1056×704; grid/HUD positions are approximate, not exact guide coordinates; fighter size is smaller than requested. B/C retain a taller bottom text zone than the guide. Cracked panels have glowing warm fissures that could read as lava. A has more tonal detail than the requested 2–3-tone flat shading. Palette limits and exact pixel-grid alignment are not verified. These were style candidates; v003 is approved as a concept reference, not an engine-ready asset.
+- No in-game acceptance applies to this concept. Khaled approved v003; implementation agent writes STYLE.md from that choice. Keep ASSET-003/004 as drafts until that step is complete.
 
-### Delivery v003 (current review candidate; brief revision 2)
+### Delivery v003 (approved style reference; brief revision 2)
 
 - Output: `poc/assets/generated/ASSET-001/v003/variant-a-stepped-corners.png`.
 - Tool: image_gen.imagegen; references: v002 A as the base, v002 C solely for the inset panel-corner design. Exact edit prompt in GENERATION.md.
 - Actual properties: PNG, 1536×1024 RGB, opaque. PNG fully decoded; original tool bytes copied without programmatic image edits.
 - Visual review: preserves A's composition, lighting, fighters, fireball and sky; changes panel faces to squared right-angle corner recesses and removes corner bolts. All 18 panels retained. Ice/grass partially obscure some corners. No readable text or logos.
-- Limitations from v002 remain: dimensions and exact guide/pixel-grid alignment are not production compliant; this is a style concept. Final choice of revised image remains pending Khaled's review.
+- Limitations from v002 remain: dimensions and exact guide/pixel-grid alignment are not production compliant; this is a style concept. Khaled approved this revision as the style reference; this does not certify production dimensions or in-game integration.
 
 ## Consolidated review
 
-- Reviewed delivery: v002 A and C
+- Reviewed delivery: v003 (after feedback on v002 A and C)
 - Reviewer: Khaled
 - Required changes: use A's crisp look with C's squared inset panel corners.
 - Optional preferences: none recorded.
-- Decision and reason: A selected as base direction; v003 revision delivered for confirmation.
+- Decision and reason: Khaled approved v003 and requested removal of all other candidate images.
 
 ## Integration and acceptance (implementation agent)
 
-- Accepted delivery: not applicable (concept). Record the chosen variant here.
+- Accepted delivery: v003, `poc/assets/generated/ASSET-001/v003/variant-a-stepped-corners.png`; user-approved concept style reference. In-game acceptance is not applicable.
 - Remaining work: write `docs/asset-workflow/STYLE.md` from the chosen variant before ASSET-003 goes to ready.
 
 ## Change history
@@ -144,3 +144,5 @@ ASSET-004.
 - 2026-10-13 — Codex — brief revision 2: Khaled selected A’s crisp direction with C’s squared inset panel corners; generating a hybrid candidate.
 
 - 2026-10-13 — Codex — delivered v003: A with stepped inset panel corners, ready for GitHub review; not marked accepted.
+
+- 2026-10-13 — Codex — Khaled approved v003. Removed the six superseded PNGs from v001/v002 as explicitly requested; retained v003 and prompt/provenance notes.

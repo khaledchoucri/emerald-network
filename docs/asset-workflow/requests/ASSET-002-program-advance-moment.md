@@ -9,8 +9,8 @@
 - Brief revision: 1
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker: Codex generates the 3-frame storyboard after ASSET-001's delivery. Use the same style as
-  ASSET-001 variant B unless ASSET-001's review picks another.
+- Next action / blocker: Codex generates the 3-frame storyboard after ASSET-001's delivery. Use the approved
+  ASSET-001 v003 style: crisp A with squared stepped inset panel corners.
 
 ## Purpose and visual brief
 
@@ -32,7 +32,7 @@
   - A rounded rectangle with a type-coloured face, an elemental glyph, a code-letter corner (left blank), and a
     metallic rim.
   - It must not copy Battle Network's chip art or layout.
-- **Style:** match ASSET-001's chosen look (hi-bit pixel art, dark outlines, additive glow on light sources).
+- **Style:** match approved ASSET-001 v003 (crisp hi-bit pixel art, dark outlines, restrained lighting and squared stepped inset panel corners).
 - **Required elements:**
   - the dimmed field in frame 1;
   - the three cards;
@@ -55,7 +55,7 @@ Not applicable: this is a concept. Deliver 3 PNGs at **1056×704** each (4× the
 
 | Path | Role | Notes |
 |---|---|---|
-| ASSET-001's delivered variant B (or the variant its review picks) | Style and composition | Under `poc/assets/generated/ASSET-001/`. |
+| ASSET-001's approved v003 image | Style and composition | `poc/assets/generated/ASSET-001/v003/variant-a-stepped-corners.png`. |
 | `docs/asset-workflow/references/hibit_battle_layout_528x352.png` | Geometry and HUD zones | Our own drawing. |
 | `poc/screens/POC-6-mega-solar-beam.png` | How a Program Advance beam reads today | Project screenshot. It contains game sprites, so use it only for scale and timing; don't copy them. |
 
@@ -102,3 +102,5 @@ request.
 ## Change history
 
 - 2026-10-13 — implementation agent (Claude) — created at revision 1, ready.
+
+- 2026-10-13 — Codex — resolved the style-reference selection to approved ASSET-001 v003 after Khaled’s review; storyboard content unchanged.

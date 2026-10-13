@@ -1,6 +1,6 @@
 # ASSET-001 generation record
 
-Tool: image_gen.imagegen. Brief: revision 1. Review set: v002. User initially requested chat review before committing the final choice, then authorized committing/pushing the review candidates after attachment previews failed. No final style choice has been made.
+Tool: image_gen.imagegen. Initial brief: revision 1. Approved brief: revision 2; retained image: v003. User initially requested chat review before committing the final choice, then authorized committing/pushing the review candidates after attachment previews failed. Khaled subsequently approved v003, A with stepped inset panel corners.
 
 Only the project-authored layout guide was supplied for initial generation. vision2_concept.png was inspected for mood but not supplied to the tool; no game screenshot or extracted sprite was passed to the tool. The revision pass used each initial candidate and the same layout guide. Files were copied byte-for-byte, without resizing, palette conversion, or programmatic editing.
 
@@ -36,4 +36,6 @@ Edit the first image to correct layout while preserving its exact art direction,
 
 ## Revision v003
 
-A selected as base, with C’s squared inset panel corners. See `v003/PROMPT.md` for the exact edit prompt. Output: `v003/variant-a-stepped-corners.png`. Revised candidate pending user approval.
+A selected as base, with C’s squared inset panel corners. See `v003/PROMPT.md` for the exact edit prompt. Output: `v003/variant-a-stepped-corners.png`. Khaled approved v003 as the style reference.
+
+Superseded v001/v002 PNGs were removed from the current repository tree at Khaled’s request. Their historical prompts are preserved here and image inputs remain available in commit 3cd92d9. The only retained ASSET-001 image is `v003/variant-a-stepped-corners.png`.
