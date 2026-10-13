@@ -6,6 +6,6 @@ Lower priority numbers run first. Request files contain the detailed record.
 | ID | Priority | Request file | Brief revision | State | Owner | Next action |
 | --- | --- | --- | --- | --- | --- | --- |
 | ASSET-001 | 1 | [requests/ASSET-001-hibit-battle-keyframe.md](requests/ASSET-001-hibit-battle-keyframe.md) | 2 | accepted | — | Closed: STYLE.md written from v003 |
-| ASSET-002 | 2 | [requests/ASSET-002-program-advance-moment.md](requests/ASSET-002-program-advance-moment.md) | 1 | delivered | Khaled | Review v001 converge / fuse / release frames on GitHub |
-| ASSET-003 | 3 | [requests/ASSET-003-hibit-panel-tileset.md](requests/ASSET-003-hibit-panel-tileset.md) | 3 | ready | Codex | First sample: NORMAL, CRACKED, BROKEN, front edge (both sides) |
+| ASSET-002 | 2 | [requests/ASSET-002-program-advance-moment.md](requests/ASSET-002-program-advance-moment.md) | 1 | accepted | implementation agent | Storyboard approved; prepare production requests |
+| ASSET-003 | 3 | [requests/ASSET-003-hibit-panel-tileset.md](requests/ASSET-003-hibit-panel-tileset.md) | 3 | delivered | Khaled / implementation agent | Review v001 sources; clean alpha/quantize/pack before native-size checks |
 | ASSET-004 | 4 | [requests/ASSET-004-fire-effects.md](requests/ASSET-004-fire-effects.md) | 3 | ready | Codex | First sample: FIREBALL |

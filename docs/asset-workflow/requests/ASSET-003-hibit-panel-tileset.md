@@ -2,15 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 3
 - Assigned producer: Codex
-- Current owner: Codex
+- Current owner: Khaled / implementation agent
 - Brief revision: 3
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker: Codex delivers the first sample: NORMAL, CRACKED, BROKEN and the front edge, both sides, in
-  their sheet positions, following `docs/asset-workflow/STYLE.md` (the panel section). The rest after its review.
+- Next action / blocker: review v001 red/blue source samples. Implementation agent must clean alpha, snap/quantize and pack the exact atlas before native-size/renderer acceptance. Remaining types wait for sample review.
 
 ## Purpose and visual brief
 
@@ -80,19 +79,20 @@
 
 ## Producer record
 
-- Brief revision used:
-- Assumptions / unresolved constraints:
-- Tool and generation/edit prompt:
-- References actually supplied to the tool:
+- Brief revision used: 3
+- Assumptions / unresolved constraints: generator output is source artwork, not the requested exact packed atlas; see delivery limitations.
+- Tool and generation/edit prompt: image_gen.imagegen; exact prompts in `poc/assets/generated/ASSET-003/v001/PROMPTS.md`.
+- References actually supplied to the tool: approved ASSET-001 v003 for red; red sample for blue. No game screenshot or extracted sprites supplied.
 
 ### Delivery v001
 
-- Exact output paths (repository-relative), or attachment plus transfer status:
-- Actual file format, dimensions, transparency, and frame layout:
-- Visual inspection performed and findings:
-- Technical checks performed and results:
-- Unchecked requirements / known limitations:
-- Conversion or integration still needed, with owner:
+- Files: `poc/assets/generated/ASSET-003/v001/panels_red_source.png` and `panels_blue_source.png`, published for GitHub review.
+- Actual properties: both 2014×781 RGBA PNGs. Three visually contiguous panels NORMAL/CRACKED/BROKEN in upper-left plus a separate lip lower-left; unused canvas transparent. These are high-resolution source samples, not 528×116 atlases; sample cells are not in the requested exact coordinates.
+- Visual inspection: squared stepped face corners, side-colored frames, neutral cool silver NORMAL, dark non-glowing CRACKED face, jagged BROKEN rim, slate front lip. Blue was derived from red and closely follows its shapes, but exact pixel-identical geometry/faces apart from frame color is not achieved.
+- Checks: all PNG chunk CRCs and full pixel decoding passed. BROKEN interior probe at (850,270) is alpha 0 in both files. Sample NORMAL/CRACKED/front-edge pixels have alpha 253–254 rather than fully opaque 255. There are also stray low-alpha pixels around/outside the artwork; clean before use. Aggregate counts, SHA-256 and bounds recorded in `validation.json`.
+- Failed/unmet production checks: exact 528×116 atlas dimensions/coordinates, fully opaque solid faces, binary crisp edges, exact matched geometry between sides. At most 16 colors per cell and strict hi-bit pixel alignment are not established. No native 88×52/half-size review or renderer test was performed because the images have not been converted/packed.
+- Implementation handoff: clean stray/partial alpha while preserving the BROKEN hole; extract the three panels and lip; establish shared geometry between red/blue; snap to the hi-bit grid and quantize to ≤16 colors per cell; pack panels at (0,0),(88,0),(176,0) with 88×52 cells and lip at (0,104) with 88×12 size into 528×116 sheets. For this initial sample only, all remaining cells and unused lip band stay alpha 0. Validate normal/cracked opacity, broken-hole alpha, exact dimensions, palette and native/half-size readability in the preview tool. Runtime acceptance follows when the renderer exists.
+- Remaining panel types are not generated. First-sample visual review pending; request is delivered for source review, not accepted or production-ready.
 
 ## Consolidated review
 
@@ -119,3 +119,5 @@
   one). Still a draft until `STYLE.md` exists.
 
 - 2026-10-13 — implementation agent (Claude) — revision 3: STYLE.md written from ASSET-001 v003; ready for Codex.
+
+- 2026-10-13 — Codex — delivered v001 red/blue source samples with NORMAL, CRACKED, BROKEN and lip; exact atlas/alpha cleanup and sample review pending.
