@@ -110,3 +110,5 @@ request.
 - 2026-10-13 — Codex — delivered three sequentially generated v001 storyboard concepts, file checks passed; published for GitHub review, approval pending.
 
 - 2026-10-13 — Codex — Khaled approved all three storyboard concepts and asked to continue to the panel samples.
+
+- 2026-10-14 — implementation agent (Claude) — production art requested as ASSET-008.

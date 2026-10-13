@@ -115,6 +115,13 @@
 
 ## Integration and acceptance (implementation agent)
 
+- Implementation review (2026-10-14, Claude), of all five shrunk into their cells:
+  - all follow STYLE.md (white-yellow cores, red-orange outlines, square sparks; FIREBALL and FLAME_JET face right);
+  - frames stay readable at native size: the burst's 4 growth stages are clear, and the column and the panel flame are
+    clearly different;
+  - 20–33% of each sheet's pixels are semi-transparent (the burst's halo, plus faint stray pixels across the whole
+    canvas), which throws off frame-finding; cleanup comes first in POC-24. No redraw needed.
+
 - Accepted delivery:
 - Integrated paths / patch / commit:
 - Conversion details:
@@ -138,3 +145,5 @@
 - 2026-10-13 — Codex — delivered four remaining v002 fire source sheets; burst halo remains flagged for implementation cleanup, all animation/native/runtime checks pending. User requests independent generation be parallelized in future for speed.
 
 - 2026-10-13 — Codex — Khaled visually approved all four v002 source sheets. Source-art generation/review complete; implementation cleanup and production acceptance pending.
+
+- 2026-10-14 — implementation agent (Claude) — review of the source art recorded; packing and in-game tests follow in POC-24.

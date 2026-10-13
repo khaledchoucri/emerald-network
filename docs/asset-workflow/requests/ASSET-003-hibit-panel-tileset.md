@@ -114,6 +114,14 @@
 
 ## Integration and acceptance (implementation agent)
 
+- Implementation review (2026-10-14, Claude), of v002 shrunk to 88×52 on a test field:
+  - every type reads at native size, cracked and lava are clearly different, and the red and blue frame widths now
+    measure the same;
+  - the source panels are about 9% taller in proportion than the 88×52 cell (330×213), so packing squashes them
+    vertically; this isn't visible at native size;
+  - the front edge shrinks to 15 px tall against the 12 px slot, so it will be trimmed, not squashed;
+  - cleanup of semi-transparent pixels is still to do. No redraw needed.
+
 - Accepted delivery:
 - Integrated paths / patch / commit:
 - Conversion details:
@@ -137,3 +145,5 @@
 - 2026-10-13 — Codex — delivered complete v002 red/blue panel source sets using the red border as reference. Geometry/alpha/palette cleanup and full-set review remain pending.
 
 - 2026-10-13 — Codex — Khaled visually approved the full v002 panel source set. Production/native-size/renderer acceptance remains with the implementation agent.
+
+- 2026-10-14 — implementation agent (Claude) — review of the source art recorded; packing and in-game tests follow in POC-24.

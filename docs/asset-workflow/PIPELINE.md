@@ -69,6 +69,42 @@ through an importer the implementation agent writes. Those files are never commi
 Nothing is "accepted" until it's seen in the game. Until the hi-bit renderer exists (roadmap round 3), production
 sheets are checked with a preview tool, and that limitation is recorded in the request.
 
+## Source-art rules (learned from ASSET-003 and ASSET-004)
+
+The first deliveries were approved on looks, but most of the work to make them usable was cleanup. These rules cut
+that work. They apply to every request from ASSET-005 on.
+
+1. **Every pixel is fully opaque or fully transparent.** No soft halo, glow fringe or anti-aliased edge. Glow is drawn
+   as hard rings (STYLE.md rule 5). About a quarter of the pixels in the ASSET-004 sheets were semi-transparent.
+2. **Nothing outside the art.** The canvas around and between frames is alpha 0. Faint stray pixels across the whole
+   canvas made frame-finding unreliable.
+3. **Draw at a whole-number multiple of the cell, with the cell's proportions.** If a cell is 88×52, draw it at
+   352×208 (4×) or 264×156 (3×), not at 330×213. Then shrinking it to the cell is exact, and nothing gets squashed.
+   Say which multiple you used.
+4. **One row of frames, evenly spaced, each in its own cell-sized box,** left to right, with at least 8 px of empty
+   space between boxes. One PNG per effect or part.
+5. **Same geometry for variants.** Colourways or sides (red and blue panels, player and foe plates) share outlines
+   pixel for pixel, so only colours differ. Draw one, then recolour it.
+6. **Tintable art uses the 5 greys** listed in ASSET-006, so the game can colour it by type.
+7. **Programmatic cleanup is welcome.** Thresholding alpha, cropping, recolouring and packing with a script before
+   delivery is fine. Record what was done in the producer record.
+
+## Effects still to replace, in order
+
+After ASSET-006 (impacts), one request per family. Each will reuse ASSET-006's tint ramps where it can.
+The list comes from `tools/fx_curated.py`.
+
+| Family | Effects |
+|---|---|
+| Strikes | SLASH, SLASH_WIDE, SLASH_WIDE2, SLASH_ARC, LONGSWORD, CLAW, FANG |
+| Water | BUBBLE, BUBBLE_POP, SPLASH, WAVE |
+| Electric | BOLT, BOLT_ORANGE, SPARK, SPARKS, PARALYZE |
+| Wind and spirit | TORNADO, WIND, VORTEX, CONFUSE |
+| Earth | ROCKS, ROCK, BOULDER, METEOR, CRACK, SPIKE, LOGS |
+| Ice | ICE, ICE_SPIKE |
+| Status and support | POISON, POISON2, HEAL, HEAL2, CHARGE, CHARGE_RINGS, BARRIER, LOCKON, LEAF |
+| Shots | SHOT, CANNON, MUZZLE, BOMB, BEAM |
+
 ## Practical notes
 
 - **Repository paths.** Paths in requests are relative to the repository. Codex works from Khaled's checkout of this
