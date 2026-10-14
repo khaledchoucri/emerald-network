@@ -92,11 +92,12 @@ that work. They apply to every request from ASSET-005 on.
 ## Effects still to replace, in order
 
 After ASSET-006 (impacts), one request per family. Each will reuse ASSET-006's tint ramps where it can.
+UI beyond the HUD: the Custom screen is ASSET-009.
 The list comes from `tools/fx_curated.py`.
 
 | Family | Effects |
 |---|---|
-| Strikes | SLASH, SLASH_WIDE, SLASH_WIDE2, SLASH_ARC, LONGSWORD, CLAW, FANG |
+| Strikes (ASSET-010) | SLASH, SLASH_ARC, CLAW, plus STAB and JAWS (new: stabs borrow SPIKE today, bites are drawn in code). SLASH_WIDE, SLASH_WIDE2, LONGSWORD and FANG are never drawn by the game and won't be redrawn |
 | Water | BUBBLE, BUBBLE_POP, SPLASH, WAVE |
 | Electric | BOLT, BOLT_ORANGE, SPARK, SPARKS, PARALYZE |
 | Wind and spirit | TORNADO, WIND, VORTEX, CONFUSE |

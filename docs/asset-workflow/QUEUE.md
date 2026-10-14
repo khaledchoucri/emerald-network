@@ -13,3 +13,5 @@ Lower priority numbers run first. Request files contain the detailed record.
 | ASSET-006 | 6 | [requests/ASSET-006-impacts-and-type-ramps.md](requests/ASSET-006-impacts-and-type-ramps.md) | 2 | ready | Codex | Separate Rock/Normal/Ground ramps; then HIT_SMALL, HIT_STAR, DUST, part B |
 | ASSET-007 | 7 | [requests/ASSET-007-battle-hud.md](requests/ASSET-007-battle-hud.md) | 2 | ready | Codex | H1 v002 (fill contrast, panel-weight frame); then H2–H5 |
 | ASSET-008 | 8 | [requests/ASSET-008-program-advance-production.md](requests/ASSET-008-program-advance-production.md) | 1 | ready | Codex | P1 approved; turning frames, then P2–P6 |
+| ASSET-009 | 9 | [requests/ASSET-009-custom-screen.md](requests/ASSET-009-custom-screen.md) | 1 | ready | Codex | After ASSET-007 H1 v002: window body + art frame sample |
+| ASSET-010 | 10 | [requests/ASSET-010-strike-effects.md](requests/ASSET-010-strike-effects.md) | 1 | ready | Codex | After ASSET-006 impacts: SLASH sample |
