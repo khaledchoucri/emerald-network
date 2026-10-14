@@ -43,6 +43,19 @@ fi
 cd "$HOST_DIR"
 
 # 2. Reset to the pin and apply our patches (refuses to discard local edits)
+# (a patch run that stopped half way is undone first, so the script can simply be run again)
+if [ -d .git/rebase-apply ]; then
+  echo "==> Undoing an unfinished patch run"
+  git am --abort
+fi
+# Files the game writes when the Linux build is played here. Patch 0039 (POC-14g) committed a play log by mistake (0070
+# removes it again), so an untracked one would stop the patches: it's kept aside, with the time, rather than lost.
+for f in pkbn_playlog.jsonl; do
+  if [ -f "$f" ] && ! git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+    echo "==> Keeping your $f aside as $f.$(date +%Y%m%d-%H%M%S)"
+    mv "$f" "$f.$(date +%Y%m%d-%H%M%S)"
+  fi
+done
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo "Host has uncommitted edits in $HOST_DIR - commit or stash them first."; exit 1
 fi
