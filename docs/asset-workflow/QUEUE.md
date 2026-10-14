@@ -7,8 +7,8 @@ Lower priority numbers run first. Request files contain the detailed record.
 | --- | --- | --- | --- | --- | --- | --- |
 | ASSET-001 | 1 | [requests/ASSET-001-hibit-battle-keyframe.md](requests/ASSET-001-hibit-battle-keyframe.md) | 2 | accepted | — | Closed: STYLE.md written from v003 |
 | ASSET-002 | 2 | [requests/ASSET-002-program-advance-moment.md](requests/ASSET-002-program-advance-moment.md) | 1 | accepted | implementation agent | Storyboard approved; production art is ASSET-008 |
-| ASSET-003 | 3 | [requests/ASSET-003-hibit-panel-tileset.md](requests/ASSET-003-hibit-panel-tileset.md) | 4 | delivered | implementation agent | Source look approved; implementation review done (2026-10-14); pack/test in POC-24 |
-| ASSET-004 | 4 | [requests/ASSET-004-fire-effects.md](requests/ASSET-004-fire-effects.md) | 3 | delivered | implementation agent | All source looks approved; implementation review done (2026-10-14); clean/pack/align/test in POC-24 |
+| ASSET-003 | 3 | [requests/ASSET-003-hibit-panel-tileset.md](requests/ASSET-003-hibit-panel-tileset.md) | 4 | accepted | — | Closed: in the game since POC-24 |
+| ASSET-004 | 4 | [requests/ASSET-004-fire-effects.md](requests/ASSET-004-fire-effects.md) | 3 | accepted | — | Closed: in the game since POC-24 |
 | ASSET-005 | 5 | [requests/ASSET-005-net-backdrop.md](requests/ASSET-005-net-backdrop.md) | 2 | delivered | Khaled / implementation agent | Review backdrop A v002; B/C held for review |
 | ASSET-006 | 6 | [requests/ASSET-006-impacts-and-type-ramps.md](requests/ASSET-006-impacts-and-type-ramps.md) | 2 | delivered | Khaled / implementation agent | Review v002 ramps and six remaining effects; runtime tint/playback checks pending |
 | ASSET-007 | 7 | [requests/ASSET-007-battle-hud.md](requests/ASSET-007-battle-hud.md) | 2 | delivered | Khaled / implementation agent | Review H1 v002; H2–H5 held for sample approval |

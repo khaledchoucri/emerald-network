@@ -20,6 +20,7 @@ need make "sudo apt install build-essential"
 need gcc  "sudo apt install build-essential"
 need pkg-config "sudo apt install pkg-config"
 need python3 "sudo apt install python3"
+python3 -c "import numpy, PIL" 2>/dev/null || { echo "Missing numpy / Pillow (POC-24 art packing). sudo apt install python3-numpy python3-pil"; exit 1; }
 pkg-config --exists libpng || { echo "Missing libpng. sudo apt install libpng-dev"; exit 1; }
 case "$TARGET" in
   linux)   pkg-config --exists sdl2 || { echo "Missing SDL2. sudo apt install libsdl2-dev"; exit 1; } ;;
@@ -57,6 +58,35 @@ echo "==> Extracting BN6 effect sprites from upstream/bn6f"
 python3 "$PROJECT_DIR/tools/gen_bn6_gfx.py" "$PROJECT_DIR/upstream/bn6f" "$HOST_DIR/include/pkbn/bn6_gfx_data.h"
 python3 "$PROJECT_DIR/tools/gen_bn6_results.py" "$PROJECT_DIR/upstream/bn6f" "$HOST_DIR/include/pkbn/bn6_results_data.h"   # POC-19: BN6's results window
 
+# 3b. POC-24: our own hi-bit battle art (poc/assets/generated), packed for the build (not committed in the host either)
+echo "==> Packing the hi-bit art (panels, fire)"
+python3 "$PROJECT_DIR/tools/pack_hibit.py" "$PROJECT_DIR" "$HOST_DIR/include/pkbn/hibit_gfx_data.h"
+
+# 3c. POC-25: animated Pokémon from the player's own Black 2 / White 2, when PKBN_SPRITE_ROM points at its .nds.
+#     xBRZ (the 2x upscaler) is fetched and compiled once into ~/pkbn/xbrz; it's a build tool and is never shipped.
+#     The result, pkbn_b2_sprites.bin, holds Nintendo's sprites: it is never committed (CLAUDE.md rule 6).
+SPRITES=""
+if [ -n "${PKBN_SPRITE_ROM:-}" ]; then
+  [ -f "$PKBN_SPRITE_ROM" ] || { echo "PKBN_SPRITE_ROM: no file at $PKBN_SPRITE_ROM"; exit 1; }
+  XBRZ_DIR="${PKBN_XBRZ_DIR:-$HOME/pkbn/xbrz}"
+  XBRZ_PIN="0352a872e6ef48997d758b20b8a180e6fb3114ae"   # github.com/ioistired/xbrz.py (xBRZ by Zenju, AGPL-3.0)
+  if [ ! -f "$XBRZ_DIR/libxbrz.so" ]; then
+    need g++ "sudo apt install g++"
+    echo "==> Building xBRZ into $XBRZ_DIR"
+    rm -rf "$XBRZ_DIR/src"; mkdir -p "$XBRZ_DIR"
+    git clone -q https://github.com/ioistired/xbrz.py "$XBRZ_DIR/src"
+    git -C "$XBRZ_DIR/src" checkout -q "$XBRZ_PIN"
+    # (its Python module glue isn't needed: xbrz_scale_defaults is plain C)
+    sed '/#include "dummy_module.cpp"/d' "$XBRZ_DIR/src/lib/xbrz.cpp" > "$XBRZ_DIR/src/lib/xbrz_plain.cpp"
+    g++ -O2 -std=c++17 -shared -fPIC "$XBRZ_DIR/src/lib/xbrz_plain.cpp" -o "$XBRZ_DIR/libxbrz.so"
+  fi
+  echo "==> Importing the animated Pokémon sprites from $PKBN_SPRITE_ROM"
+  SPRITES="$HOST_DIR/pkbn_b2_sprites.bin"
+  python3 "$PROJECT_DIR/tools/import_b2_sprites.py" "$PKBN_SPRITE_ROM" "$SPRITES" --xbrz "$XBRZ_DIR/libxbrz.so"
+else
+  echo "==> No PKBN_SPRITE_ROM: Pokémon keep Emerald's pictures (POC-25 explains the animated ones)"
+fi
+
 # 4. Build
 # Linux and Windows builds share build/pc64, so objects from one can't be linked into the other (mingw then fails
 # with "undefined reference to `stderr'"). Switching target clears them; the converted graphics in build/assets stay.
@@ -75,6 +105,7 @@ if [ "$TARGET" = web ]; then
   OUT="$PROJECT_DIR/poc/bin/web"
   rm -rf "$OUT"; mkdir -p "$OUT"
   cp build/web/dist/index.html build/web/dist/pokeemerald.js build/web/dist/pokeemerald.wasm "$OUT/"
+  [ -n "$SPRITES" ] && cp "$SPRITES" "$OUT/"   # POC-25: the page loads it if it's there
   echo
   echo "Done: $OUT (index.html, pokeemerald.js, pokeemerald.wasm)"
   echo "Try it: cd $OUT && python3 -m http.server 8000   then open http://localhost:8000"
@@ -97,6 +128,7 @@ else
   OUT="$PROJECT_DIR/poc/bin"
   mkdir -p "$OUT"
   cp pokeemerald64.exe "$OUT/"
+  [ -n "$SPRITES" ] && cp "$SPRITES" "$OUT/"   # POC-25: read from next to the .exe
   cp SDL2/x86_64-w64-mingw32/bin/SDL2.dll "$OUT/"
   echo
   echo "Done: $OUT/pokeemerald64.exe (saves and pkbn_log.txt are written next to it)"

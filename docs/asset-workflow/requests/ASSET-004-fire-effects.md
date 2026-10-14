@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: delivered
+- State: accepted
 - Priority: 4
 - Assigned producer: Codex
-- Current owner: implementation agent
+- Current owner: —
 - Brief revision: 3
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker: all five fire-effect source designs visually approved by Khaled. Implementation agent removes the burst halo, cleans alpha, quantizes/packs, aligns anchors and validates animations/runtime.
+- Next action / blocker: none (in the game since POC-24)
 
 ## Purpose and visual brief
 
@@ -122,12 +122,12 @@
   - 20–33% of each sheet's pixels are semi-transparent (the burst's halo, plus faint stray pixels across the whole
     canvas), which throws off frame-finding; cleanup comes first in POC-24. No redraw needed.
 
-- Accepted delivery:
-- Integrated paths / patch / commit:
-- Conversion details:
-- In-game test command or scenario:
-- Results and screenshot/log evidence:
-- Remaining work:
+- Accepted delivery: v001 FIREBALL, v002 the other four
+- Integrated paths / patch / commit: generated include/pkbn/hibit_gfx_data.h; host patch 0094 (POC-24/25)
+- Conversion details: tools/pack_hibit.py: hard alpha, specks dropped, frames split at the gaps, one scale per effect, area-average shrink, up to 31 colours per effect; each effect fitted to the area BN6's frames cover around their anchor, so it lands where the old one did. FIREBALL and FLAME_JET packed facing left like BN6's; the game flips them by direction (the fireball now faces where it flies).
+- In-game test command or scenario: PKBN_GALLERY (seven Fire moves) and battle self-tests, with PKBN_HIBIT=0 for the old art
+- Results and screenshot/log evidence: poc/screens/POC-24.png; battle logs unchanged (33/33)
+- Remaining work: the old code-drawn panel animations (poison bubbles, grass, road arrows, lava, glints) are gone until animated panel frames are requested
 
 ## Change history
 
@@ -147,3 +147,5 @@
 - 2026-10-13 — Codex — Khaled visually approved all four v002 source sheets. Source-art generation/review complete; implementation cleanup and production acceptance pending.
 
 - 2026-10-14 — implementation agent (Claude) — review of the source art recorded; packing and in-game tests follow in POC-24.
+
+- 2026-10-14 — implementation agent (Claude) — integrated in POC-24 and accepted in the game.

@@ -21,6 +21,7 @@ STAGE="$(mktemp -d)"
 DIR="$STAGE/pkbn-playtest-$VERSION"
 mkdir -p "$DIR"
 cp "$OUT/pokeemerald64.exe" "$OUT/SDL2.dll" "$DIR/"
+[ -f "$OUT/pkbn_b2_sprites.bin" ] && cp "$OUT/pkbn_b2_sprites.bin" "$DIR/" || true   # POC-25: animated Pokémon, when imported
 cp "$PROJECT_DIR/docs/HOW_TO_PLAY.html" "$DIR/"
 ZIP="$OUT/pkbn-playtest-$VERSION.zip"
 rm -f "$ZIP"

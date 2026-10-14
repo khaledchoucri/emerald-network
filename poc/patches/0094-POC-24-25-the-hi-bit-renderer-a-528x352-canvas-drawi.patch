@@ -1,0 +1,1646 @@
+From ba42d6ff3864dbefc33d001e15998076bea40dbd Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Wed, 14 Oct 2026 16:49:45 +0300
+Subject: [PATCH 94/95] POC-24/25: the hi-bit renderer (a 528x352 canvas;
+ drawing still in 264x176 coordinates; hi-bit images land pixel for pixel),
+ Codex's panels and fire packed from poc/assets (pkbn/hibit_gfx_data.h,
+ generated), the fireball facing its way, and animated Pokemon from the
+ player's own Black 2 (pkbn_b2_sprites.bin, xBRZ 2x, never committed)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ .gitignore               |   2 +
+ include/pkbn/gfx.h       |  12 ++
+ include/pkbn/monsprite.h |  25 +++
+ include/pkbn/render.h    |  12 ++
+ src/pkbn/challenge_ui.c  |   3 +-
+ src/pkbn/folder_ui.c     |   6 +-
+ src/pkbn/gfx.c           | 314 +++++++++++++++++++++++++++++---------
+ src/pkbn/grid_battle.c   |   2 +-
+ src/pkbn/grid_draw.c     |  93 ++++++-----
+ src/pkbn/grid_vfx.c      |  35 ++---
+ src/pkbn/monsprite.c     | 322 +++++++++++++++++++++++++++++++++++++++
+ src/pkbn/owtest.c        |   4 +-
+ src/pkbn/post_battle.c   |   2 +-
+ src/pkbn/render.c        |  55 +++++--
+ src/pkbn/results.c       |   7 +-
+ src/pkbn/selftest.c      |   8 +-
+ src/platform/sdl2.c      |  46 ++++--
+ web/pkbn_web.js          |   6 +
+ web/shell.html           |   2 +-
+ 19 files changed, 783 insertions(+), 173 deletions(-)
+ create mode 100644 include/pkbn/monsprite.h
+ create mode 100644 src/pkbn/monsprite.c
+
+diff --git a/.gitignore b/.gitignore
+index 644fcdc..9683cef 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -53,3 +53,5 @@ pkbn_log.txt
+ pkbn.sav
+ pkbn.sav.*
+ !web/*.js
++include/pkbn/hibit_gfx_data.h
++pkbn_b2_sprites.bin
+diff --git a/include/pkbn/gfx.h b/include/pkbn/gfx.h
+index 91806f2..5506e7f 100644
+--- a/include/pkbn/gfx.h
++++ b/include/pkbn/gfx.h
+@@ -13,6 +13,7 @@ struct PkbnImage
+     s16 ox, oy;          // pixel (0,0) is drawn at (x + ox, y + oy) when not flipped
+     const u8 *px;
+     const u16 *pal;
++    u8 hi;               // POC-24: authored at the hi-bit scale (2x): w, h, ox, oy are in buffer pixels
+ };
+ 
+ struct PkbnFxFrame
+@@ -34,6 +35,10 @@ struct PkbnMonPic
+     u8 px[2][64 * 64];
+     u16 pal[16];
+     u8 bottom;           // first empty row from the bottom (gMonFrontPicCoords y_offset): feet line = 64 - bottom
++    // POC-25: the species' animated Black 2 sprite (include/pkbn/monsprite.h), when the player imported them:
++    // its national number (0 = none) and palette. Plain data only: this struct is saved in replays.
++    u16 b2nat;
++    u16 b2pal[16];
+ };
+ 
+ // Draw flags
+@@ -70,10 +75,17 @@ void Gfx_FusePalette(struct PkbnMonPic *body, const struct PkbnMonPic *partner);
+ // Image view of frame 0/1 of a loaded picture, anchored at the horizontal centre of its feet line.
+ // (Built on demand so struct copies of a PkbnMonPic never point at another copy's pixels.)
+ struct PkbnImage Gfx_MonImage(const struct PkbnMonPic *pic, u8 frame);
++// POC-25: the same at tick t (a Black 2 sprite's animation; Emerald's pictures don't use t). Gfx_MonImage uses
++// gPkbnMonTick, which the battle advances once a frame.
++struct PkbnImage Gfx_MonImageAt(const struct PkbnMonPic *pic, u8 frame, u32 t);
++extern u32 gPkbnMonTick;
+ 
+ // BN6 effects (tools/fx_curated.py). Frame for `t` frames after the start (loops or holds the last frame).
+ const struct PkbnImage *Fx_Frame(u8 id, u32 t);
+ u32 Fx_Duration(u8 id);
+ bool8 Fx_Loops(u8 id);
++// POC-24: hi-bit panels and the bottom row's front edge (side 0 = red, 1 = blue); NULL = draw the old panel
++const struct PkbnImage *Gfx_HiPanel(u8 side, u8 type);
++const struct PkbnImage *Gfx_HiLip(u8 side);
+ 
+ #endif // GUARD_PKBN_GFX_H
+diff --git a/include/pkbn/monsprite.h b/include/pkbn/monsprite.h
+new file mode 100644
+index 0000000..4f00f1e
+--- /dev/null
++++ b/include/pkbn/monsprite.h
+@@ -0,0 +1,25 @@
++#ifndef GUARD_PKBN_MONSPRITE_H
++#define GUARD_PKBN_MONSPRITE_H
++// POC-25: animated Pokémon from the player's own Black 2 / White 2, imported at build time by
++// tools/import_b2_sprites.py into pkbn_b2_sprites.bin (never committed). Each sprite is a cut-out puppet: parts
++// (upscaled 2x, 16 colours), cells of parts, cell animations (rotate / scale / move), poses of cells and a pose
++// sequence. Without the file, or with PKBN_HIBIT=0 / PKBN_B2=0, Emerald's own pictures are drawn as before.
++#include "global.h"
++
++// The pose buffer: 2x pixels, the Pokémon's feet (the sprite's origin) at (MONSPRITE_OX, MONSPRITE_OY).
++#define MONSPRITE_W  384
++#define MONSPRITE_H  320
++#define MONSPRITE_OX 176
++#define MONSPRITE_OY 248
++
++bool8 MonSprite_Load(void);                            // once at start; FALSE when there is no file
++const u8 *MonSprite_Find(u16 nationalDex);             // the species' record, or NULL
++const u16 *MonSprite_Palette(const u8 *rec, bool8 shiny);
++// Renders the pose at tick t (60 per second) into out (MONSPRITE_W x MONSPRITE_H palette indices, 0 = clear).
++// pose 0 plays the species' own sequence; pose 1 holds its action pose. Returns the bounding box of what was drawn
++// (x0, y0 inclusive; x1, y1 exclusive), x1 <= x0 when nothing was.
++void MonSprite_Render(const u8 *rec, u8 pose, u32 t, u8 *out, s32 *x0, s32 *y0, s32 *x1, s32 *y1);
++// Pixel counts per palette index over the parts (for the Unison palette fusion).
++void MonSprite_ColourCounts(const u8 *rec, u32 counts[16]);
++
++#endif // GUARD_PKBN_MONSPRITE_H
+diff --git a/include/pkbn/render.h b/include/pkbn/render.h
+index 42d7fd2..2feb77c 100644
+--- a/include/pkbn/render.h
++++ b/include/pkbn/render.h
+@@ -12,6 +12,16 @@
+ #define PKBN_CANVAS_W 264
+ #define PKBN_CANVAS_H 176
+ 
++// POC-24 (hi-bit): the canvas buffer is PKBN_CANVAS_W*PKBN_HIBIT_SCALE x PKBN_CANVAS_H*PKBN_HIBIT_SCALE (528x352).
++// All drawing still takes canvas coordinates (264x176); each canvas pixel is gPkbnScale x gPkbnScale buffer pixels.
++// Hi-bit art (struct PkbnImage .hi) is authored at 2x and lands on buffer pixels one for one.
++#define PKBN_HIBIT_SCALE 2
++#define PKBN_VIEW_W (PKBN_CANVAS_W * PKBN_HIBIT_SCALE)
++#define PKBN_VIEW_H (PKBN_CANVAS_H * PKBN_HIBIT_SCALE)
++extern s32 gPkbnScale;    // buffer pixels per canvas pixel for the current target (1 for the 240x160 GBA frame)
++extern bool8 gPkbnHiBit;  // hi-bit art on (PKBN_HIBIT=0 turns it off: the old art, on the same 2x canvas)
++void Pkbn_SetTargetScaled(s32 w, s32 h, s32 scale);   // w, h in canvas pixels
++
+ extern void (*gPkbnFrameOverlay)(u16 *pixels);   // draws over the 240x160 GBA frame
+ extern void (*gPkbnCanvasOverlay)(u16 *canvas);  // when set, draws the whole 264x176 canvas instead
+ // Size of the buffer the Pkbn_* drawing helpers clip to (set before each overlay call).
+@@ -20,6 +30,8 @@ void Pkbn_SetTarget(s32 w, s32 h);
+ 
+ void Pkbn_FillRect(u16 *fb, s32 x, s32 y, s32 w, s32 h, u16 color);
+ void Pkbn_FrameRect(u16 *fb, s32 x, s32 y, s32 w, s32 h, u16 color);
++void Pkbn_ShiftPicture(u16 *fb, s32 dx, s32 dy);   // canvas pixels; repeats the edge
++void Pkbn_FillRectHi(u16 *fb, s32 x, s32 y, s32 w, s32 h, u16 color);   // buffer pixels
+ // 3x5 font, uppercase ASCII subset. Returns x after the text.
+ s32 Pkbn_DrawText(u16 *fb, s32 x, s32 y, const char *text, u16 color, s32 scale);
+ s32 Pkbn_TextWidth(const char *text, s32 scale);
+diff --git a/src/pkbn/challenge_ui.c b/src/pkbn/challenge_ui.c
+index eff22a4..0edcee2 100644
+--- a/src/pkbn/challenge_ui.c
++++ b/src/pkbn/challenge_ui.c
+@@ -374,8 +374,7 @@ static void GhostInput(u16 keys)
+ static void Draw(u16 *fb)
+ {
+     s32 i;
+-    for (i = 0; i < CW * CH; i++)
+-        fb[i] = RGB(1, 2, 6);
++    Pkbn_FillRect(fb, 0, 0, CW, CH, RGB(1, 2, 6));
+     for (i = 0; i < CH; i += 16)
+         Gfx_FillBlend(fb, 0, (i + (s32)(sC.t / 4)) % CH, CW, 1, RGB(4, 18, 22), 4);
+     Pkbn_FillRect(fb, 0, CH - 13, CW, 13, RGB(1, 2, 5));
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index f245457..e2edcd1 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -976,7 +976,10 @@ static void DrawPanel(u16 *fb)
+         if (sF.gotT == 1)
+         {
+             static u16 sTmp[PKBN_CANVAS_W * 16];
++            s32 keepScale = gPkbnScale;
++            Pkbn_SetTargetScaled(gPkbnFbW, gPkbnFbH, 1);   // POC-24: a 1x scratch picture
+             PkbnDraw_ChipIcon(sTmp, 0, 0, sF.gotMove, FALSE);
++            Pkbn_SetTargetScaled(gPkbnFbW, gPkbnFbH, keepScale);
+             for (j = 0; j < 16; j++)
+                 for (i = 0; i < 22; i++)
+                     sIcon[j * 22 + i] = sTmp[j * PKBN_CANVAS_W + i];
+@@ -1195,8 +1198,7 @@ static void LessonFrame(u16 *keys)
+ static void Draw(u16 *fb)
+ {
+     s32 i;
+-    for (i = 0; i < CW * CH; i++)
+-        fb[i] = RGB(1, 2, 6);
++    Pkbn_FillRect(fb, 0, 0, CW, CH, RGB(1, 2, 6));
+     for (i = 0; i < CH; i += 16)
+         Gfx_FillBlend(fb, 0, (i + (s32)(sF.t / 4)) % CH, CW, 1, RGB(4, 12, 18), 4);
+     RebuildMap();
+diff --git a/src/pkbn/gfx.c b/src/pkbn/gfx.c
+index a4d6e4d..59a0bd1 100644
+--- a/src/pkbn/gfx.c
++++ b/src/pkbn/gfx.c
+@@ -6,6 +6,7 @@
+ #include "graphics.h"
+ #include "pkbn/gfx.h"
+ #include "pkbn/render.h"
++#include "pkbn/monsprite.h"
+ 
+ #ifdef PORTABLE
+ 
+@@ -14,6 +15,13 @@
+ #else
+ #error "include/pkbn/bn6_gfx_data.h is missing: run scripts/setup_host.sh (it runs tools/gen_bn6_gfx.py on upstream/bn6f)"
+ #endif
++// POC-24: our own hi-bit art, packed by tools/pack_hibit.py (scripts/setup_host.sh). Without it the old art is drawn.
++#if __has_include("pkbn/hibit_gfx_data.h")
++#include "pkbn/hibit_gfx_data.h"
++#define HAVE_HIBIT 1
++#else
++#define HAVE_HIBIT 0
++#endif
+ 
+ static s32 sClipBottom = 9999, sClipLeft = -9999, sClipRight = 9999, sClipTop = -9999;
+ 
+@@ -58,12 +66,15 @@ static u16 Add(u16 a, u16 b)
+     return (u16)(r | (g << 5) | (bl << 10) | 0x8000);
+ }
+ 
+-static inline void Plot(u16 *fb, s32 x, s32 y, u16 c, u32 flags, u16 color, u8 amt)
++// POC-24: everything below draws in buffer pixels (gPkbnScale per canvas pixel). Clip limits stay in canvas pixels.
++static inline void PlotPhys(u16 *fb, s32 x, s32 y, u16 c, u32 flags, u16 color, u8 amt)
+ {
++    const s32 S = gPkbnScale;
+     u16 *d;
+-    if (x < 0 || y < 0 || x >= gPkbnFbW || y >= gPkbnFbH || y >= sClipBottom || y < sClipTop || x < sClipLeft || x >= sClipRight)
++    if (x < 0 || y < 0 || x >= gPkbnFbW * S || y >= gPkbnFbH * S
++     || y >= sClipBottom * S || y < sClipTop * S || x < sClipLeft * S || x >= sClipRight * S)
+         return;
+-    d = &fb[y * gPkbnFbW + x];
++    d = &fb[y * gPkbnFbW * S + x];
+     if (flags & GFX_SHADOWED)
+     {
+         *d = Gfx_Blend(*d, 0x8000, 8);
+@@ -81,47 +92,31 @@ static inline void Plot(u16 *fb, s32 x, s32 y, u16 c, u32 flags, u16 color, u8 a
+         *d = c | 0x8000;
+ }
+ 
+-void Gfx_Draw(u16 *fb, const struct PkbnImage *img, s32 x, s32 y, u32 flags, u16 color, u8 amt)
++// Buffer pixels per image pixel, in 1/256: an old (1x) image covers S x S, a hi-bit (2x) one S/2 x S/2.
++static inline s32 PixelScale256(const struct PkbnImage *img)
+ {
+-    s32 i, j;
+-    s32 x0 = (flags & GFX_FLIPX) ? x - img->ox - img->w + 1 : x + img->ox;
+-    s32 y0 = (flags & GFX_FLIPY) ? y - img->oy - img->h + 1 : y + img->oy;
+-    for (j = 0; j < img->h; j++)
+-    {
+-        s32 sy = (flags & GFX_FLIPY) ? img->h - 1 - j : j;
+-        for (i = 0; i < img->w; i++)
+-        {
+-            s32 sx = (flags & GFX_FLIPX) ? img->w - 1 - i : i;
+-            u8 idx = img->px[sy * img->w + sx];
+-            if (idx)
+-                Plot(fb, x0 + i, y0 + j, img->pal[idx], flags, color, amt);
+-        }
+-    }
++    return img->hi ? gPkbnScale * 128 : gPkbnScale * 256;
+ }
+ 
+-void Gfx_DrawScaled(u16 *fb, const struct PkbnImage *img, s32 x, s32 y, s32 sx256, s32 sy256, u32 flags, u16 color, u8 amt)
++// The anchor (x, y) is in canvas pixels; ox, oy in image pixels. k256 = buffer pixels per image pixel (1/256).
++static void DrawPhys(u16 *fb, const struct PkbnImage *img, s32 x, s32 y, s32 kx256, s32 ky256, u32 flags, u16 color, u8 amt)
+ {
+-    s32 i, j, w, h, x0, y0;
+-    if (sx256 == 256 && sy256 == 256)
+-    {
+-        Gfx_Draw(fb, img, x, y, flags, color, amt);
++    s32 i, j, w, h, x0, y0, ax = x * gPkbnScale, ay = y * gPkbnScale;
++    if (kx256 <= 0 || ky256 <= 0)
+         return;
+-    }
+-    if (sx256 <= 0 || sy256 <= 0)
+-        return;
+-    w = img->w * sx256 / 256;
+-    h = img->h * sy256 / 256;
+-    // the anchor (x, y) maps to source pixel (-ox, -oy)
+-    x0 = (flags & GFX_FLIPX) ? x - (img->ox + img->w) * sx256 / 256 : x + img->ox * sx256 / 256;
+-    y0 = (flags & GFX_FLIPY) ? y - (img->oy + img->h) * sy256 / 256 : y + img->oy * sy256 / 256;
++    w = img->w * kx256 / 256;
++    h = img->h * ky256 / 256;
++    // the anchor maps to image pixel (-ox, -oy)
++    x0 = (flags & GFX_FLIPX) ? ax - (img->ox + img->w) * kx256 / 256 : ax + img->ox * kx256 / 256;
++    y0 = (flags & GFX_FLIPY) ? ay - (img->oy + img->h) * ky256 / 256 : ay + img->oy * ky256 / 256;
+     for (j = 0; j < h; j++)
+     {
+-        s32 sy = j * 256 / sy256;
++        s32 sy = j * 256 / ky256;
+         if (flags & GFX_FLIPY)
+             sy = img->h - 1 - sy;
+         for (i = 0; i < w; i++)
+         {
+-            s32 sx = i * 256 / sx256;
++            s32 sx = i * 256 / kx256;
+             u8 idx;
+             if (flags & GFX_FLIPX)
+                 sx = img->w - 1 - sx;
+@@ -129,37 +124,56 @@ void Gfx_DrawScaled(u16 *fb, const struct PkbnImage *img, s32 x, s32 y, s32 sx25
+                 continue;
+             idx = img->px[sy * img->w + sx];
+             if (idx)
+-                Plot(fb, x0 + i, y0 + j, img->pal[idx], flags, color, amt);
++                PlotPhys(fb, x0 + i, y0 + j, img->pal[idx], flags, color, amt);
+         }
+     }
+ }
+ 
++void Gfx_Draw(u16 *fb, const struct PkbnImage *img, s32 x, s32 y, u32 flags, u16 color, u8 amt)
++{
++    s32 k = PixelScale256(img);
++    DrawPhys(fb, img, x, y, k, k, flags, color, amt);
++}
++
++void Gfx_DrawScaled(u16 *fb, const struct PkbnImage *img, s32 x, s32 y, s32 sx256, s32 sy256, u32 flags, u16 color, u8 amt)
++{
++    s32 k = PixelScale256(img);
++    DrawPhys(fb, img, x, y, k * sx256 / 256, k * sy256 / 256, flags, color, amt);
++}
++
+ // POC-17b: an image through a GBA OAM affine matrix (a, b, c, d in 8.8, screen -> texture, as gOamMatrices holds it),
+ // double-size like ST_OAM_AFFINE_DOUBLE, around the image's centre. GFX_FLIPX mirrors the whole transformed picture.
++// POC-24: sampled per buffer pixel, so turning pictures get the hi-bit canvas's finer steps.
+ void Gfx_DrawAffine(u16 *fb, const struct PkbnImage *img, s32 x, s32 y, s16 a, s16 b, s16 c, s16 d, u32 flags, u16 color, u8 amt)
+ {
+-    s32 cx = x + img->ox + img->w / 2, cy = y + img->oy + img->h / 2, dx, dy;
+-    for (dy = -img->h; dy < img->h; dy++)
+-        for (dx = -img->w; dx < img->w; dx++)
++    s32 k = PixelScale256(img);   // buffer pixels per image pixel, 1/256
++    // centre in buffer pixels (x2 to keep half pixels)
++    s32 cx2 = 2 * x * gPkbnScale + (2 * img->ox + img->w) * k / 256, cy2 = 2 * y * gPkbnScale + (2 * img->oy + img->h) * k / 256;
++    s32 rw = img->w * k / 256, rh = img->h * k / 256, dx, dy;
++    for (dy = -rh; dy < rh; dy++)
++        for (dx = -rw; dx < rw; dx++)
+         {
+-            s32 ux = (flags & GFX_FLIPX) ? -dx : dx;
+-            s32 tx = ((a * ux + b * dy) >> 8) + img->w / 2, ty = ((c * ux + d * dy) >> 8) + img->h / 2;
++            // sample at the pixel centre, in image pixels (8.8 matrix, k in 1/256)
++            s32 ux = (flags & GFX_FLIPX) ? -(2 * dx + 1) : (2 * dx + 1), uy = 2 * dy + 1;
++            s32 tx = (s32)(((s64)(a * ux + b * uy) * 256 / (2 * k)) >> 8) + img->w / 2;
++            s32 ty = (s32)(((s64)(c * ux + d * uy) * 256 / (2 * k)) >> 8) + img->h / 2;
+             u8 idx;
+             if (tx < 0 || ty < 0 || tx >= img->w || ty >= img->h)
+                 continue;
+             idx = img->px[ty * img->w + tx];
+             if (idx)
+-                Plot(fb, cx + dx, cy + dy, img->pal[idx], flags & ~GFX_FLIPX, color, amt);
++                PlotPhys(fb, cx2 / 2 + dx, cy2 / 2 + dy, img->pal[idx], flags & ~GFX_FLIPX, color, amt);
+         }
+ }
+ 
+ void Gfx_FillBlend(u16 *fb, s32 x, s32 y, s32 w, s32 h, u16 color, u8 amt)
+ {
+-    s32 i, j;
+-    for (j = y; j < y + h; j++)
+-        for (i = x; i < x + w; i++)
+-            if (i >= 0 && j >= 0 && i < gPkbnFbW && j < gPkbnFbH)
+-                fb[j * gPkbnFbW + i] = Gfx_Blend(fb[j * gPkbnFbW + i], color, amt);
++    s32 i, j, S = gPkbnScale, W = gPkbnFbW * S;
++    s32 x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y;
++    s32 x1 = x + w > gPkbnFbW ? gPkbnFbW : x + w, y1 = y + h > gPkbnFbH ? gPkbnFbH : y + h;
++    for (j = y0 * S; j < y1 * S; j++)
++        for (i = x0 * S; i < x1 * S; i++)
++            fb[j * W + i] = Gfx_Blend(fb[j * W + i], color, amt);
+ }
+ 
+ void Gfx_Darken(u16 *fb, s32 x, s32 y, s32 w, s32 h, u8 amt)
+@@ -203,20 +217,103 @@ void Gfx_LoadMonPic(struct PkbnMonPic *dst, u16 species, u32 personality, u32 ot
+             }
+     }
+     dst->bottom = gMonFrontPicCoords[species].y_offset;
++    // POC-25: the animated Black 2 sprite, if the player imported them. Emerald's own picture stays for the species
++    // whose look depends on the individual (Unown's letter, Spinda's spots) or its form (Deoxys: Emerald's is Speed).
++    dst->b2nat = 0;
++    {
++        u16 nat = SpeciesToNationalPokedexNum(species);
++        const u8 *rec = (nat != 201 && nat != 327 && nat != 386) ? MonSprite_Find(nat) : NULL;
++        if (rec != NULL)
++        {
++            const u16 *bp = MonSprite_Palette(rec, IsShinyOtIdPersonality(otId, personality));
++            dst->b2nat = nat;
++            for (f = 0; f < 16; f++)
++                dst->b2pal[f] = bp[f] & 0x7FFF;
++        }
++    }
+ }
+ 
+-struct PkbnImage Gfx_MonImage(const struct PkbnMonPic *pic, u8 frame)
++u32 gPkbnMonTick;
++
++// POC-25: rendered poses, one slot per picture on screen (keyed by its address), one render per tick and pose
++struct PoseSlot
++{
++    const struct PkbnMonPic *pic;
++    u16 nat;
++    u32 key;
++    u16 w, h;
++    s16 ox, oy;
++    u32 used;
++    u8 px[MONSPRITE_W * MONSPRITE_H];
++};
++static struct PoseSlot sPoses[8];
++static u32 sPoseUse;
++
++static struct PoseSlot *PoseFor(const struct PkbnMonPic *pic, u8 frame, u32 t)
++{
++    static u8 sPose[MONSPRITE_W * MONSPRITE_H];
++    struct PoseSlot *slot = NULL;
++    u32 key = t * 2 + (frame & 1) + 1, i;
++    s32 x0, y0, x1, y1, y;
++    for (i = 0; i < ARRAY_COUNT(sPoses); i++)
++        if (sPoses[i].pic == pic && sPoses[i].nat == pic->b2nat)
++            slot = &sPoses[i];
++    if (slot == NULL)
++    {
++        slot = &sPoses[0];
++        for (i = 1; i < ARRAY_COUNT(sPoses); i++)
++            if (sPoses[i].used < slot->used)
++                slot = &sPoses[i];
++        slot->pic = pic;
++        slot->nat = pic->b2nat;
++        slot->key = 0;
++    }
++    slot->used = ++sPoseUse;
++    if (slot->key == key)
++        return slot;
++    MonSprite_Render(MonSprite_Find(pic->b2nat), frame & 1, t, sPose, &x0, &y0, &x1, &y1);
++    if (x1 <= x0)
++        x0 = MONSPRITE_OX, y0 = MONSPRITE_OY, x1 = x0 + 1, y1 = y0 + 1;
++    slot->w = (u16)(x1 - x0);
++    slot->h = (u16)(y1 - y0);
++    slot->ox = (s16)(x0 - MONSPRITE_OX);
++    slot->oy = (s16)(y0 - MONSPRITE_OY);
++    for (y = 0; y < slot->h; y++)
++        memcpy(&slot->px[y * slot->w], &sPose[(y0 + y) * MONSPRITE_W + x0], slot->w);
++    slot->key = key;
++    return slot;
++}
++
++struct PkbnImage Gfx_MonImageAt(const struct PkbnMonPic *pic, u8 frame, u32 t)
+ {
+     struct PkbnImage img;
++    if (pic->b2nat != 0 && gPkbnHiBit && MonSprite_Find(pic->b2nat) != NULL)
++    {
++        const struct PoseSlot *slot = PoseFor(pic, frame, t);
++        img.w = slot->w;
++        img.h = slot->h;
++        img.ox = slot->ox;
++        img.oy = slot->oy;
++        img.px = slot->px;
++        img.pal = pic->b2pal;
++        img.hi = 1;
++        return img;
++    }
+     img.w = 64;
+     img.h = 64;
+     img.ox = -32;
+     img.oy = -(64 - pic->bottom);
+     img.px = pic->px[frame & 1];
+     img.pal = pic->pal;
++    img.hi = 0;
+     return img;
+ }
+ 
++struct PkbnImage Gfx_MonImage(const struct PkbnMonPic *pic, u8 frame)
++{
++    return Gfx_MonImageAt(pic, frame, gPkbnMonTick);
++}
++
+ // Emerald's move type icons (graphics/types/move_types.png, as the summary screen shows them): 32x16 each,
+ // type t starts at tile t * 8 (ANIMCMD_FRAME(TYPE_x * 8), pokemon_summary_screen.c:774), 4x2 tiles; three
+ // palettes, chosen per type by sMoveTypeToOamPaletteNum (pokemon_summary_screen.c:907, palettes 13-15).
+@@ -260,37 +357,84 @@ struct PkbnImage Gfx_TypeIcon(u8 type)
+     img.oy = 0;
+     img.px = sPx[type];
+     img.pal = &sPal[sTypePal[type] * 16];
++    img.hi = 0;
+     return img;
+ }
+ 
++// POC-24: an effect's frames - our hi-bit ones when they exist (and PKBN_HIBIT isn't 0), else BN6's.
++static void FxFrames(u8 id, const struct PkbnFxFrame **frames, u32 *count, bool8 *loop)
++{
++#if HAVE_HIBIT
++    u32 i;
++    if (gPkbnHiBit)
++        for (i = 0; i < ARRAY_COUNT(sHiFx); i++)
++            if (sHiFx[i].fx == id)
++            {
++                *frames = &sHiFxFrames[sHiFx[i].first];
++                *count = sHiFx[i].count;
++                *loop = sHiFx[i].loop;
++                return;
++            }
++#endif
++    *frames = &sBn6Frames[sBn6Anims[id].first];
++    *count = sBn6Anims[id].count;
++    *loop = sBn6Anims[id].loop;
++}
++
+ const struct PkbnImage *Fx_Frame(u8 id, u32 t)
+ {
+-    const struct PkbnFxAnim *a = &sBn6Anims[id];
+-    u32 total = Fx_Duration(id), k;
+-    if (a->loop && total)
++    const struct PkbnFxFrame *fr;
++    u32 count, total = Fx_Duration(id), k;
++    bool8 loop;
++    FxFrames(id, &fr, &count, &loop);
++    if (loop && total)
+         t %= total;
+-    for (k = 0; k < a->count; k++)
++    for (k = 0; k < count; k++)
+     {
+-        const struct PkbnFxFrame *fr = &sBn6Frames[a->first + k];
+-        if (t < fr->delay)
+-            return &fr->img;
+-        t -= fr->delay;
++        if (t < fr[k].delay)
++            return &fr[k].img;
++        t -= fr[k].delay;
+     }
+-    return &sBn6Frames[a->first + a->count - 1].img;
++    return &fr[count - 1].img;
+ }
+ 
+ u32 Fx_Duration(u8 id)
+ {
+-    const struct PkbnFxAnim *a = &sBn6Anims[id];
+-    u32 k, total = 0;
+-    for (k = 0; k < a->count; k++)
+-        total += sBn6Frames[a->first + k].delay;
++    const struct PkbnFxFrame *fr;
++    u32 count, k, total = 0;
++    bool8 loop;
++    FxFrames(id, &fr, &count, &loop);
++    for (k = 0; k < count; k++)
++        total += fr[k].delay;
+     return total;
+ }
+ 
+ bool8 Fx_Loops(u8 id)
+ {
+-    return sBn6Anims[id].loop;
++    const struct PkbnFxFrame *fr;
++    u32 count;
++    bool8 loop;
++    FxFrames(id, &fr, &count, &loop);
++    return loop;
++}
++
++// POC-24: hi-bit panel art (ASSET-003): side 0 = red (player), 1 = blue; NULL when there is none or it's off.
++const struct PkbnImage *Gfx_HiPanel(u8 side, u8 type)
++{
++#if HAVE_HIBIT
++    if (gPkbnHiBit && type < PKBN_HIBIT_PANEL_TYPES)
++        return &sHiPanel[side & 1][type];
++#endif
++    return NULL;
++}
++
++const struct PkbnImage *Gfx_HiLip(u8 side)
++{
++#if HAVE_HIBIT
++    if (gPkbnHiBit)
++        return &sHiLip[side & 1];
++#endif
++    return NULL;
+ }
+ 
+ #endif // PORTABLE
+@@ -362,11 +506,11 @@ static u16 HlsToRgb555(s32 h, s32 l, s32 s)
+ struct FuseRamp { u8 n; u8 idx[15]; s32 area, hue; };
+ 
+ // Colour ramps of a picture: palette entries in use grouped by hue (within 25 degrees), biggest area first.
+-static u8 FuseRamps(const struct PkbnMonPic *pic, struct FuseRamp *out)
++static u8 FuseRamps(const u16 *palette, const u32 *counts, struct FuseRamp *out)
+ {
+     s32 cnt[16] = {0}, i, k, n = 0, order[16], m = 0;
+-    for (i = 0; i < 64 * 64; i++)
+-        cnt[pic->px[0][i] & 15]++;
++    for (i = 0; i < 16; i++)
++        cnt[i] = (s32)counts[i];
+     for (i = 1; i < 16; i++)
+         if (cnt[i])
+             order[m++] = i;
+@@ -379,7 +523,7 @@ static u8 FuseRamps(const struct PkbnMonPic *pic, struct FuseRamp *out)
+     for (i = 0; i < m; i++)
+     {
+         s32 h, l, s, c = order[i];
+-        Rgb555ToHls(pic->pal[c], &h, &l, &s);
++        Rgb555ToHls(palette[c], &h, &l, &s);
+         if (s < 180 || l < 120 || l > 930)
+             continue;   // outline, highlight, grey: not a colour ramp
+         for (k = 0; k < n; k++)
+@@ -407,25 +551,55 @@ static u8 FuseRamps(const struct PkbnMonPic *pic, struct FuseRamp *out)
+     return n;
+ }
+ 
+-void Gfx_FusePalette(struct PkbnMonPic *body, const struct PkbnMonPic *partner)
++// The partner's colour ramps onto the body's palette, ramp by ramp (by area), keeping the body's shading.
++static void FuseOne(u16 *bodyPal, const u32 *bodyCnt, const u16 *partnerPal, const u32 *partnerCnt)
+ {
+     struct FuseRamp br[8], pr[8];
+-    u8 nb = FuseRamps(body, br), np = FuseRamps(partner, pr), i, j;
++    u8 nb = FuseRamps(bodyPal, bodyCnt, br), np = FuseRamps(partnerPal, partnerCnt, pr), i, j;
+     u16 pal[16];
+     if (np == 0)
+         return;
+-    memcpy(pal, body->pal, sizeof(pal));
++    memcpy(pal, bodyPal, sizeof(pal));
+     for (i = 0; i < nb; i++)
+     {
+         const struct FuseRamp *t = &pr[i % np];
+         s32 th, tl, ts;
+-        Rgb555ToHls(partner->pal[t->idx[0]], &th, &tl, &ts);   // the partner ramp's main colour
++        Rgb555ToHls(partnerPal[t->idx[0]], &th, &tl, &ts);   // the partner ramp's main colour
+         for (j = 0; j < br[i].n; j++)
+         {
+             s32 h, l, s;
+-            Rgb555ToHls(body->pal[br[i].idx[j]], &h, &l, &s);
++            Rgb555ToHls(bodyPal[br[i].idx[j]], &h, &l, &s);
+             pal[br[i].idx[j]] = HlsToRgb555(th, l, ts);
+         }
+     }
+-    memcpy(body->pal, pal, sizeof(pal));
++    memcpy(bodyPal, pal, sizeof(pal));
++}
++
++static void EmeraldCounts(const struct PkbnMonPic *pic, u32 cnt[16])
++{
++    s32 i;
++    memset(cnt, 0, sizeof(u32) * 16);
++    for (i = 0; i < 64 * 64; i++)
++        cnt[pic->px[0][i] & 15]++;
++}
++
++void Gfx_FusePalette(struct PkbnMonPic *body, const struct PkbnMonPic *partner)
++{
++    u32 bc[16], pc[16];
++    EmeraldCounts(body, bc);
++    EmeraldCounts(partner, pc);
++    FuseOne(body->pal, bc, partner->pal, pc);
++    if (body->b2nat != 0 && MonSprite_Find(body->b2nat) != NULL)
++    {
++        // POC-25: the Black 2 sprite's palette too, from the partner's Black 2 colours when it has them
++        u32 b2c[16], p2c[16];
++        MonSprite_ColourCounts(MonSprite_Find(body->b2nat), b2c);
++        if (partner->b2nat != 0 && MonSprite_Find(partner->b2nat) != NULL)
++        {
++            MonSprite_ColourCounts(MonSprite_Find(partner->b2nat), p2c);
++            FuseOne(body->b2pal, b2c, partner->b2pal, p2c);
++        }
++        else
++            FuseOne(body->b2pal, b2c, partner->pal, pc);
++    }
+ }
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 21241c9..24f5f1e 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -535,7 +535,7 @@ static void LoadEnemy(struct Pokemon *mon)
+     }
+ }
+ 
+-u16 gPkbnBattleSnapshot[PKBN_CANVAS_W * PKBN_CANVAS_H];   // POC-19: behind the post-battle screens
++u16 gPkbnBattleSnapshot[PKBN_VIEW_W * PKBN_VIEW_H];   // POC-19: behind the post-battle screens
+ 
+ static void Overlay(u16 *fb)
+ {
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 6f9f713..8c789c3 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -144,8 +144,7 @@ static void DrawBackdrop(u16 *fb, u32 t)
+     for (y = 0; y < CH; y++)
+     {
+         u16 c = Gfx_Blend(top, bot, (u8)(y * 16 / CH));
+-        for (x = 0; x < CW; x++)
+-            fb[y * CW + x] = c;
++        Pkbn_FillRect(fb, 0, y, CW, 1, c);
+     }
+     // the Net: a slowly scrolling grid of thin lines above the field
+     for (y = 0; y < GRID_Y; y++)
+@@ -196,6 +195,22 @@ static void DrawPanel(u16 *fb, s32 c, s32 r, u32 t)
+ 
+     // dark gap between panels
+     Pkbn_FillRect(fb, x, y, PANEL_W, PANEL_H, RGB(1, 1, 3));
++    {
++        // POC-24: the hi-bit panel (ASSET-003), in the colour of the side that owns the column
++        const struct PkbnImage *hi = Gfx_HiPanel(c < PLAYER_COLS ? 0 : 1, type);
++        if (hi != NULL)
++        {
++            Gfx_Draw(fb, hi, x, y, 0, 0, 0);
++            if (r == GRID_ROWS - 1)
++            {
++                const struct PkbnImage *lip = Gfx_HiLip(c < PLAYER_COLS ? 0 : 1);
++                Pkbn_FillRect(fb, x, y + PANEL_H, PANEL_W, PANEL_LIP, RGB(1, 1, 3));
++                if (lip != NULL)
++                    Gfx_Draw(fb, lip, x, y + PANEL_H, 0, 0, 0);
++            }
++            return;
++        }
++    }
+     if (type == PANEL_BROKEN)
+     {
+         // a hole: the frame is left, the face is gone (you see down into the Net)
+@@ -687,9 +702,8 @@ static void OnStatSound(const struct VisEvent *e)
+ 
+ static void ShakeFrame(u16 *fb)
+ {
+-    static u16 sTmp[PKBN_CANVAS_W * PKBN_CANVAS_H];
+     static const u8 sMask[4] = { 1, 3, 7, 15 };
+-    s32 dx, dy, x, y;
++    s32 dx, dy;
+     if (sShakeT == 0)
+         return;
+     sShakeT--;
+@@ -699,20 +713,7 @@ static void ShakeFrame(u16 *fb)
+     dy = (s32)((sShakeRng >> 16) & sMask[sShakeLevel & 3]) - (sMask[sShakeLevel & 3] + 1) / 2;
+     if (dx == 0 && dy == 0)
+         return;
+-    memcpy(sTmp, fb, sizeof(sTmp));
+-    for (y = 0; y < PKBN_CANVAS_H; y++)
+-    {
+-        s32 sy = y - dy;
+-        if (sy < 0) sy = 0;
+-        if (sy >= PKBN_CANVAS_H) sy = PKBN_CANVAS_H - 1;
+-        for (x = 0; x < PKBN_CANVAS_W; x++)
+-        {
+-            s32 sx = x - dx;
+-            if (sx < 0) sx = 0;
+-            if (sx >= PKBN_CANVAS_W) sx = PKBN_CANVAS_W - 1;
+-            fb[y * PKBN_CANVAS_W + x] = sTmp[sy * PKBN_CANVAS_W + sx];
+-        }
+-    }
++    Pkbn_ShiftPicture(fb, dx, dy);
+ }
+ 
+ static void PlayDueSounds(void)
+@@ -762,6 +763,7 @@ static void DrawFighter(u16 *fb, u8 side)
+     u32 flags = (side == SIDE_PLAYER) ? GFX_FLIPX : 0;
+     u16 color = 0;
+     u8 amt = 0, frame = 0;
++    u32 monT;
+     bool8 still = (f->bm.status1 & (STATUS1_SLEEP | STATUS1_FREEZE)) || f->stun;
+ 
+     if (FighterHidden(side))
+@@ -795,7 +797,14 @@ static void DrawFighter(u16 *fb, u8 side)
+     if (f->iframes && (sTick & 2) && f->bm.hp)
+         return; // BN blink while invincible
+ 
+-    img = Gfx_MonImage(&f->pic, 0);
++    // POC-25: each side's animation clock (Black 2 sprites); it stops while the Pokémon is asleep, frozen or stunned
++    {
++        static u32 sMonT[2];
++        if (!still)
++            sMonT[side & 1] = gPkbnMonTick + (side & 1) * 37;
++        monT = sMonT[side & 1];
++    }
++    img = Gfx_MonImageAt(&f->pic, 0, monT);
+     {
+         // POC-15 poses, in "forward" pixels (toward the foe): wind-up draws back, the strike lunges and eases home
+         u8 v = VS(side);
+@@ -835,7 +844,7 @@ static void DrawFighter(u16 *fb, u8 side)
+         }
+     }
+     if (frame)
+-        img = Gfx_MonImage(&f->pic, 1);
++        img = Gfx_MonImageAt(&f->pic, 1, monT);
+     if (side == SIDE_ENEMY)
+         dx = -dx;
+ 
+@@ -936,17 +945,17 @@ static void DrawFighter(u16 *fb, u8 side)
+     Gfx_ClipBottom(9999);
+     if (side == SIDE_PLAYER && f->bm.hp)
+     {
+-        // the first row with a pixel in it
++        // the first row with a pixel in it (POC-25: hi-bit pictures count in half pixels)
+         s32 r, c;
+-        for (r = 0; r < 64; r++)
++        for (r = 0; r < img.h; r++)
+         {
+-            for (c = 0; c < 64 && img.px[r * 64 + c] == 0; c++)
++            for (c = 0; c < img.w && img.px[r * img.w + c] == 0; c++)
+                 ;
+-            if (c < 64)
++            if (c < img.w)
+                 break;
+         }
+         sHeadX = x + dx;
+-        sHeadY = y - lift + img.oy + r;
++        sHeadY = y - lift + (img.hi ? (img.oy + r) / 2 : img.oy + r);
+         sHeadValid = TRUE;
+     }
+ 
+@@ -1285,10 +1294,13 @@ static const u16 *ChipIconPixels(u16 move)
+     memset(sMerged, 0, sizeof(sMerged));
+     for (k = 0; k < ARRAY_COUNT(sTimes); k++)
+     {
++        s32 keepScale = gPkbnScale;
+         memset(sIconScratch, 0, sizeof(sIconScratch));
++        Pkbn_SetTargetScaled(gPkbnFbW, gPkbnFbH, 1);   // POC-24: the scratch picture is 1 buffer pixel per canvas pixel
+         Gfx_ClipRect(0, 0, AW, AH);
+         Vfx_DrawChipArt(sIconScratch, AW / 2, 32, move, gPkbnMoveInfo[move].kind, gBattleMoves[move].type, sTimes[k]);
+         Gfx_ClipNone();
++        Pkbn_SetTargetScaled(gPkbnFbW, gPkbnFbH, keepScale);
+         for (y = 0; y < AH; y++)
+             for (x = 0; x < AW; x++)
+             {
+@@ -2044,35 +2056,35 @@ static void DrawPAForming(u16 *fb)
+ 
+ // The Custom window's picture (its columns, CUS_W + its rim), kept to slide it out after OK.
+ #define CUS_SHOT_W (CUS_W + 3)
+-static u16 sCustomShot[CUS_SHOT_W * PKBN_CANVAS_H];
++static u16 sCustomShot[CUS_SHOT_W * PKBN_HIBIT_SCALE * PKBN_VIEW_H];
+ static u32 sCustomOpenT;
+ 
+ static void DrawCustomSliding(u16 *fb)
+ {
+-    static u16 sBase[PKBN_CANVAS_W * PKBN_CANVAS_H];
+-    s32 x, y, k;
++    static u16 sBase[PKBN_VIEW_W * PKBN_VIEW_H];
++    s32 x, y, k, S = gPkbnScale, VW = CW * S, VH = CH * S, SW = CUS_SHOT_W * S;
+     if (!sWasCustom)
+         sCustomOpenT = sTick;
+     sWasCustom = TRUE;
+-    memcpy(sBase, fb, sizeof(sBase));
++    memcpy(sBase, fb, VW * VH * sizeof(u16));
+     Gfx_Darken(sBase, 0, 0, CW, CH, 5);
+     DrawCustomScreen(fb);
+-    for (y = 0; y < CH; y++)
+-        memcpy(&sCustomShot[y * CUS_SHOT_W], &fb[y * CW], CUS_SHOT_W * sizeof(u16));
++    for (y = 0; y < VH; y++)
++        memcpy(&sCustomShot[y * SW], &fb[y * VW], SW * sizeof(u16));
+     k = (s32)(sTick - sCustomOpenT);
+     if (k < SLIDE_IN)
+     {
+         // ease out: quick at first, settling in
+-        s32 rem = SLIDE_IN - k, off = CUS_SHOT_W * rem * rem / (SLIDE_IN * SLIDE_IN);
+-        for (y = 0; y < CH; y++)
+-            for (x = 0; x < CUS_SHOT_W; x++)
+-                fb[y * CW + x] = x + off < CUS_SHOT_W ? sCustomShot[y * CUS_SHOT_W + x + off] : sBase[y * CW + x];
++        s32 rem = SLIDE_IN - k, off = SW * rem * rem / (SLIDE_IN * SLIDE_IN);
++        for (y = 0; y < VH; y++)
++            for (x = 0; x < SW; x++)
++                fb[y * VW + x] = x + off < SW ? sCustomShot[y * SW + x + off] : sBase[y * VW + x];
+     }
+ }
+ 
+ static void DrawCustomClosing(u16 *fb)
+ {
+-    s32 x, y, off;
++    s32 x, y, off, S = gPkbnScale, VW = CW * S, VH = CH * S, SW = CUS_SHOT_W * S;
+     if (sWasCustom && sB.state != ST_CUSTOM)
+     {
+         sWasCustom = FALSE;
+@@ -2080,11 +2092,11 @@ static void DrawCustomClosing(u16 *fb)
+     }
+     if (sCloseT == 0)
+         return;
+-    off = CUS_SHOT_W * (SLIDE_OUT - sCloseT + 1) * (SLIDE_OUT - sCloseT + 1) / (SLIDE_OUT * SLIDE_OUT);
++    off = SW * (SLIDE_OUT - sCloseT + 1) * (SLIDE_OUT - sCloseT + 1) / (SLIDE_OUT * SLIDE_OUT);
+     sCloseT--;
+-    for (y = 0; y < CH; y++)
+-        for (x = 0; x + off < CUS_SHOT_W; x++)
+-            fb[y * CW + x] = sCustomShot[y * CUS_SHOT_W + x + off];
++    for (y = 0; y < VH; y++)
++        for (x = 0; x + off < SW; x++)
++            fb[y * VW + x] = sCustomShot[y * SW + x + off];
+ }
+ 
+ void Draw_Overlay(u16 *fb)
+@@ -2093,6 +2105,7 @@ void Draw_Overlay(u16 *fb)
+     u32 t;
+     u8 keepFoe = sB.cur;
+ 
++    gPkbnMonTick++;   // POC-25: the Pokémon's animation clock (Black 2 sprites)
+     sNewBattle = sB.frame < sLastBattleFrame;
+     if (sNewBattle)
+         ResetVisuals();
+diff --git a/src/pkbn/grid_vfx.c b/src/pkbn/grid_vfx.c
+index 06eb48a..9f2fd36 100644
+--- a/src/pkbn/grid_vfx.c
++++ b/src/pkbn/grid_vfx.c
+@@ -874,7 +874,7 @@ void Vfx_BeginFrame(void)
+         sFlashT--;
+ }
+ 
+-static void DrawOrb(u16 *fb, s32 x, s32 y, u8 type, u32 t);
++static void DrawOrb(u16 *fb, s32 x, s32 y, u8 type, u32 t, s32 dir);
+ 
+ static void DrawBeam(u16 *fb, const struct Particle *p)
+ {
+@@ -1037,7 +1037,7 @@ void Vfx_DrawLayer(u16 *fb, u8 layer)
+             DrawBeam(fb, p);
+             break;
+         case P_ORB:
+-            DrawOrb(fb, p->x / 16, p->y / 16, (u8)p->value, sT);
++            DrawOrb(fb, p->x / 16, p->y / 16, (u8)p->value, sT, p->vx < 0 ? -1 : 1);
+             break;
+         case P_GLINT:
+             DrawGlint(fb, p);
+@@ -1087,12 +1087,13 @@ void Vfx_DrawLayer(u16 *fb, u8 layer)
+ 
+ // ---- attacks in flight -----------------------------------------------------------------------------------------
+ 
+-static void DrawOrb(u16 *fb, s32 x, s32 y, u8 type, u32 t)
++// dir: +1 travelling right, -1 left. POC-24: the fireball turns to face where it's going (its art faces left).
++static void DrawOrb(u16 *fb, s32 x, s32 y, u8 type, u32 t, s32 dir)
+ {
+     u16 c = Vfx_TypeColor(type);
+     switch (type)
+     {
+-    case TYPE_FIRE:     Gfx_Draw(fb, Fx_Frame(FX_FIREBALL, t), x, y, 0, 0, 0); return;
++    case TYPE_FIRE:     Gfx_Draw(fb, Fx_Frame(FX_FIREBALL, t), x, y, dir > 0 ? GFX_FLIPX : 0, 0, 0); return;
+     case TYPE_ELECTRIC: Gfx_Draw(fb, Fx_Frame(FX_SPARK, t), x, y + 8, GFX_ADD, 0, 0); break;
+     case TYPE_WATER:    Gfx_Draw(fb, Fx_Frame(FX_BUBBLE, t % 12), x, y, 0, 0, 0); break;
+     }
+@@ -1151,7 +1152,7 @@ static void DrawProjectile(u16 *fb, s32 x, s32 y, const struct Attack *a, u8 typ
+     }
+     for (k = 3; k >= 1; k--)   // a fading trail behind it
+         Gfx_Ellipse(fb, x - dir * k * 7, y, 7 - k, 7 - k, c, (u8)(10 - k * 3));
+-    DrawOrb(fb, x, y, type, sT);
++    DrawOrb(fb, x, y, type, sT, dir);
+ }
+ 
+ void Vfx_DrawAttacks(u16 *fb)
+@@ -1195,15 +1196,15 @@ void Vfx_DrawAttacks(u16 *fb)
+                          (a->side == SIDE_PLAYER ? 0 : GFX_FLIPX) | GFX_HALF, 0, 0);
+             }
+             else if (a->kind != GK_BOMB)
+-                DrawOrb(fb, x, y, TYPE_POISON, sT);
++                DrawOrb(fb, x, y, TYPE_POISON, sT, a->side == SIDE_PLAYER ? 1 : -1);
+             else if (type == TYPE_ROCK || type == TYPE_GROUND)
+                 Gfx_Draw(fb, Fx_Frame(FX_ROCK, 0), x, y, 0, 0, 0);   // POC-15: what's thrown matches the move
+             else if (type == TYPE_FIRE)
+-                Gfx_Draw(fb, Fx_Frame(FX_FIREBALL, sT), x, y, 0, 0, 0);
++                Gfx_Draw(fb, Fx_Frame(FX_FIREBALL, sT), x, y, a->side == SIDE_PLAYER ? GFX_FLIPX : 0, 0, 0);
+             else if (type == TYPE_NORMAL || type == TYPE_STEEL)
+                 Gfx_Draw(fb, Fx_Frame(FX_BOMB, sT), x, y, 0, 0, 0);
+             else
+-                DrawOrb(fb, x, y, type, sT);
++                DrawOrb(fb, x, y, type, sT, a->side == SIDE_PLAYER ? 1 : -1);
+             continue;
+         }
+         if ((a->kind == GK_METEORS || a->kind == GK_FIREHIT || a->kind == GK_GOLEMHIT) && a->phase == PH_WAIT)
+@@ -1328,7 +1329,7 @@ void Vfx_DrawChipArt(u16 *fb, s32 x, s32 y, u16 move, u8 kind, u8 type, u32 t)
+             PlayLoop(fb, l.fx, x, y + l.dy / 2, l.tinted ? GFX_TINT : 0, tc, 8, t);
+         break;
+     case GK_BALL:
+-        DrawOrb(fb, x + (s32)((t % 40) - 20), y - 8, type, t);
++        DrawOrb(fb, x + (s32)((t % 40) - 20), y - 8, type, t, 1);
+         break;
+     case GK_TORNADO:
+         PlayLoop(fb, FX_TORNADO, x, y + 6, type == TYPE_FLYING ? 0 : GFX_TINT, tc, 8, t);
+@@ -1427,19 +1428,8 @@ void Vfx_EndFrame(u16 *fb)
+     if (sShakeT && sShakeMag)
+     {
+         // shift the whole picture (BN shakes the screen on heavy hits)
+-        static u16 sCopy[CW * CH];
+-        s32 dx = ((sT & 1) ? sShakeMag : -sShakeMag), dy = ((sT & 2) ? sShakeMag / 2 : 0), x, y;
+-        memcpy(sCopy, fb, sizeof(sCopy));
+-        for (y = 0; y < CH; y++)
+-            for (x = 0; x < CW; x++)
+-            {
+-                s32 sx = x - dx, sy = y - dy;
+-                if (sx < 0) sx = 0;
+-                if (sx >= CW) sx = CW - 1;
+-                if (sy < 0) sy = 0;
+-                if (sy >= CH) sy = CH - 1;
+-                fb[y * CW + x] = sCopy[sy * CW + sx];
+-            }
++        s32 dx = ((sT & 1) ? sShakeMag : -sShakeMag), dy = ((sT & 2) ? sShakeMag / 2 : 0);
++        Pkbn_ShiftPicture(fb, dx, dy);
+     }
+ }
+ 
+@@ -1474,6 +1464,7 @@ void Vfx_DrawBall(u16 *fb, u16 ballItem, s32 x, s32 y, s32 t)
+     img.oy = -8;
+     img.px = sPx;
+     img.pal = sPal;
++    img.hi = 0;
+     Gfx_Ellipse(fb, x, y + 10, 6, 2, PKBN_RGB(0, 0, 0), 8);
+     Gfx_Draw(fb, &img, x, y, (t < 30 && (t / 3) & 1) ? GFX_FLIPX : 0, 0, 0);
+ }
+diff --git a/src/pkbn/monsprite.c b/src/pkbn/monsprite.c
+new file mode 100644
+index 0000000..3cf7662
+--- /dev/null
++++ b/src/pkbn/monsprite.c
+@@ -0,0 +1,322 @@
++// POC-25: animated Pokémon sprites from the player's own Black 2 / White 2 (see include/pkbn/monsprite.h).
++// The record layout is written by tools/import_b2_sprites.py:
++//   u16 pal[16], shiny[16]
++//   u16 nCells; per cell: u16 nParts; per part: s16 x, y, u16 w, h (2x pixels, around the cell's origin), w*h/2 bytes 4bpp
++//   u16 nAnims; per anim: u16 nFrames, loopStart; per frame: u16 duration, cell, rotation (65536 = a turn),
++//                                                       s16 scaleX, scaleY (8.8), x, y (1x pixels)
++//   u16 nPoses; per pose: u16 nNodes; per node (back to front): u16 anim, s16 x, y (1x)
++//   u16 nSeq, seqLoop; per step: u16 duration, pose, s16 x, y (1x)
++#include <stdio.h>     // first: the C library before global.h's macros (as src/pkbn/replay.c)
++#include <stdlib.h>
++#include <string.h>
++#include "global.h"
++#include "pkbn/monsprite.h"
++
++#ifdef PORTABLE
++
++extern const char *Platform_DataPath(const char *file);
++
++#define MAGIC "PKBNB2S1"
++static u8 *sBlob;
++static u32 sBlobSize, sCount;
++static bool8 sTried;
++
++static u16 U16(const u8 *p) { return (u16)(p[0] | (p[1] << 8)); }
++static s16 S16(const u8 *p) { return (s16)U16(p); }
++static u32 U32(const u8 *p) { return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24); }
++
++static bool8 TryLoad(const char *path)
++{
++    FILE *f;
++    long size;
++    if (path == NULL || (f = fopen(path, "rb")) == NULL)
++        return FALSE;
++    fseek(f, 0, SEEK_END);
++    size = ftell(f);
++    fseek(f, 0, SEEK_SET);
++    sBlob = malloc(size > 16 ? size : 16);
++    if (sBlob == NULL || fread(sBlob, 1, size, f) != (size_t)size || size < 16 || memcmp(sBlob, MAGIC, 8) != 0)
++    {
++        fclose(f);
++        free(sBlob);
++        sBlob = NULL;
++        return FALSE;
++    }
++    fclose(f);
++    sBlobSize = (u32)size;
++    sCount = U32(sBlob + 12);
++    printf("[pkbn] Black 2 sprites: %u species from %s\n", (unsigned)(sCount ? sCount - 1 : 0), path);
++    return TRUE;
++}
++
++bool8 MonSprite_Load(void)
++{
++    if (sTried)
++        return sBlob != NULL;
++    sTried = TRUE;
++    if (getenv("PKBN_B2") != NULL && atoi(getenv("PKBN_B2")) == 0)
++        return FALSE;
++    return TryLoad(getenv("PKBN_SPRITES")) || TryLoad(Platform_DataPath("pkbn_b2_sprites.bin"))
++        || TryLoad("pkbn_b2_sprites.bin") || TryLoad("/data/pkbn_b2_sprites.bin");   // (the browser build's copy)
++}
++
++const u8 *MonSprite_Find(u16 national)
++{
++    u32 off;
++    if (!MonSprite_Load() || national == 0 || national >= sCount)
++        return NULL;
++    off = U32(sBlob + 16 + national * 4);
++    return (off && off < sBlobSize) ? sBlob + off : NULL;
++}
++
++const u16 *MonSprite_Palette(const u8 *rec, bool8 shiny)
++{
++    static u16 sPal[2][16];
++    s32 i;
++    for (i = 0; i < 16; i++)
++        sPal[shiny & 1][i] = U16(rec + (shiny ? 32 : 0) + i * 2) | 0x8000;
++    return sPal[shiny & 1];
++}
++
++// ---- an index of one record (where each cell, part, anim and pose starts), cached for the few on screen ----------
++struct Part { s16 x, y; u16 w, h; const u8 *px; };
++struct Index
++{
++    const u8 *rec;
++    u16 nCells, nAnims, nPoses, nSeq, seqLoop;
++    u16 *cellFirst, *cellCount;  // into parts
++    struct Part *parts;
++    const u8 **anim;             // -> u16 nFrames, loopStart, frames
++    const u8 **pose;             // -> u16 nNodes, nodes
++    const u8 *seq;               // -> steps
++};
++
++static struct Index sCache[6];
++static u32 sCacheNext;
++
++static const struct Index *IndexOf(const u8 *rec)
++{
++    struct Index *x;
++    const u8 *p;
++    u32 i, k, nParts = 0;
++    for (i = 0; i < ARRAY_COUNT(sCache); i++)
++        if (sCache[i].rec == rec)
++            return &sCache[i];
++    x = &sCache[sCacheNext++ % ARRAY_COUNT(sCache)];
++    free(x->cellFirst); free(x->cellCount); free(x->parts); free(x->anim); free(x->pose);
++    memset(x, 0, sizeof(*x));
++    x->rec = rec;
++    // count the parts first
++    p = rec + 64;
++    x->nCells = U16(p); p += 2;
++    for (i = 0; i < x->nCells; i++)
++    {
++        u16 n = U16(p);
++        p += 2;
++        for (k = 0; k < n; k++)
++        {
++            p += 8 + U16(p + 4) * U16(p + 6) / 2;
++            nParts++;
++        }
++    }
++    x->cellFirst = malloc(sizeof(u16) * (x->nCells + 1));
++    x->cellCount = malloc(sizeof(u16) * (x->nCells + 1));
++    x->parts = malloc(sizeof(struct Part) * (nParts + 1));
++    p = rec + 66;
++    nParts = 0;
++    for (i = 0; i < x->nCells; i++)
++    {
++        u16 n = U16(p);
++        p += 2;
++        x->cellFirst[i] = (u16)nParts;
++        x->cellCount[i] = n;
++        for (k = 0; k < n; k++)
++        {
++            struct Part *pt = &x->parts[nParts++];
++            pt->x = S16(p); pt->y = S16(p + 2); pt->w = U16(p + 4); pt->h = U16(p + 6);
++            pt->px = p + 8;
++            p += 8 + pt->w * pt->h / 2;
++        }
++    }
++    x->nAnims = U16(p); p += 2;
++    x->anim = malloc(sizeof(u8 *) * (x->nAnims + 1));
++    for (i = 0; i < x->nAnims; i++)
++    {
++        x->anim[i] = p;
++        p += 4 + U16(p) * 14;
++    }
++    x->nPoses = U16(p); p += 2;
++    x->pose = malloc(sizeof(u8 *) * (x->nPoses + 1));
++    for (i = 0; i < x->nPoses; i++)
++    {
++        x->pose[i] = p;
++        p += 2 + U16(p) * 6;
++    }
++    x->nSeq = U16(p); x->seqLoop = U16(p + 2);
++    x->seq = p + 4;
++    return x;
++}
++
++// The frame of an animation (stride bytes per frame, the duration first) at tick t, looping from loopStart.
++static const u8 *FrameAt(const u8 *frames, u16 n, u16 loopStart, u32 stride, u32 t)
++{
++    u32 total = 0, pre = 0, i;
++    if (n == 0)
++        return NULL;
++    for (i = 0; i < n; i++)
++    {
++        if (i < loopStart)
++            pre += U16(frames + i * stride);
++        total += U16(frames + i * stride);
++    }
++    if (total == 0)
++        return frames;
++    if (t >= total)
++        t = (total > pre) ? pre + (t - pre) % (total - pre) : total - 1;
++    for (i = 0; i < n; i++)
++    {
++        u32 d = U16(frames + i * stride);
++        if (t < d)
++            return frames + i * stride;
++        t -= d;
++    }
++    return frames + (n - 1) * stride;
++}
++
++// (no libm in the Linux link: a small sine, and floor)
++static double Sine(double x)
++{
++    const double pi = 3.14159265358979323846;
++    double x2;
++    while (x > pi) x -= 2 * pi;
++    while (x < -pi) x += 2 * pi;
++    if (x > pi / 2) x = pi - x;          // sin(pi - x) = sin x: keeps the series where it is exact
++    if (x < -pi / 2) x = -pi - x;
++    x2 = x * x;
++    return x * (1 - x2 / 6 * (1 - x2 / 20 * (1 - x2 / 42 * (1 - x2 / 72 * (1 - x2 / 110)))));
++}
++
++static s32 Floor(double v)
++{
++    s32 i = (s32)v;
++    return (v < 0 && v != i) ? i - 1 : i;
++}
++
++static void Bound(s32 *x0, s32 *y0, s32 *x1, s32 *y1, s32 x, s32 y)
++{
++    if (x < *x0) *x0 = x;
++    if (y < *y0) *y0 = y;
++    if (x + 1 > *x1) *x1 = x + 1;
++    if (y + 1 > *y1) *y1 = y + 1;
++}
++
++// One part of a cell, the cell's origin at (cx, cy) in the buffer, turned by rot and scaled (8.8). Like the DS's
++// affine sprites: each buffer pixel looks up its source pixel through the inverse transform.
++static void DrawPart(u8 *out, const struct Part *pt, double cx, double cy, u16 rot, s32 sx256, s32 sy256,
++                     s32 *x0, s32 *y0, s32 *x1, s32 *y1)
++{
++    s32 X, Y;
++    if (rot == 0 && sx256 == 256 && sy256 == 256)
++    {
++        s32 bx = Floor(cx) + pt->x, by = Floor(cy) + pt->y, i, j;
++        for (j = 0; j < pt->h; j++)
++            for (i = 0; i < pt->w; i++)
++            {
++                s32 k = j * pt->w + i;
++                u8 c = (pt->px[k >> 1] >> ((k & 1) * 4)) & 15;
++                s32 dx = bx + i, dy = by + j;
++                if (c && dx >= 0 && dy >= 0 && dx < MONSPRITE_W && dy < MONSPRITE_H)
++                {
++                    out[dy * MONSPRITE_W + dx] = c;
++                    Bound(x0, y0, x1, y1, dx, dy);
++                }
++            }
++        return;
++    }
++    {
++        double a = -(double)rot / 65536.0 * 2.0 * 3.14159265358979323846, ca = Sine(a + 1.57079632679489661923), sa = Sine(a);
++        double kx = sx256 ? sx256 / 256.0 : 1.0, ky = sy256 ? sy256 / 256.0 : 1.0;
++        double ax = kx < 0 ? -kx : kx, ay = ky < 0 ? -ky : ky;
++        double r = (double)((pt->x < 0 ? -pt->x : pt->x) + pt->w + (pt->y < 0 ? -pt->y : pt->y) + pt->h) * (ax > ay ? ax : ay) + 1;
++        s32 bx0 = (s32)(cx - r), bx1 = (s32)(cx + r), by0 = (s32)(cy - r), by1 = (s32)(cy + r);
++        if (bx0 < 0) bx0 = 0;
++        if (by0 < 0) by0 = 0;
++        if (bx1 > MONSPRITE_W) bx1 = MONSPRITE_W;
++        if (by1 > MONSPRITE_H) by1 = MONSPRITE_H;
++        for (Y = by0; Y < by1; Y++)
++            for (X = bx0; X < bx1; X++)
++            {
++                double dx = X + 0.5 - cx, dy = Y + 0.5 - cy;
++                s32 ux = Floor((ca * dx + sa * dy) / kx) - pt->x, uy = Floor((-sa * dx + ca * dy) / ky) - pt->y;
++                if (ux >= 0 && uy >= 0 && ux < pt->w && uy < pt->h)
++                {
++                    s32 k = uy * pt->w + ux;
++                    u8 c = (pt->px[k >> 1] >> ((k & 1) * 4)) & 15;
++                    if (c)
++                    {
++                        out[Y * MONSPRITE_W + X] = c;
++                        Bound(x0, y0, x1, y1, X, Y);
++                    }
++                }
++            }
++    }
++}
++
++void MonSprite_Render(const u8 *rec, u8 pose, u32 t, u8 *out, s32 *x0, s32 *y0, s32 *x1, s32 *y1)
++{
++    const struct Index *x = IndexOf(rec);
++    const u8 *step, *nodes;
++    u16 poseIdx, n, i;
++    s32 mx, my;
++    memset(out, 0, MONSPRITE_W * MONSPRITE_H);
++    *x0 = MONSPRITE_W; *y0 = MONSPRITE_H; *x1 = 0; *y1 = 0;
++    step = FrameAt(x->seq, x->nSeq, x->seqLoop, 8, t);
++    if (step == NULL || x->nPoses == 0)
++        return;
++    poseIdx = U16(step + 2);
++    mx = S16(step + 4); my = S16(step + 6);
++    if (pose == 1 && x->nPoses > 1)
++        poseIdx = 1, mx = 0, my = 0;   // the action pose (Black 2's second pose), held for an attack
++    if (poseIdx >= x->nPoses)
++        poseIdx = 0;
++    nodes = x->pose[poseIdx];
++    n = U16(nodes);
++    for (i = 0; i < n; i++)
++    {
++        const u8 *node = nodes + 2 + i * 6, *an, *e;
++        u16 ai = U16(node), cell, k;
++        if (ai >= x->nAnims)
++            continue;
++        an = x->anim[ai];
++        e = FrameAt(an + 4, U16(an), U16(an + 2), 14, t);
++        if (e == NULL)
++            continue;
++        cell = U16(e + 2);
++        if (cell >= x->nCells)
++            continue;
++        {
++            double cx = MONSPRITE_OX + (S16(node + 2) + mx + S16(e + 10)) * 2.0;
++            double cy = MONSPRITE_OY + (S16(node + 4) + my + S16(e + 12)) * 2.0;
++            // the cell's parts, the first one on top
++            for (k = x->cellCount[cell]; k > 0; k--)
++                DrawPart(out, &x->parts[x->cellFirst[cell] + k - 1], cx, cy, U16(e + 4), S16(e + 6), S16(e + 8), x0, y0, x1, y1);
++        }
++    }
++}
++
++void MonSprite_ColourCounts(const u8 *rec, u32 counts[16])
++{
++    const struct Index *x = IndexOf(rec);
++    u32 i, k, nParts = 0;
++    memset(counts, 0, sizeof(u32) * 16);
++    for (i = 0; i < x->nCells; i++)
++        nParts += x->cellCount[i];
++    for (i = 0; i < nParts; i++)
++        for (k = 0; k < (u32)x->parts[i].w * x->parts[i].h; k++)
++            counts[(x->parts[i].px[k >> 1] >> ((k & 1) * 4)) & 15]++;
++}
++
++#else
++bool8 MonSprite_Load(void) { return FALSE; }
++const u8 *MonSprite_Find(u16 national) { return NULL; }
++#endif // PORTABLE
+diff --git a/src/pkbn/owtest.c b/src/pkbn/owtest.c
+index b599aaa..d21fe54 100644
+--- a/src/pkbn/owtest.c
++++ b/src/pkbn/owtest.c
+@@ -212,8 +212,8 @@ void PkbnOwTest_Frame(const u16 *canvas)
+     f = fopen(path, "wb");
+     if (f == NULL)
+         return;
+-    fprintf(f, "P6\n%d %d\n255\n", PKBN_CANVAS_W, PKBN_CANVAS_H);
+-    for (i = 0; i < PKBN_CANVAS_W * PKBN_CANVAS_H; i++)
++    fprintf(f, "P6\n%d %d\n255\n", PKBN_VIEW_W, PKBN_VIEW_H);
++    for (i = 0; i < PKBN_VIEW_W * PKBN_VIEW_H; i++)
+     {
+         u16 c = canvas[i];
+         u8 rgb[3] = { (u8)((c & 31) << 3), (u8)(((c >> 5) & 31) << 3), (u8)(((c >> 10) & 31) << 3) };
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index e25e656..7b586c8 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -247,7 +247,7 @@ static void Overlay(u16 *fb)
+ {
+     s32 i;
+     const s32 W = PKBN_CANVAS_W, H = PKBN_CANVAS_H, bx = 6, bh = 48, by = H - bh - 4;
+-    for (i = 0; i < W * H; i++)
++    for (i = 0; i < PKBN_VIEW_W * PKBN_VIEW_H; i++)   // POC-24: the hi-bit buffer
+         fb[i] = ((gPkbnBattleSnapshot[i] & 0x7BDE) >> 1) | 0x8000;   // the battle, at half brightness
+     if (Results_Active())
+     {
+diff --git a/src/pkbn/render.c b/src/pkbn/render.c
+index 8de201a..497bc03 100644
+--- a/src/pkbn/render.c
++++ b/src/pkbn/render.c
+@@ -9,30 +9,67 @@
+ void (*gPkbnFrameOverlay)(u16 *pixels) = NULL;
+ void (*gPkbnCanvasOverlay)(u16 *canvas) = NULL;
+ s32 gPkbnFbW = DISPLAY_WIDTH, gPkbnFbH = DISPLAY_HEIGHT;
++s32 gPkbnScale = 1;
++bool8 gPkbnHiBit = TRUE;
+ 
+-void Pkbn_SetTarget(s32 w, s32 h)
++void Pkbn_SetTargetScaled(s32 w, s32 h, s32 scale)
+ {
+     gPkbnFbW = w;
+     gPkbnFbH = h;
++    gPkbnScale = scale;
++}
++
++void Pkbn_SetTarget(s32 w, s32 h)
++{
++    // POC-24: the 264x176 canvas is always drawn at the hi-bit scale; anything else (the GBA frame) at 1
++    Pkbn_SetTargetScaled(w, h, (w == PKBN_CANVAS_W && h == PKBN_CANVAS_H) ? PKBN_HIBIT_SCALE : 1);
+ }
+ 
+ #ifdef PORTABLE
+ 
+ void Pkbn_FillRect(u16 *fb, s32 x, s32 y, s32 w, s32 h, u16 color)
+ {
+-    s32 i, j;
+-    for (j = y; j < y + h; j++)
++    s32 i, j, S = gPkbnScale, W = gPkbnFbW * S;
++    s32 x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y;
++    s32 x1 = x + w > gPkbnFbW ? gPkbnFbW : x + w, y1 = y + h > gPkbnFbH ? gPkbnFbH : y + h;
++    for (j = y0 * S; j < y1 * S; j++)
++        for (i = x0 * S; i < x1 * S; i++)
++            fb[j * W + i] = color;
++}
++
++// POC-24: shifts the whole target picture by (dx, dy) canvas pixels, repeating the edge (screen shake).
++void Pkbn_ShiftPicture(u16 *fb, s32 dx, s32 dy)
++{
++    static u16 sCopy[PKBN_VIEW_W * PKBN_VIEW_H];
++    s32 S = gPkbnScale, W = gPkbnFbW * S, H = gPkbnFbH * S, x, y;
++    if (W * H > PKBN_VIEW_W * PKBN_VIEW_H)
++        return;
++    memcpy(sCopy, fb, W * H * sizeof(u16));
++    dx *= S; dy *= S;
++    for (y = 0; y < H; y++)
+     {
+-        if (j < 0 || j >= gPkbnFbH)
+-            continue;
+-        for (i = x; i < x + w; i++)
++        s32 sy = y - dy;
++        if (sy < 0) sy = 0;
++        if (sy >= H) sy = H - 1;
++        for (x = 0; x < W; x++)
+         {
+-            if (i >= 0 && i < gPkbnFbW)
+-                fb[j * gPkbnFbW + i] = color;
++            s32 sx = x - dx;
++            if (sx < 0) sx = 0;
++            if (sx >= W) sx = W - 1;
++            fb[y * W + x] = sCopy[sy * W + sx];
+         }
+     }
+ }
+ 
++// POC-24: a rectangle in buffer pixels (hi-bit detail); x, y, w, h are buffer coordinates.
++void Pkbn_FillRectHi(u16 *fb, s32 x, s32 y, s32 w, s32 h, u16 color)
++{
++    s32 i, j, W = gPkbnFbW * gPkbnScale, H = gPkbnFbH * gPkbnScale;
++    for (j = y < 0 ? 0 : y; j < y + h && j < H; j++)
++        for (i = x < 0 ? 0 : x; i < x + w && i < W; i++)
++            fb[j * W + i] = color;
++}
++
+ void Pkbn_FrameRect(u16 *fb, s32 x, s32 y, s32 w, s32 h, u16 color)
+ {
+     Pkbn_FillRect(fb, x, y, w, 1, color);
+@@ -194,7 +231,7 @@ void Pkbn_BlitIcon(u16 *fb, const u16 *icon, s32 x, s32 y, bool8 flipX, u16 tint
+             u16 c = icon[py * 32 + (flipX ? 31 - px : px)];
+             if (c == 0 || sx < 0 || sx >= gPkbnFbW)
+                 continue;
+-            fb[sy * gPkbnFbW + sx] = tint ? tint : c;
++            Pkbn_FillRect(fb, sx, sy, 1, 1, tint ? tint : c);
+         }
+     }
+ }
+diff --git a/src/pkbn/results.c b/src/pkbn/results.c
+index 8193ced..7a0e1eb 100644
+--- a/src/pkbn/results.c
++++ b/src/pkbn/results.c
+@@ -96,7 +96,7 @@ static void DrawPicture(void)
+     for (x = 0; x < PKBN_CANVAS_W * PKBN_CANVAS_H; x++)
+         sScratch[x] = bg;
+     memset(sR.picOpaque, 0, sizeof(sR.picOpaque));
+-    Pkbn_SetTarget(PKBN_CANVAS_W, PKBN_CANVAS_H);
++    Pkbn_SetTargetScaled(PKBN_CANVAS_W, PKBN_CANVAS_H, 1);   // POC-24: a 1x scratch picture (restored below)
+     switch (gPkbnReward.kind)
+     {
+     case RW_CHIP:
+@@ -146,6 +146,7 @@ static void DrawPicture(void)
+             for (x = 0; x < PIC_W * 8; x++)
+                 sR.pic[y * PIC_W * 8 + x] = sScratch[(sy + y) * PKBN_CANVAS_W + sx + x];
+     }
++    Pkbn_SetTarget(PKBN_CANVAS_W, PKBN_CANVAS_H);
+ }
+ 
+ void Results_Begin(u8 window, u16 frames, u8 level, bool8 capture)
+@@ -300,7 +301,7 @@ void Results_Draw(u16 *fb)
+                     u8 b = t[sy * 4 + sx / 2], c = (sx & 1) ? b >> 4 : b & 15;
+                     s32 X = ox + tx * 8 + x, Y = oy + ty * 8 + y;
+                     if (c && X >= 0 && X < PKBN_CANVAS_W && Y >= 0 && Y < PKBN_CANVAS_H)
+-                        fb[Y * PKBN_CANVAS_W + X] = sBn6ResPal[pal * 16 + c] | 0x8000;
++                        Pkbn_FillRect(fb, X, Y, 1, 1, sBn6ResPal[pal * 16 + c] | 0x8000);
+                 }
+         }
+     if (sR.capture)
+@@ -319,7 +320,7 @@ void Results_Draw(u16 *fb)
+             s32 cx = (cell % PIC_W) * 8, cy = (cell / PIC_W) * 8;
+             for (y = 0; y < 8; y++)
+                 for (x = 0; x < 8; x++)
+-                    fb[(oy + PIC_Y * 8 + cy + y) * PKBN_CANVAS_W + ox + PIC_X * 8 + cx + x] = sR.pic[(cy + y) * PIC_W * 8 + cx + x];
++                    Pkbn_FillRect(fb, ox + PIC_X * 8 + cx + x, oy + PIC_Y * 8 + cy + y, 1, 1, sR.pic[(cy + y) * PIC_W * 8 + cx + x]);
+         }
+     }
+     if (sR.state >= RS_NAME && sR.name[0])
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index 6e84c1f..097d648 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -53,8 +53,8 @@ static void DumpFrame(u16 *fb, u32 frame)
+     f = fopen(path, "wb");
+     if (f == NULL)
+         return;
+-    fprintf(f, "P6\n%d %d\n255\n", (int)gPkbnFbW, (int)gPkbnFbH);
+-    for (i = 0; i < gPkbnFbW * gPkbnFbH; i++)
++    fprintf(f, "P6\n%d %d\n255\n", (int)(gPkbnFbW * gPkbnScale), (int)(gPkbnFbH * gPkbnScale));
++    for (i = 0; i < gPkbnFbW * gPkbnScale * gPkbnFbH * gPkbnScale; i++)
+     {
+         u16 c = fb[i];
+         u8 rgb[3] = { (u8)((c & 31) << 3), (u8)(((c >> 5) & 31) << 3), (u8)(((c >> 10) & 31) << 3) };
+@@ -320,8 +320,8 @@ static void GalleryOverlay(u16 *fb)
+         f = fopen(path, "wb");
+         if (f == NULL)
+             return;
+-        fprintf(f, "P6\n%d %d\n255\n", (int)gPkbnFbW, (int)gPkbnFbH);
+-        for (i = 0; i < gPkbnFbW * gPkbnFbH; i++)
++        fprintf(f, "P6\n%d %d\n255\n", (int)(gPkbnFbW * gPkbnScale), (int)(gPkbnFbH * gPkbnScale));
++        for (i = 0; i < gPkbnFbW * gPkbnScale * gPkbnFbH * gPkbnScale; i++)
+         {
+             u16 c = fb[i];
+             u8 rgb[3] = { (u8)((c & 31) << 3), (u8)(((c >> 5) & 31) << 3), (u8)(((c >> 10) & 31) << 3) };
+diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
+index 7b3a336..196429e 100644
+--- a/src/platform/sdl2.c
++++ b/src/platform/sdl2.c
+@@ -41,7 +41,7 @@ SDL_Texture *sdlTexture;
+ SDL_sem *vBlankSemaphore;
+ SDL_atomic_t isFrameAvailable;
+ bool speedUp = false;
+-unsigned int videoScale = 3; // pkbn: window starts at 3x (720x480); PKBN_SCALE=N overrides
++unsigned int videoScale = 2; // pkbn POC-24: window starts at 2x the 528x352 hi-bit canvas (1056x704); PKBN_SCALE=N overrides
+ bool videoScaleChanged = false;
+ bool isRunning = true;
+ bool paused = false;
+@@ -220,6 +220,9 @@ extern void Pkbn_SetTarget(int32_t w, int32_t h);
+ // pkbn: the window shows a 264x176 canvas (see include/pkbn/render.h); the GBA frame is centred in it.
+ #define PKBN_CANVAS_W 264
+ #define PKBN_CANVAS_H 176
++// POC-24 (hi-bit): the buffer behind the canvas is twice its size (include/pkbn/render.h PKBN_VIEW_W/H)
++#define PKBN_VIEW_W (PKBN_CANVAS_W * 2)
++#define PKBN_VIEW_H (PKBN_CANVAS_H * 2)
+ void Pkbn_SelfTestMaybeStart(void); // defined in src/pkbn/render.c; set while our battle screen is active
+ 
+ static void ReadSaveFile(char *path);
+@@ -268,11 +271,17 @@ int main(int argc, char **argv)
+     OpenPad();   // pkbn POC-18
+     sShowKeys = getenv("PKBN_TEST_KEYS_CARD") != NULL;   // (overworld self-tests: a picture of the keys card)
+ 
+-    // pkbn: PKBN_SCALE=N sets the starting window size (N x 240x160). The window can still be resized.
++    // pkbn: PKBN_SCALE=N sets the starting window size (POC-24: N x the 528x352 hi-bit canvas). It can still be resized.
+     if (getenv("PKBN_SCALE") != NULL && atoi(getenv("PKBN_SCALE")) > 0)
+         videoScale = (unsigned int)atoi(getenv("PKBN_SCALE"));
++    {
++        // pkbn POC-24: PKBN_HIBIT=0 draws the old art on the same canvas (side-by-side checks)
++        extern bool8 gPkbnHiBit;
++        if (getenv("PKBN_HIBIT") != NULL && atoi(getenv("PKBN_HIBIT")) == 0)
++            gPkbnHiBit = FALSE;
++    }
+ 
+-    sdlWindow = SDL_CreateWindow(PKBN_GAME_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, PKBN_CANVAS_W * videoScale, PKBN_CANVAS_H * videoScale, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
++    sdlWindow = SDL_CreateWindow(PKBN_GAME_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, PKBN_VIEW_W * videoScale, PKBN_VIEW_H * videoScale, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+     if (sdlWindow == NULL)
+     {
+         DBGPRINTF("Window could not be created! SDL_Error: %s\n", SDL_GetError());
+@@ -289,13 +298,13 @@ int main(int argc, char **argv)
+     SDL_SetRenderDrawColor(sdlRenderer, 255, 255, 255, 255);
+     SDL_RenderClear(sdlRenderer);
+     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+-    SDL_RenderSetLogicalSize(sdlRenderer, PKBN_CANVAS_W, PKBN_CANVAS_H);
++    SDL_RenderSetLogicalSize(sdlRenderer, PKBN_VIEW_W, PKBN_VIEW_H);
+     SDL_RenderSetIntegerScale(sdlRenderer, SDL_TRUE);
+ 
+     sdlTexture = SDL_CreateTexture(sdlRenderer,
+                                    SDL_PIXELFORMAT_ABGR1555,
+                                    SDL_TEXTUREACCESS_STREAMING,
+-                                   PKBN_CANVAS_W, PKBN_CANVAS_H);
++                                   PKBN_VIEW_W, PKBN_VIEW_H);
+     if (sdlTexture == NULL)
+     {
+         DBGPRINTF("Texture could not be created! SDL_Error: %s\n", SDL_GetError());
+@@ -410,7 +419,7 @@ static void LoopOnce(void)
+ 
+         if (videoScaleChanged)
+         {
+-            SDL_SetWindowSize(sdlWindow, PKBN_CANVAS_W * videoScale, PKBN_CANVAS_H * videoScale);
++            SDL_SetWindowSize(sdlWindow, PKBN_VIEW_W * videoScale, PKBN_VIEW_H * videoScale);
+             videoScaleChanged = false;
+         }
+     }
+@@ -663,9 +672,9 @@ void ProcessEvents(void)
+                 // make a maximized window taller than the screen). Fullscreen leaves the window alone.
+                 if (!sFullscreen && !(SDL_GetWindowFlags(sdlWindow) & SDL_WINDOW_MAXIMIZED))
+                 {
+-                    videoScale = w / PKBN_CANVAS_W;
+-                    if (h / PKBN_CANVAS_H < videoScale)
+-                        videoScale = h / PKBN_CANVAS_H;
++                    videoScale = w / PKBN_VIEW_W;
++                    if (h / PKBN_VIEW_H < videoScale)
++                        videoScale = h / PKBN_VIEW_H;
+                     if (videoScale < 1)
+                         videoScale = 1;
+                     videoScaleChanged = true;
+@@ -740,7 +749,7 @@ u16 Platform_GetKeyInput(void)
+ void VDraw(SDL_Texture *texture)
+ {
+     static uint16_t image[DISPLAY_WIDTH * DISPLAY_HEIGHT];
+-    static uint16_t canvas[PKBN_CANVAS_W * PKBN_CANVAS_H];
++    static uint16_t canvas[PKBN_VIEW_W * PKBN_VIEW_H];
+ 
+     memset(image, 0, sizeof(image));
+     DrawFrame(image);
+@@ -758,12 +767,17 @@ void VDraw(SDL_Texture *texture)
+     }
+     else
+     {
+-        // GBA frame centred, black border
+-        int y, ox = (PKBN_CANVAS_W - DISPLAY_WIDTH) / 2, oy = (PKBN_CANVAS_H - DISPLAY_HEIGHT) / 2;
+-        for (y = 0; y < PKBN_CANVAS_H * PKBN_CANVAS_W; y++)
++        // GBA frame centred, black border; POC-24: each GBA pixel is 2x2 on the hi-bit canvas
++        int x, y, ox = (PKBN_VIEW_W - DISPLAY_WIDTH * 2) / 2, oy = (PKBN_VIEW_H - DISPLAY_HEIGHT * 2) / 2;
++        for (y = 0; y < PKBN_VIEW_H * PKBN_VIEW_W; y++)
+             canvas[y] = 0x8000;
+-        for (y = 0; y < DISPLAY_HEIGHT; y++)
+-            memcpy(&canvas[(y + oy) * PKBN_CANVAS_W + ox], &image[y * DISPLAY_WIDTH], DISPLAY_WIDTH * sizeof(uint16_t));
++        for (y = 0; y < DISPLAY_HEIGHT * 2; y++)
++        {
++            const uint16_t *src = &image[(y / 2) * DISPLAY_WIDTH];
++            uint16_t *dst = &canvas[(y + oy) * PKBN_VIEW_W + ox];
++            for (x = 0; x < DISPLAY_WIDTH * 2; x++)
++                dst[x] = src[x / 2];
++        }
+     }
+     {
+         extern bool8 Pkbn_IsTitleScreen(void);
+@@ -779,7 +793,7 @@ void VDraw(SDL_Texture *texture)
+         DrawKeysCard(canvas);
+     if (PkbnOwTest_Active())
+         PkbnOwTest_Frame(canvas);
+-    SDL_UpdateTexture(texture, NULL, canvas, PKBN_CANVAS_W * sizeof (Uint16));
++    SDL_UpdateTexture(texture, NULL, canvas, PKBN_VIEW_W * sizeof (Uint16));
+     REG_VCOUNT = 161; // prep for being in VBlank period
+ }
+ 
+diff --git a/web/pkbn_web.js b/web/pkbn_web.js
+index 0890278..c63caee 100644
+--- a/web/pkbn_web.js
++++ b/web/pkbn_web.js
+@@ -14,6 +14,12 @@ var Module = typeof Module !== 'undefined' ? Module : {};
+       if (i > 0) ENV[kv.slice(0, i)] = kv.slice(i + 1);
+     });
+     if (ENV.PKBN_DATA_DIR) FS.mkdirTree(ENV.PKBN_DATA_DIR);   // (self-tests that use their own save folder)
++    // POC-25: the animated Pokémon (pkbn_b2_sprites.bin, built from the player's own Black 2) when the host has it
++    FS.mkdir('/data');
++    addRunDependency('pkbn-sprites');
++    fetch('pkbn_b2_sprites.bin').then(function (r) { return r.ok ? r.arrayBuffer() : null; }).then(function (buf) {
++      if (buf) FS.writeFile('/data/pkbn_b2_sprites.bin', new Uint8Array(buf));
++    }).catch(function () {}).then(function () { removeRunDependency('pkbn-sprites'); });
+     FS.mkdir('/save');
+     FS.mount(IDBFS, {}, '/save');
+     addRunDependency('pkbn-saves');
+diff --git a/web/shell.html b/web/shell.html
+index 834cf58..af6592d 100644
+--- a/web/shell.html
++++ b/web/shell.html
+@@ -77,7 +77,7 @@
+     <button id="btnSaves" type="button">Saves</button>
+   </header>
+   <div id="stage">
+-    <canvas id="canvas" width="792" height="528" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
++    <canvas id="canvas" width="1056" height="704" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+     <div id="start" role="button" tabindex="0" aria-label="Start the game">
+       <div><h1>Pokémon × Battle Network</h1><p id="startMsg">Loading the game…</p><span class="go" id="go" hidden>Tap to start</span></div>
+     </div>
+-- 
+2.43.0
+

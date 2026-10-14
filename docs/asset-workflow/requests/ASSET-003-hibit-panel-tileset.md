@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: delivered
+- State: accepted
 - Priority: 3
 - Assigned producer: Codex
-- Current owner: implementation agent
+- Current owner: —
 - Brief revision: 4
 - Based on repository commit: 362b782
 - Last update (UTC date): 2026-10-13
-- Next action / blocker: full v002 source set visually approved by Khaled. Implementation agent normalizes border widths and packs/quantizes/cleans alpha; native-size and renderer acceptance remain pending.
+- Next action / blocker: none (in the game since POC-24)
 
 ## Purpose and visual brief
 
@@ -122,12 +122,12 @@
   - the front edge shrinks to 15 px tall against the 12 px slot, so it will be trimmed, not squashed;
   - cleanup of semi-transparent pixels is still to do. No redraw needed.
 
-- Accepted delivery:
-- Integrated paths / patch / commit:
-- Conversion details:
-- In-game test command or scenario:
-- Results and screenshot/log evidence:
-- Remaining work:
+- Accepted delivery: v002 (red and blue)
+- Integrated paths / patch / commit: generated include/pkbn/hibit_gfx_data.h; host patch 0094 (POC-24/25)
+- Conversion details: tools/pack_hibit.py: each row split into six equal cells (the blue rows touch, so its band is halved); area-average shrink to 88x52, 16 colours per panel, hard alpha (BROKEN keeps its hole); front edge shrunk to 88 wide and trimmed to 12 rows from its middle. Sheet order mapped to the game's panel order (lava last).
+- In-game test command or scenario: PKBN_GALLERY (seven Fire moves) and battle self-tests, with PKBN_HIBIT=0 for the old art
+- Results and screenshot/log evidence: poc/screens/POC-24.png; battle logs unchanged (33/33)
+- Remaining work: the old code-drawn panel animations (poison bubbles, grass, road arrows, lava, glints) are gone until animated panel frames are requested
 
 ## Change history
 
@@ -147,3 +147,5 @@
 - 2026-10-13 — Codex — Khaled visually approved the full v002 panel source set. Production/native-size/renderer acceptance remains with the implementation agent.
 
 - 2026-10-14 — implementation agent (Claude) — review of the source art recorded; packing and in-game tests follow in POC-24.
+
+- 2026-10-14 — implementation agent (Claude) — integrated in POC-24 and accepted in the game.
