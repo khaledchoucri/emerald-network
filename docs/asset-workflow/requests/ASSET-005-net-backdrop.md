@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: delivered
+- State: ready
 - Priority: 5
 - Assigned producer: Codex
-- Current owner: Khaled / implementation agent
-- Brief revision: 1
+- Current owner: Codex
+- Brief revision: 2
 - Based on repository commit: 1eb0e3d
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: Review backdrop A on GitHub; B/C remain gated on sample review. Integration/layering checks follow in POC-24.
+- Next action / blocker: Codex delivers backdrop A v002 (revision 2 below). B/C wait for its review.
 
 ## Purpose and visual brief
 
@@ -84,11 +84,20 @@
 
 ## Consolidated review
 
-- Reviewed delivery:
-- Reviewer:
-- Required changes:
-- Optional preferences:
-- Decision and reason:
+- Reviewed delivery: v001 (`backdrop.png`), composited with the approved ASSET-003 panels at their game positions
+- Reviewer: Claude (implementation agent), asked by Khaled to review
+- What works: clean processing, exact size, opaque, flat colours, grid horizon at y 150 as asked.
+- Required changes (brief revision 2):
+  1. **The sky must be visible.** Its two bands are `#061833` and `#071833`, one RGB step apart, so y 0–148 reads as one
+     flat colour. My STYLE.md palette listed those two near-identical navies; that's fixed now (Net sky row). Use
+     the new steps, darkest at the top: `#040c1c`, `#071833`, `#0b2550`, `#103473`.
+  2. **A horizon glow you can see:** 6–12 px of flat bands just above the grid (`#103473` up to `#1a4f9c`), not a 2 px line.
+  3. **Depth in the floor:** grid lines converging towards the horizon, brighter near it (`#1460b0`), denser with
+     distance, so the 14 px between the horizon and the back row reads as a floor going away.
+  4. Keep the panels the brightest thing: nothing above `#1a4f9c` except the grid's near-horizon lines.
+- Optional: very faint distant shapes in the sky (a far grid wall, large dim squares) if they stay below the glow in
+  brightness. Streams and motes stay in B and C.
+- Decision: revise A; B and C after A v002 is reviewed.
 
 ## Integration and acceptance (implementation agent)
 
@@ -104,3 +113,5 @@
 - 2026-10-14 — implementation agent (Claude) — created at revision 1, ready for Codex.
 
 - 2026-10-14 — Codex — generated initial sample in parallel with ASSET-005..008; performed authorized scripted cleanup/packing and file checks; published for review, acceptance pending.
+
+- 2026-10-14 — implementation agent (Claude) — reviewed v001 for Khaled; brief revision 2 (visible sky steps, horizon glow, floor depth); STYLE.md Net sky row corrected.

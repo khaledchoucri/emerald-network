@@ -32,7 +32,7 @@ Sampled from v003 (hex). Shades in between are allowed if they keep the 2–3 to
 | Player frame (red) | `#200105` | `#74011c` | `#fb2c2d` | `#fb5430` | — |
 | Foe frame (blue) | `#02021b` | `#000cad` | `#035bfa` | `#0597fb` | — |
 | Panel face (silver glass) | `#151626` | `#536787` | `#667b99` | `#9db0ca` | `#edf2fa` |
-| Net sky | — | `#061833` | `#071833` | `#083e86` (grid lines) | `#3ecbfd` (motes) |
+| Net sky | `#040c1c` (top) | `#071833` | `#0b2550` | `#103473` (horizon), `#083e86`–`#1460b0` (grid lines) | `#3ecbfd` (motes) |
 | Front edge (lip) | `#101b3a` | `#283653` | `#667a99` | `#8e9fb6` | — |
 | Fire | `#9d220f` | `#dc4b24` | `#fc871f` | `#fef237` | `#fefdf2` (core) |
 | Grass | `#073919` | `#01501d` | `#15a31e` | `#51cb1c` | `#74ee1b` |
@@ -81,3 +81,5 @@ Built from the outside in, in a 88×52 cell (ASSET-003):
   decide sizes.
 - **The placeholder capsule fighters:** they stand in for Pokémon in concept frames only.
 - **The baked fireball light, the glowing cracks and the tall ice crystals** (see above).
+
+*2026-10-14: the Net sky row was corrected. It listed `#061833` and `#071833`, which are one step apart and read as one colour (ASSET-005 v001 review).*

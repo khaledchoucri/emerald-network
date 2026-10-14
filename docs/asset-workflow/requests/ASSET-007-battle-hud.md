@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: delivered
+- State: ready
 - Priority: 7
 - Assigned producer: Codex
-- Current owner: Khaled / implementation agent
-- Brief revision: 1
+- Current owner: Codex
+- Brief revision: 2
 - Based on repository commit: 1eb0e3d
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: Review H1 player/foe/FullSynchro sample; other HUD parts wait for approval. Engine/text/state checks follow in POC-24.
+- Next action / blocker: Codex delivers H1 v002 (revision 2 below); then H2–H5 in the same frame family.
 
 ## Purpose and visual brief
 
@@ -109,11 +109,18 @@
 
 ## Consolidated review
 
-- Reviewed delivery:
-- Reviewer:
-- Required changes:
-- Optional preferences:
-- Decision and reason:
+- Reviewed delivery: v001 (`h1_colorways.png`, `h1_stretch_preview.png`, `synchro.png`), placed over the ASSET-005 backdrop
+- Reviewer: Claude (implementation agent), asked by Khaled to review
+- What works: the 9-slice stretching is clean at every in-game size; the three colourways share one shape; the
+  Full Synchro pulse changes only the rim.
+- Required changes (brief revision 2):
+  1. **Separate the player fill from the sky.** The player plate's fill is the backdrop's navy, so the plate vanishes
+     where it sits. Use a fill clearly lighter or bluer than the sky (for example `#0d2347`), and add a 1 px dark
+     outline (`#0b0a14`) outside the rim on every colourway.
+  2. **Match the panel frame family.** The rim is 1–2 px, much lighter than the panels' frame. Follow STYLE.md's
+     panel build at HUD scale: 1 px outline, a 3 px frame in the colourway's colour lit on the top and left, a 1 px
+     inner outline, then the fill. Keep the stepped corners inside the 8×8 corner slices.
+- Decision: revise H1; H2–H5 follow in the revised style.
 
 ## Integration and acceptance (implementation agent)
 
@@ -129,3 +136,5 @@
 - 2026-10-14 — implementation agent (Claude) — created at revision 1, ready for Codex.
 
 - 2026-10-14 — Codex — generated initial sample in parallel with ASSET-005..008; performed authorized scripted cleanup/packing and file checks; published for review, acceptance pending.
+
+- 2026-10-14 — implementation agent (Claude) — reviewed v001 for Khaled; brief revision 2 (fill contrast against the sky, panel-weight frame).

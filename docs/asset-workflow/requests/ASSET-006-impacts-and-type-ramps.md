@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: delivered
+- State: ready
 - Priority: 6
 - Assigned producer: Codex
-- Current owner: Khaled / implementation agent
-- Brief revision: 1
+- Current owner: Codex
+- Brief revision: 2
 - Based on repository commit: 1eb0e3d
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: Review HIT and type ramps; generate remaining six impacts after approval. Playback/tint/runtime tests remain with implementation.
+- Next action / blocker: Codex revises the Rock (and Normal/Ground) ramps, then delivers HIT_SMALL, HIT_STAR, DUST (part A) and part B.
 
 ## Purpose and visual brief
 
@@ -155,11 +155,18 @@ Ice, Dragon, Dark. Also write the hex values as a table in the producer record.
 
 ## Consolidated review
 
-- Reviewed delivery:
-- Reviewer:
-- Required changes:
-- Optional preferences:
-- Decision and reason:
+- Reviewed delivery: v001 (`hit.png`, `type_ramps.json`, `hit_types_side_by_side_review_4x.png`)
+- Reviewer: Claude (implementation agent), asked by Khaled to review
+- HIT: approved. Flash, 8-ray burst, square sparks breaking apart, fade; exactly the five greys; 6 × 64×64 cells.
+- Ramps: approved except one group. Required change (brief revision 2): **Normal and Rock are nearly the same beige,
+  and Ground is close to both.** In the side-by-side they can't be told apart. Make them three clearly different
+  materials:
+  - Normal: warm cream/beige, low saturation (keep as is, or lighter);
+  - Ground: orange-brown earth (keep);
+  - Rock: cool grey-brown stone, noticeably greyer and darker than Normal.
+  Check the result in the same side-by-side at native size.
+- Optional: Ghost and Dragon are close (indigo vs violet-blue); push Dragon bluer or brighter if it's easy.
+- Decision: HIT and 14 ramps approved; revise Rock/Normal/Ground; continue with the remaining six effects.
 
 ## Integration and acceptance (implementation agent)
 
@@ -175,3 +182,5 @@ Ice, Dragon, Dark. Also write the hex values as a table in the producer record.
 - 2026-10-14 — implementation agent (Claude) — created at revision 1, ready for Codex.
 
 - 2026-10-14 — Codex — generated initial sample in parallel with ASSET-005..008; performed authorized scripted cleanup/packing and file checks; published for review, acceptance pending.
+
+- 2026-10-14 — implementation agent (Claude) — reviewed v001 for Khaled: HIT approved; Normal/Rock/Ground ramps to be separated; remaining effects unblocked.

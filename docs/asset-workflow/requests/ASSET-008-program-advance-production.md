@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: delivered
+- State: ready
 - Priority: 8
 - Assigned producer: Codex
-- Current owner: Khaled / implementation agent
+- Current owner: Codex
 - Brief revision: 1
 - Based on repository commit: 1eb0e3d
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: Review P1 front/back; turning frames and P2..P6 remain gated on sample approval. Renderer/flip tests follow later.
+- Next action / blocker: Codex delivers the rest: P1 turning frames, then P2–P6.
 
 ## Purpose and visual brief
 
@@ -101,11 +101,13 @@
 
 ## Consolidated review
 
-- Reviewed delivery:
-- Reviewer:
-- Required changes:
-- Optional preferences:
-- Decision and reason:
+- Reviewed delivery: v001 (`card_front.png`, `card_back.png`)
+- Reviewer: Claude (implementation agent), asked by Khaled to review
+- Decision: **approved.** The stepped corners and magenta rim fit the panel family; the symbol window ([16,16,56,56])
+  and code tab sit exactly where the brief puts them; front and back share the outline pixel for pixel; the back reads
+  as a card back with no text.
+- Optional: the code tab cuts into the bottom-right rim; keep the cut, but give the tab its own 1 px outline so it reads
+  as a tab at half size.
 
 ## Integration and acceptance (implementation agent)
 
@@ -121,3 +123,5 @@
 - 2026-10-14 — implementation agent (Claude) — created at revision 1 from ASSET-002 v001, ready for Codex.
 
 - 2026-10-14 — Codex — generated initial sample in parallel with ASSET-005..008; performed authorized scripted cleanup/packing and file checks; published for review, acceptance pending.
+
+- 2026-10-14 — implementation agent (Claude) — reviewed v001 for Khaled: P1 approved; turning frames and P2–P6 unblocked.
