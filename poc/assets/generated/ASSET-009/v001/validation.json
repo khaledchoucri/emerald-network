@@ -1,0 +1,44 @@
+{
+  "window_body": {
+    "dimensions": [
+      264,
+      352
+    ],
+    "alpha_values": [
+      255
+    ],
+    "opaque_colors": 7,
+    "sha256": "b98240a0d0a8b0bb2d59c8ebb8a7c75260b220d6ddf8d1f964438b06ec02a0c8"
+  },
+  "art_frame": {
+    "dimensions": [
+      252,
+      120
+    ],
+    "alpha_values": [
+      0,
+      255
+    ],
+    "opaque_colors": 3,
+    "sha256": "c020e88a73156b8fa723f136cad2306eb414198847ada9cb9f0bb424e3eddebd"
+  },
+  "combined_opaque_colors": 7,
+  "art_window": [
+    4,
+    4,
+    244,
+    112
+  ],
+  "composite_placement": [
+    6,
+    26
+  ],
+  "in_game_checked": false,
+  "held_parts": [
+    "C3",
+    "C4",
+    "C5",
+    "C6",
+    "C7"
+  ]
+}

@@ -1,0 +1,11 @@
+# SLASH sample, brief revision 1
+
+Tool: `image_gen.imagegen`; transparent background enabled.
+Reference supplied: `poc/assets/generated/ASSET-006/v001/hit_review_4x.png` (approved original HIT, line weight, gray tones and square sparks).
+Native target: 3 × 76×142 px cells, 8 px transparent gaps, 244×142 px sheet.
+
+```text
+Create original hi-bit pixel art game VFX production sprite sheet for SLASH, a fast abstract sword cut, no sword and no body. Use attached approved HIT only for sharp pixel edge treatment, five neutral gray tones and square spark sizes; do NOT reproduce HIT star shapes. Three separate tall frames side by side in ONE ROW, equally sized cells. Each cell portrait proportions 76 wide by142 high; separated generous empty transparent vertical gutters. Whole canvas approximately 976x568 = 4x native 244x142. White/gray on truly transparent background. Every opaque pixel must be one of #202020 #585858 #909090 #c8c8c8 #ffffff. Entirely hard squared stepped edges, no blur antialias gradients soft halo or text. Frame1 LEFT: very thin brilliant diagonal stroke from TOP RIGHT to BOTTOM LEFT, centered in its cell, approx 44x108 native occupancy. Delicate white core a dark gray edge a couple square sparks. Frame2 MIDDLE: SAME anchor and diagonal direction, slash thickens into a very narrow tapered blade of light with white core and two hard gray outline trail bands. Maximum 14 native pixels thickness, not a giant crescent or starburst, visibly fast cut. Frame3 RIGHT: short fragment of same diagonal breaks apart into 6-9 sparse square sparks, fading by fewer duller solid gray pieces (no semi transparent pixels). Art stays well within all three tall cell bounds. Frames show clear thin -> thick -> fractured progression. Original abstract videogame effect. Draw native-sized deliberate chunky single pixel staircases magnified FOUR TIMES nearest neighbor. Clean empty transparent areas. High quality game asset clarity.
+```
+
+The generation is original source art. Cleanup crops each detected frame, preserves its aspect ratio, resamples with nearest neighbor into the native cell, thresholds alpha and snaps luminance to the five specified grays. Exact runtime anchors and animation playback remain implementation checks.

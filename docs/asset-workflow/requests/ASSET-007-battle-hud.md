@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 7
 - Assigned producer: Codex
 - Current owner: Codex
 - Brief revision: 2
 - Based on repository commit: 1eb0e3d
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: Codex delivers H1 v002 (revision 2 below); then H2–H5 in the same frame family.
+- Next action / blocker: review revised H1 v002; H2–H5 follow after revised sample approval.
 
 ## Purpose and visual brief
 
@@ -107,6 +107,14 @@
 - Review: h1_colorways_review_4x.png, h1_stretch_preview_review_4x.png, synchro_review_4x.png and half-size colourway preview.
 - Limitations: source corner/edge details were normalized by nine-slice reflow. Engine slicing/font fit, low-HP/FullSynchro state screenshots and pulse playback remain for implementation. H2/H3/H4/H5 not generated until this sample is reviewed.
 
+### Delivery v002 — revised H1 sample (brief revision 2)
+
+- Files: `poc/assets/generated/ASSET-007/v002/` — `player.png`, `foe.png`, `synchro1.png`, `synchro2.png` each 96×34; `h1_colorways.png` 408×34 and `synchro.png` 200×34, with 8px transparent gaps. Exact 4× and half previews accompany both rows and the stretch preview.
+- Image generation revises the v001 plate using the approved panels as the frame-family reference. Exact prompt/reference list in `PROMPT.md`; unchanged raw 2103×748 PNG under `raw/`. The generator missed native-multiple proportions and had soft fill variation. Authorized `cleanup.py` normalizes its stepped inset design into a native indexed template, rather than claiming raw pixels already obeyed the brief.
+- Player fill is flat `#0d2347`. All variants have a `#0b0a14` outer 1px outline, 3px colorway frame with top/left highlight, 1px dark inner outline and flat fill. Stepped face notches remain within the 8×8 corner slices. Colorways share one index image; Synchro changes only rim colors, fill stays unchanged.
+- Actual assertions (`validation.json`): each part exact 96×34; alpha only 0/255; five visible colors per part; every non-corner edge and center uniform; all corner patches preserved when stretched to player 44×24, player 200×34 and foe 60×34; middle-edge material widths exactly 1+3+1; identical geometry for colorways; unchanged Synchro fill. `processing.json` records palettes and operations. Run `python poc/assets/generated/ASSET-007/v002/cleanup.py` with Pillow/NumPy.
+- Inspected native, half and 4× colorway previews and 4× stretch previews: colorways remain distinct and the dark outline separates the heavier rim. Fully decoded all delivery PNGs and checked transparent sheet gaps. Actual game-font fit, half-size readability in battle context, pulse playback (8/8 game frames, loop), low-HP state screenshots and renderer integration remain untested and owned by the implementation agent. H2–H5 remain gated on review of revised H1; no other HUD parts generated.
+
 ## Consolidated review
 
 - Reviewed delivery: v001 (`h1_colorways.png`, `h1_stretch_preview.png`, `synchro.png`), placed over the ASSET-005 backdrop
@@ -138,3 +146,4 @@
 - 2026-10-14 — Codex — generated initial sample in parallel with ASSET-005..008; performed authorized scripted cleanup/packing and file checks; published for review, acceptance pending.
 
 - 2026-10-14 — implementation agent (Claude) — reviewed v001 for Khaled; brief revision 2 (fill contrast against the sky, panel-weight frame).
+- 2026-10-14 — Codex — delivered revised H1 v002 with brighter blue fill and exact 1/3/1 frame bands; awaiting review before H2–H5.

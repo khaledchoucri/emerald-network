@@ -1,0 +1,1560 @@
+{
+  "results": [
+    {
+      "path": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/card_flip.png",
+      "sha256": "e47468928fdb83729ade5b4bbe4294884a303a22856dc7caf3246bcdb33940db",
+      "dimensions": [
+        312,
+        88
+      ],
+      "visible_colors": [
+        "#0b0a14",
+        "#161b2d",
+        "#26293e",
+        "#393c54",
+        "#460c35",
+        "#535b73",
+        "#69758c",
+        "#8793ae",
+        "#8b1b58",
+        "#b2bed2",
+        "#c9007c",
+        "#e1e7f3",
+        "#f4f7fc",
+        "#fa2d98",
+        "#ff65a5",
+        "#ffa6d1"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "palette_membership": true,
+        "clear_frame_gaps": true
+      },
+      "passed": true
+    },
+    {
+      "path": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/trail.png",
+      "sha256": "e62ebfb390624e6a7935c53a4cc43df6194018167503b12d1ed678ce725c06e3",
+      "dimensions": [
+        408,
+        24
+      ],
+      "visible_colors": [
+        "#202020",
+        "#585858",
+        "#909090",
+        "#c8c8c8",
+        "#ffffff"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "palette_membership": true,
+        "clear_frame_gaps": true
+      },
+      "passed": true
+    },
+    {
+      "path": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/emblem.png",
+      "sha256": "6f8e2fb8635cf7746caf87beb0072504664946c4acffd5af67b8672054cad22b",
+      "dimensions": [
+        944,
+        128
+      ],
+      "visible_colors": [
+        "#0b0a14",
+        "#161b2d",
+        "#26293e",
+        "#393c54",
+        "#460c35",
+        "#535b73",
+        "#69758c",
+        "#8793ae",
+        "#8b1b58",
+        "#b2bed2",
+        "#c9007c",
+        "#e1e7f3",
+        "#f4f7fc",
+        "#fa2d98",
+        "#ff65a5",
+        "#ffa6d1"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "palette_membership": true,
+        "clear_frame_gaps": true
+      },
+      "passed": true
+    },
+    {
+      "path": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/burst.png",
+      "sha256": "c9a0d1bc3ce9fd16848bd96613e07e75cd695e3deb57a0b715bd11687c2c7b7c",
+      "dimensions": [
+        1288,
+        208
+      ],
+      "visible_colors": [
+        "#202020",
+        "#585858",
+        "#909090",
+        "#c8c8c8",
+        "#ffffff"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "palette_membership": true,
+        "clear_frame_gaps": true
+      },
+      "passed": true
+    },
+    {
+      "path": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/type_symbols.png",
+      "sha256": "33adc2e15e784b73d01c2fae2c94838026850672120eb8ee7a211459b89faa70",
+      "dimensions": [
+        672,
+        32
+      ],
+      "visible_colors": [
+        "#202020",
+        "#585858",
+        "#909090",
+        "#c8c8c8",
+        "#ffffff"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "palette_membership": true,
+        "clear_frame_gaps": true
+      },
+      "passed": true
+    },
+    {
+      "path": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/shine.png",
+      "sha256": "6a2b731cb0bb805f7f581624d64b08957c0ae334bcefe82e5a5cfc7c0cf5532c",
+      "dimensions": [
+        984,
+        36
+      ],
+      "visible_colors": [
+        "#69758c",
+        "#8793ae",
+        "#b2bed2",
+        "#e1e7f3",
+        "#f4f7fc"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "palette_membership": true,
+        "clear_frame_gaps": true
+      },
+      "passed": true
+    },
+    {
+      "path": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/banner.png",
+      "sha256": "df9d178f456ef76e17b897814dd264d4106c8a3bd080f567fc74adbace218026",
+      "dimensions": [
+        240,
+        36
+      ],
+      "visible_colors": [
+        "#161b2d",
+        "#393c54",
+        "#69758c",
+        "#8793ae",
+        "#b2bed2",
+        "#e1e7f3",
+        "#f4f7fc",
+        "#fa2d98"
+      ],
+      "checks": {
+        "dimensions": true,
+        "binary_alpha": true,
+        "palette_limit": true,
+        "nonempty": true,
+        "palette_membership": true,
+        "clear_frame_gaps": true
+      },
+      "passed": true
+    }
+  ],
+  "all_passed": true,
+  "operations": [
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/turn.png",
+      "crop": [
+        300,
+        10,
+        900,
+        980
+      ],
+      "source_size_after_crop": [
+        544,
+        941
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 436690,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/turn.png",
+      "crop": [
+        1135,
+        10,
+        1270,
+        980
+      ],
+      "source_size_after_crop": [
+        93,
+        941
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 83511,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        544,
+        941
+      ],
+      "native": [
+        72,
+        88
+      ],
+      "scale": 0.08926673751328375,
+      "resized": [
+        49,
+        84
+      ],
+      "offset": [
+        11,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        93,
+        941
+      ],
+      "native": [
+        72,
+        88
+      ],
+      "scale": 0.08926673751328375,
+      "resized": [
+        8,
+        84
+      ],
+      "offset": [
+        32,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/trail.png",
+      "crop": [
+        0,
+        260,
+        530,
+        460
+      ],
+      "source_size_after_crop": [
+        477,
+        172
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 41893,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/trail.png",
+      "crop": [
+        530,
+        260,
+        1080,
+        460
+      ],
+      "source_size_after_crop": [
+        473,
+        173
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 46243,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/trail.png",
+      "crop": [
+        1080,
+        260,
+        1630,
+        460
+      ],
+      "source_size_after_crop": [
+        488,
+        171
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 47920,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/trail.png",
+      "crop": [
+        1630,
+        260,
+        2172,
+        460
+      ],
+      "source_size_after_crop": [
+        473,
+        181
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 48355,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/emblem.png",
+      "crop": [
+        0,
+        180,
+        315,
+        530
+      ],
+      "source_size_after_crop": [
+        184,
+        169
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 9461,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/emblem.png",
+      "crop": [
+        315,
+        180,
+        630,
+        530
+      ],
+      "source_size_after_crop": [
+        270,
+        234
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 20873,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/emblem.png",
+      "crop": [
+        630,
+        180,
+        905,
+        530
+      ],
+      "source_size_after_crop": [
+        261,
+        304
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 72947,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/emblem.png",
+      "crop": [
+        905,
+        180,
+        1244,
+        530
+      ],
+      "source_size_after_crop": [
+        323,
+        307
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 87730,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/emblem.png",
+      "crop": [
+        1244,
+        180,
+        1559,
+        530
+      ],
+      "source_size_after_crop": [
+        297,
+        329
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 83061,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/emblem.png",
+      "crop": [
+        1559,
+        180,
+        1850,
+        530
+      ],
+      "source_size_after_crop": [
+        266,
+        305
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 81901,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/emblem.png",
+      "crop": [
+        1850,
+        180,
+        2172,
+        530
+      ],
+      "source_size_after_crop": [
+        268,
+        287
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 80627,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/burst.png",
+      "crop": [
+        0,
+        170,
+        208,
+        630
+      ],
+      "source_size_after_crop": [
+        102,
+        109
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 6980,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/burst.png",
+      "crop": [
+        208,
+        170,
+        492,
+        630
+      ],
+      "source_size_after_crop": [
+        216,
+        218
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 22184,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 28,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/burst.png",
+      "crop": [
+        492,
+        170,
+        956,
+        630
+      ],
+      "source_size_after_crop": [
+        423,
+        432
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 70822,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/burst.png",
+      "crop": [
+        956,
+        170,
+        1320,
+        630
+      ],
+      "source_size_after_crop": [
+        321,
+        356
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 51701,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/burst.png",
+      "crop": [
+        1320,
+        170,
+        1650,
+        630
+      ],
+      "source_size_after_crop": [
+        295,
+        305
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 29877,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/burst.png",
+      "crop": [
+        1650,
+        170,
+        1956,
+        630
+      ],
+      "source_size_after_crop": [
+        228,
+        228
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 9053,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        0,
+        265,
+        142,
+        455
+      ],
+      "source_size_after_crop": [
+        117,
+        120
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 17303,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        142,
+        265,
+        280,
+        455
+      ],
+      "source_size_after_crop": [
+        118,
+        125
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 16064,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        280,
+        265,
+        394,
+        455
+      ],
+      "source_size_after_crop": [
+        101,
+        133
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 12436,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        394,
+        265,
+        524,
+        455
+      ],
+      "source_size_after_crop": [
+        113,
+        109
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 11979,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        524,
+        265,
+        637,
+        455
+      ],
+      "source_size_after_crop": [
+        92,
+        124
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 14979,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        637,
+        265,
+        765,
+        455
+      ],
+      "source_size_after_crop": [
+        110,
+        137
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 15413,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        765,
+        265,
+        906,
+        455
+      ],
+      "source_size_after_crop": [
+        121,
+        132
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 17705,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        906,
+        265,
+        1025,
+        455
+      ],
+      "source_size_after_crop": [
+        98,
+        150
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 14656,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 30,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        1025,
+        265,
+        1160,
+        455
+      ],
+      "source_size_after_crop": [
+        117,
+        142
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 15811,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        1160,
+        265,
+        1280,
+        455
+      ],
+      "source_size_after_crop": [
+        102,
+        157
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 15374,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        1280,
+        265,
+        1387,
+        455
+      ],
+      "source_size_after_crop": [
+        91,
+        144
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 12835,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        1387,
+        265,
+        1523,
+        455
+      ],
+      "source_size_after_crop": [
+        121,
+        120
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 12062,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        1523,
+        265,
+        1629,
+        455
+      ],
+      "source_size_after_crop": [
+        88,
+        172
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 11835,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        1629,
+        265,
+        1761,
+        455
+      ],
+      "source_size_after_crop": [
+        116,
+        144
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 15463,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        1761,
+        265,
+        1893,
+        455
+      ],
+      "source_size_after_crop": [
+        116,
+        147
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 15081,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        1893,
+        265,
+        2000,
+        455
+      ],
+      "source_size_after_crop": [
+        93,
+        162
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 13935,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/symbols.png",
+      "crop": [
+        2000,
+        265,
+        2161,
+        455
+      ],
+      "source_size_after_crop": [
+        151,
+        151
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 15532,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        117,
+        120
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.23333333333333334,
+      "resized": [
+        27,
+        28
+      ],
+      "offset": [
+        2,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        118,
+        125
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.224,
+      "resized": [
+        26,
+        28
+      ],
+      "offset": [
+        3,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        101,
+        133
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.21052631578947367,
+      "resized": [
+        21,
+        28
+      ],
+      "offset": [
+        5,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        113,
+        109
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.24778761061946902,
+      "resized": [
+        28,
+        27
+      ],
+      "offset": [
+        2,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        92,
+        124
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.22580645161290322,
+      "resized": [
+        21,
+        28
+      ],
+      "offset": [
+        5,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        110,
+        137
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.20437956204379562,
+      "resized": [
+        22,
+        28
+      ],
+      "offset": [
+        5,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        121,
+        132
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.21212121212121213,
+      "resized": [
+        26,
+        28
+      ],
+      "offset": [
+        3,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        98,
+        150
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.18666666666666668,
+      "resized": [
+        18,
+        28
+      ],
+      "offset": [
+        7,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        117,
+        142
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.19718309859154928,
+      "resized": [
+        23,
+        28
+      ],
+      "offset": [
+        4,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        102,
+        157
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.17834394904458598,
+      "resized": [
+        18,
+        28
+      ],
+      "offset": [
+        7,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        91,
+        144
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.19444444444444445,
+      "resized": [
+        18,
+        28
+      ],
+      "offset": [
+        7,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        121,
+        120
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.23140495867768596,
+      "resized": [
+        28,
+        28
+      ],
+      "offset": [
+        2,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        88,
+        172
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.16279069767441862,
+      "resized": [
+        14,
+        28
+      ],
+      "offset": [
+        9,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        116,
+        144
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.19444444444444445,
+      "resized": [
+        23,
+        28
+      ],
+      "offset": [
+        4,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        116,
+        147
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.19047619047619047,
+      "resized": [
+        22,
+        28
+      ],
+      "offset": [
+        5,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        93,
+        162
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.1728395061728395,
+      "resized": [
+        16,
+        28
+      ],
+      "offset": [
+        8,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        151,
+        151
+      ],
+      "native": [
+        32,
+        32
+      ],
+      "scale": 0.18543046357615894,
+      "resized": [
+        28,
+        28
+      ],
+      "offset": [
+        2,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/banner.png",
+      "crop": [
+        435,
+        130,
+        750,
+        615
+      ],
+      "source_size_after_crop": [
+        213,
+        380
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 26151,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/banner.png",
+      "crop": [
+        750,
+        130,
+        1230,
+        615
+      ],
+      "source_size_after_crop": [
+        255,
+        419
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 32619,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/banner.png",
+      "crop": [
+        1230,
+        130,
+        1650,
+        615
+      ],
+      "source_size_after_crop": [
+        253,
+        462
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 38118,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/banner.png",
+      "crop": [
+        1650,
+        130,
+        1983,
+        615
+      ],
+      "source_size_after_crop": [
+        230,
+        462
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 32015,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        213,
+        380
+      ],
+      "native": [
+        240,
+        36
+      ],
+      "scale": 0.08421052631578947,
+      "resized": [
+        18,
+        32
+      ],
+      "offset": [
+        111,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        213,
+        380
+      ],
+      "native": [
+        24,
+        32
+      ],
+      "scale": 0.08421052631578947,
+      "resized": [
+        18,
+        32
+      ],
+      "offset": [
+        3,
+        0
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        255,
+        419
+      ],
+      "native": [
+        240,
+        36
+      ],
+      "scale": 0.07637231503579953,
+      "resized": [
+        19,
+        32
+      ],
+      "offset": [
+        110,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        255,
+        419
+      ],
+      "native": [
+        24,
+        32
+      ],
+      "scale": 0.07637231503579953,
+      "resized": [
+        19,
+        32
+      ],
+      "offset": [
+        2,
+        0
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        253,
+        462
+      ],
+      "native": [
+        240,
+        36
+      ],
+      "scale": 0.06926406926406926,
+      "resized": [
+        18,
+        32
+      ],
+      "offset": [
+        111,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        253,
+        462
+      ],
+      "native": [
+        24,
+        32
+      ],
+      "scale": 0.06926406926406926,
+      "resized": [
+        18,
+        32
+      ],
+      "offset": [
+        3,
+        0
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        230,
+        462
+      ],
+      "native": [
+        240,
+        36
+      ],
+      "scale": 0.06926406926406926,
+      "resized": [
+        16,
+        32
+      ],
+      "offset": [
+        112,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        230,
+        462
+      ],
+      "native": [
+        24,
+        32
+      ],
+      "scale": 0.06926406926406926,
+      "resized": [
+        16,
+        32
+      ],
+      "offset": [
+        4,
+        0
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "input": "/workspace/emerald-network/poc/assets/generated/ASSET-008/v002/raw/banner_retry.png",
+      "crop": [
+        4,
+        254,
+        1979,
+        536
+      ],
+      "source_size_after_crop": [
+        1975,
+        282
+      ],
+      "alpha_threshold": 128,
+      "partial_alpha_pixels_thresholded": 544375,
+      "component_minimum_source_pixels": 32,
+      "removed_component_pixels": 0,
+      "trim_alpha": true
+    },
+    {
+      "operation": "aspect_preserving_fit",
+      "original": [
+        1975,
+        282
+      ],
+      "native": [
+        240,
+        36
+      ],
+      "scale": 0.11347517730496454,
+      "resized": [
+        224,
+        32
+      ],
+      "offset": [
+        8,
+        2
+      ],
+      "resampler": "nearest"
+    },
+    {
+      "nineslice10": {
+        "uniform_top_edge": true,
+        "uniform_bottom_edge": true,
+        "uniform_left_edge": true,
+        "uniform_right_edge": true,
+        "uniform_center_fill": true
+      }
+    }
+  ],
+  "runtime_validated": false,
+  "symbol_checks": {
+    "count": 17,
+    "all_nonempty": true,
+    "distinct_pixel_masks": true,
+    "type_order": [
+      "Normal",
+      "Fighting",
+      "Flying",
+      "Poison",
+      "Ground",
+      "Rock",
+      "Bug",
+      "Ghost",
+      "Steel",
+      "Fire",
+      "Water",
+      "Grass",
+      "Electric",
+      "Psychic",
+      "Ice",
+      "Dragon",
+      "Dark"
+    ]
+  }
+}

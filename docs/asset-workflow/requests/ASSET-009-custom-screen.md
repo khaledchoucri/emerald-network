@@ -2,15 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 9
 - Assigned producer: Codex
-- Current owner: Codex
+- Current owner: implementation agent
 - Brief revision: 1
 - Based on repository commit: 4192432
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: Codex delivers the sample: the window body (C1) with the art frame (C2) placed in it. Then
-  the rest. Start after the ASSET-007 H1 revision, so the frame family is settled.
+- Next action / blocker: Review v001 C1/C2 sample and the 4 px bezel adaptation; C3–C7 remain held until sample approval. Implementation agent then checks text/layout in renderer.
 
 ## Purpose and visual brief
 
@@ -94,10 +93,13 @@
 
 ## Producer record
 
-- Brief revision used:
-- Assumptions / unresolved constraints:
-- Tool and generation/edit prompt:
-- References actually supplied to the tool:
+- Brief revision used: 1. Revised ASSET-007 H1 v002 style dependency satisfied before generation.
+- Tool: image_gen.imagegen; exact prompt, reference, source provenance and cleanup details in `poc/assets/generated/ASSET-009/v001/PROMPT.md`.
+- Reference supplied: revised `ASSET-007/v002/h1_colorways_review_4x.png`, inspected before generation. No restricted game art supplied.
+- Sample v001: `poc/assets/generated/ASSET-009/v001/window_body.png` (C1, 264×352, fully opaque), `art_frame.png` (C2, 252×120, 244×112 transparent window at 4,4); `custom_sample.png` places C2 at 6,26. Each has `_review_4x.png` and `_half.png` companions.
+- Processing: PIPELINE.md item 7 permits scripted cleanup. Raw 1086×1448 generation retained under `raw/custom_generated.png`. Exact C1 geometry is reflowed from H1 v002 corners/edges; flat deep-blue fill, plain title/footer fields, bright right inner rim. C2 frame geometry normalized to the exact aperture. `cleanup.py`, `processing.json`, `validation.json` record reproducible operations/results. C1 and C2 use 7 opaque colors combined; alpha is binary.
+- Technical adaptation for review: C2's required 4 px bezel cannot fit H1's 1+3+1 px frame thickness. C2 uses 1 outer + 2 lit + 1 inner px, with square steps on its outer corners and the ENTIRE rectangular art window transparent. C1 uses H1's full weight and stepped inset corners.
+- Validation: full PNG decode; exact part sizes; C1 fully opaque; C2 complete 244×112 aperture clear; ≤16 shared colors; binary alpha; C2 composite position. Native/4× visual inspection: clean plain interiors, no text/icons/logos. Rendering/text fit/game screenshots untested. C3–C7 not generated pending sample review.
 
 ## Consolidated review
 
@@ -119,3 +121,5 @@
 ## Change history
 
 - 2026-10-14 — implementation agent (Claude) — created at revision 1, ready for Codex.
+
+- 2026-10-14 — Codex — delivered C1/C2 sample v001 in revised H1 family; exact geometry/alpha/palette checks passed; dimensional bezel adaptation recorded; sample review pending.

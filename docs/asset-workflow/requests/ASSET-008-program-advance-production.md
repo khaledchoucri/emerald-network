@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 8
 - Assigned producer: Codex
 - Current owner: Codex
 - Brief revision: 1
 - Based on repository commit: 1eb0e3d
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: Codex delivers the rest: P1 turning frames, then P2–P6.
+- Next action / blocker: User/implementation agent reviews v002 P1 turning and P2–P6; implementation owns renderer integration and runtime acceptance.
 
 ## Purpose and visual brief
 
@@ -99,6 +99,23 @@
 - Review: card_front_back_review_4x.png (608×352).
 - Limitations: no turning frames yet, hence flip playback untested. Code tab is reserved just inside the outer rim rather than flush to the absolute cell edges; implementation must use recorded coordinates or adjust its placement. P2..P6 and P1 turning frames wait for this sample's review.
 
+
+### Delivery v002 — complete Program Advance source set
+
+- Tool: image_gen.imagegen, six independent calls in parallel plus one corrective banner generation. Exact prompts/reference list: `poc/assets/generated/ASSET-008/v002/PROMPT.md`; raw files retained. Approved v001 front/back unchanged.
+- Native sheets in `poc/assets/generated/ASSET-008/v002/`:
+  - `card_flip.png`: 312×88, four72×88 cells in front / ¾ / edge / back order. The v002 front adds the optional1px code-tab outline; back reuses v001. Two generated turning views maintain height and compress width for a flip.
+  - `trail.png`: 408×24, four96×24 cells, exact five-grey palette, right-aligned tips at native x94; right-end anchor (96,12). Short trails leave clear space at the left; no stretching used to disguise source proportions.
+  - `emblem.png`: 944×128, seven128×128 cells: six arrival stages then static. `emblem_static.png` is128×128. Frames4–7 reserve64×64 dark symbol area at[32,32,96,96], silver outline immediately outside. Engine supplies symbol.
+  - `burst.png`: 1288×208, six208×208 cells, exact five-grey palette. Flash expands to eight rays with clear centre, fragments into square sparks.
+  - `type_symbols.png`: 672×32, seventeen32×32 cells in brief order (Normal through Dark), original distinct designs in the five greys. Generic subjects are custom artwork; no external game symbols used as references.
+  - `banner.png`: 240×36, neutral silver/navy plus magenta. Flat blank interior, uniform nine-slice middle edges with10×10 corners; scalable width remains implementation-owned.
+  - `shine.png`: 984×36, four240×36 overlay cells, streak progresses into successive quarter centres. Transparent except streaks.
+- All sheets have8px fully transparent frame gaps and binary alpha. P2/P4/P5 use only the specified five-grey palette; other parts use the same16-colour neutral/magenta palette as the approved card. All have4× nearest-neighbour and half-size PNG review files; animation parts have diagnostic playback GIFs. `validation.json` records dimensions, SHA-256, actual palettes, gaps and alpha checks.
+- Reproduction: `python poc/assets/generated/ASSET-008/v002/prepare.py` from repository root, Pillow and NumPy. `processing.json` contains every explicit crop, palette and stage configuration. Uses the existing shared helper read-only. Authorized cleanup thresholds alpha128, removes detached components smaller than32 source pixels, trims and aspect-preserving nearest-neighbour fits, packs native cells, normalizes emblem symbol reservation and banner nine-slice interior. Emblem/burst common scale retains staged expansion. Shine placements x18/78/138/198 in240px cells.
+- Visual checks: distinct type silhouettes at native and half size; turning views read as the approved card, arrival flashes/badge and burst stages are distinguishable; empty emblem and banner spaces reserved for engine text/symbol. Source-art checks passed. This is delivered for review, not runtime accepted.
+- Limitations: raw generator output did not land on requested integer-multiple canvas dimensions; delivery geometry was reconstructed without claiming generator-native grid compliance. Trail silhouettes occupy about55×20 inside96×24 cells to preserve source proportions. Emblem stage3 is a segmented nearly-full rim rather than a smaller uniform scaled badge. GIFs repeat for inspection; actual once/loop policy and game-frame timings remain engine-owned. Flip continuity, 120–420px banner stretches and the full `trio_pa` moment must be checked in the hi-bit renderer before acceptance.
+
 ## Consolidated review
 
 - Reviewed delivery: v001 (`card_front.png`, `card_back.png`)
@@ -125,3 +142,5 @@
 - 2026-10-14 — Codex — generated initial sample in parallel with ASSET-005..008; performed authorized scripted cleanup/packing and file checks; published for review, acceptance pending.
 
 - 2026-10-14 — implementation agent (Claude) — reviewed v001 for Khaled: P1 approved; turning frames and P2–P6 unblocked.
+
+- 2026-10-14 — Codex — delivered v002 complete P1 turning and P2–P6 source sheets; original v001 preserved; source review and in-game acceptance pending.

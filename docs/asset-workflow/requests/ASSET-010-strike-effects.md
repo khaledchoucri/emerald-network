@@ -2,15 +2,15 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 10
 - Assigned producer: Codex
 - Current owner: Codex
 - Brief revision: 1
 - Based on repository commit: 4192432
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: Codex delivers the sample: SLASH. Then STAB, SLASH_ARC, CLAW and JAWS. Start after the ASSET-006 impacts, so
-  they share the same style.
+- Next action / blocker: User reviews SLASH v001 sample. STAB, SLASH_ARC, CLAW and JAWS wait for this sample's visual approval.
+  Implementation agent checks anchor, timing and type tinting in the renderer.
 
 ## Purpose and visual brief
 
@@ -86,10 +86,14 @@
 
 ## Producer record
 
-- Brief revision used:
-- Assumptions / unresolved constraints:
-- Tool and generation/edit prompt:
-- References actually supplied to the tool:
+- Brief revision used: 1.
+- Delivery: `poc/assets/generated/ASSET-010/v001/slash.png`, 244×142 RGBA; three 76×142 cells left to right with 8 px empty gutters.
+- Reviews: `slash_review_4x.png` (976×568) and `slash_review_half.png` (122×71), in the same delivery directory.
+- Assumptions / unresolved constraints: one diagonal cut, thin → thick → square fragments. Suggested cell anchor is (38,71); 6/4/3 game-frame timing is recorded in `processing.json`, but runtime playback/anchor/tint tests are not run. Other strike kinds are deliberately withheld until the sample review.
+- Tool and generation/edit prompt: `image_gen.imagegen`; full prompt in `v001/PROMPT.md`, original output retained as `v001/raw/slash.png` (1644×957). Raw image was generated above native scale with approximate sheet proportions; cleanup preserves each frame's aspect ratio and repacks exact cells, rather than stretching the generator's whole canvas.
+- References actually supplied to the tool: approved original `poc/assets/generated/ASSET-006/v001/hit_review_4x.png` for line weight, grayscale structure and square sparks. The new ASSET-006 v002 HIT_SMALL was also inspected after generation for consistency; it was not supplied to the image tool.
+- Cleanup: reproducible `v001/cleanup.py` (Pillow/NumPy/SciPy): alpha threshold 192, retain main slash and strongest square-particle components (6/7/9 per frame), isolate frames, shared isotropic nearest-neighbor scale to 108 px occupied height, centre in cells, snap luminance to exact five grays, set empty RGB/alpha to zero. No extracted sprites used.
+- Checks performed: complete PNG decode; exact five requested grays; binary alpha; exact sheet size/cell spacing; empty 8 px gutters and outer edges; 4× and half-size visual inspection for thin/thick/fractured progression. Details and SHA-256 in `v001/validation.json`. Native half-size remains readable; animation, atlas integration and in-game tint testing are implementation work.
 
 ## Consolidated review
 
@@ -111,3 +115,4 @@
 ## Change history
 
 - 2026-10-14 — implementation agent (Claude) — created at revision 1, ready for Codex.
+- 2026-10-14 — Codex — delivered SLASH v001 sample after inspecting approved HIT and new v002 impact style; other strikes await sample review. This is source delivery, not in-game acceptance.

@@ -1,0 +1,536 @@
+{
+  "effects": {
+    "hit_small": {
+      "cell": [
+        64,
+        56
+      ],
+      "times_game_frames": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "duration": 4,
+      "anchor": [
+        32,
+        28
+      ],
+      "base_aligned": false,
+      "occupancy": 0.62,
+      "tintable": true,
+      "palette": [
+        "#9d220f",
+        "#dc4b24",
+        "#fc871f",
+        "#fef237",
+        "#fefdf2",
+        "#25212c",
+        "#514858",
+        "#8d8095",
+        "#beb0c7"
+      ],
+      "items": [
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/hit_small.png",
+          "crop": [
+            0,
+            0,
+            479,
+            768
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/hit_small.png",
+          "crop": [
+            479,
+            0,
+            999,
+            768
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/hit_small.png",
+          "crop": [
+            999,
+            0,
+            1499,
+            768
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/hit_small.png",
+          "crop": [
+            1499,
+            0,
+            2048,
+            768
+          ],
+          "trim_alpha": true
+        }
+      ]
+    },
+    "hit_star": {
+      "cell": [
+        92,
+        86
+      ],
+      "times_game_frames": [
+        2,
+        3,
+        3,
+        2,
+        2
+      ],
+      "duration": 12,
+      "anchor": [
+        46,
+        43
+      ],
+      "base_aligned": false,
+      "occupancy": 1,
+      "tintable": true,
+      "palette": [
+        "#9d220f",
+        "#dc4b24",
+        "#fc871f",
+        "#fef237",
+        "#fefdf2",
+        "#25212c",
+        "#514858",
+        "#8d8095",
+        "#beb0c7"
+      ],
+      "items": [
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/hit_star.png",
+          "crop": [
+            0,
+            0,
+            359,
+            723
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/hit_star.png",
+          "crop": [
+            359,
+            0,
+            804,
+            723
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/hit_star.png",
+          "crop": [
+            804,
+            0,
+            1359,
+            723
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/hit_star.png",
+          "crop": [
+            1359,
+            0,
+            1783,
+            723
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/hit_star.png",
+          "crop": [
+            1783,
+            0,
+            2174,
+            723
+          ],
+          "trim_alpha": true
+        }
+      ]
+    },
+    "dust": {
+      "cell": [
+        64,
+        46
+      ],
+      "times_game_frames": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "duration": 8,
+      "anchor": [
+        32,
+        43
+      ],
+      "base_aligned": true,
+      "occupancy": 1,
+      "tintable": true,
+      "palette": [
+        "#9d220f",
+        "#dc4b24",
+        "#fc871f",
+        "#fef237",
+        "#fefdf2",
+        "#25212c",
+        "#514858",
+        "#8d8095",
+        "#beb0c7"
+      ],
+      "items": [
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/dust.png",
+          "crop": [
+            0,
+            0,
+            451,
+            768
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/dust.png",
+          "crop": [
+            451,
+            0,
+            942,
+            768
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/dust.png",
+          "crop": [
+            942,
+            0,
+            1536,
+            768
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/dust.png",
+          "crop": [
+            1536,
+            0,
+            2048,
+            768
+          ],
+          "trim_alpha": true
+        }
+      ]
+    },
+    "explode": {
+      "cell": [
+        112,
+        112
+      ],
+      "times_game_frames": [
+        2,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "duration": 22,
+      "anchor": [
+        56,
+        56
+      ],
+      "base_aligned": false,
+      "occupancy": 1,
+      "tintable": false,
+      "palette": [
+        "#9d220f",
+        "#dc4b24",
+        "#fc871f",
+        "#fef237",
+        "#fefdf2",
+        "#25212c",
+        "#514858",
+        "#8d8095",
+        "#beb0c7"
+      ],
+      "items": [
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/explode.png",
+          "crop": [
+            0,
+            0,
+            289,
+            724
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/explode.png",
+          "crop": [
+            289,
+            0,
+            630,
+            724
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/explode.png",
+          "crop": [
+            630,
+            0,
+            1064,
+            724
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/explode.png",
+          "crop": [
+            1064,
+            0,
+            1470,
+            724
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/explode.png",
+          "crop": [
+            1470,
+            0,
+            1859,
+            724
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/explode.png",
+          "crop": [
+            1859,
+            0,
+            2172,
+            724
+          ],
+          "trim_alpha": true
+        }
+      ]
+    },
+    "explode_small": {
+      "cell": [
+        64,
+        94
+      ],
+      "times_game_frames": [
+        2,
+        3,
+        3,
+        3,
+        4,
+        4
+      ],
+      "duration": 19,
+      "anchor": [
+        32,
+        90
+      ],
+      "base_aligned": true,
+      "occupancy": 1,
+      "tintable": false,
+      "palette": [
+        "#9d220f",
+        "#dc4b24",
+        "#fc871f",
+        "#fef237",
+        "#fefdf2",
+        "#25212c",
+        "#514858",
+        "#8d8095",
+        "#beb0c7"
+      ],
+      "items": [
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/explode_small.png",
+          "crop": [
+            0,
+            0,
+            332,
+            759
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/explode_small.png",
+          "crop": [
+            332,
+            0,
+            673,
+            759
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/explode_small.png",
+          "crop": [
+            673,
+            0,
+            1061,
+            759
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/explode_small.png",
+          "crop": [
+            1061,
+            0,
+            1450,
+            759
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/explode_small.png",
+          "crop": [
+            1450,
+            0,
+            1796,
+            759
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/explode_small.png",
+          "crop": [
+            1796,
+            0,
+            2072,
+            759
+          ],
+          "trim_alpha": true
+        }
+      ]
+    },
+    "smoke": {
+      "cell": [
+        48,
+        48
+      ],
+      "times_game_frames": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "duration": 16,
+      "anchor": [
+        24,
+        24
+      ],
+      "base_aligned": false,
+      "occupancy": 1,
+      "tintable": false,
+      "palette": [
+        "#302c3c",
+        "#61576d",
+        "#9486a5",
+        "#cdbed8"
+      ],
+      "items": [
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/smoke.png",
+          "crop": [
+            0,
+            0,
+            228,
+            724
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/smoke.png",
+          "crop": [
+            228,
+            0,
+            510,
+            724
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/smoke.png",
+          "crop": [
+            510,
+            0,
+            788,
+            724
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/smoke.png",
+          "crop": [
+            788,
+            0,
+            1108,
+            724
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/smoke.png",
+          "crop": [
+            1108,
+            0,
+            1414,
+            724
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/smoke.png",
+          "crop": [
+            1414,
+            0,
+            1716,
+            724
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/smoke.png",
+          "crop": [
+            1716,
+            0,
+            1944,
+            724
+          ],
+          "trim_alpha": true
+        },
+        {
+          "input": "poc/assets/generated/ASSET-006/v002/raw/smoke.png",
+          "crop": [
+            1944,
+            0,
+            2172,
+            724
+          ],
+          "trim_alpha": true
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "mode": "ramps",
+  "output_dir": "poc/assets/generated/ASSET-006/v002",
+  "ramps_json": "poc/assets/generated/ASSET-006/v002/type_ramps.json",
+  "hit_png": "poc/assets/generated/ASSET-006/v001/hit.png",
+  "review_names": [
+    "type_ramps.png",
+    "hit_types_side_by_side.png"
+  ],
+  "record_name": "ramps_validation.json"
+}

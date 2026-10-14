@@ -1,0 +1,15 @@
+# ASSET-009 C1 + C2 sample
+
+Tool: image_gen.imagegen. Brief revision 1. Reference supplied: `poc/assets/generated/ASSET-007/v002/h1_colorways_review_4x.png`, viewed before generation. Only its first blue-silver player plate supplies the style.
+
+## Prompt
+
+Create ORIGINAL video game UI production pixel artwork matching supplied revised HUD player plate reference (first blue-silver plate): hard pixel staircases, 1 dark outline, substantial blue-silver rim lit top/left, square inset stepped corners, deep navy blue fill. Draw ONE Custom chip-select screen window body, tall portrait rectangle proportional 264 wide by352 high, with a title band about28 units high and footer28 units high, both plain empty. Entire panel fully opaque; large flat deep-Net-blue interior darker than reference player fill, no ornaments. Bright crisp silver-blue thin rim down right edge. A second wide chip-art bezel is located near top at6,26, proportional252x120, plain empty flat navy rectangular art window inside it, matching HUD stepped outer corners, simple chunky frame. No lettering, numbers, chips, icons, circles, slots, buttons, logos, characters, symbols, glow, gradients, blur or anti-aliasing. This is source art for script slicing: exact flat colors with 2-3 tones per material and clear separable regions. Four pixels thickness chip bezel only. Render clean large nearest-neighbor pixel sprite, entire portrait object centered and not cut off. Background opaque same darkest navy. Reference used ONLY blue plate style; don't reproduce three colored strips.
+
+## Processing
+
+The raw generation is 1086×1448; its geometry and shading are approximate. Retained under `raw/custom_generated.png`. Final files are normalized source parts, not a resized screenshot. `cleanup.py` reflows the revised H1 plate's 8×8 corner patches and uniform edges to exact C1 dimensions, removes raw soft shading, replaces flat body/title/footer fills, and draws the bright inner right rim. C2 uses the same flat outline/rim colors with an exact 244×112 alpha aperture at (4,4). Its required 4 px bezel cannot fit H1's 1+3+1 px thickness: it uses 1 px outer outline + 2 px lit frame + 1 px inner outline; small square steps are on the outer corners, keeping the entire aperture clear. This is an explicit technical adaptation for review.
+
+`custom_sample.png` places C2 at (6,26) in C1. C1 remains fully opaque; C2 aperture is entirely transparent and the engine supplies art and moving grid. Native + 4× nearest-neighbor + half-size previews included. No labels/icons added. C3–C7 held for sample review. Run from repository root: `python poc/assets/generated/ASSET-009/v001/cleanup.py` (Pillow, NumPy).
+
+Checks: file decode, exact dimensions, binary alpha, C1 opaque, empty C2 aperture, combined palette ≤16 colors. In-game text/layout/rendering and later 9-slice parts remain implementation checks. The title and footer span the specified bands as plain fields; the source's extra internal decorative box borders were omitted.

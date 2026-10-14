@@ -1,0 +1,24 @@
+{
+  "raw": "raw/custom_generated.png",
+  "raw_dimensions": [
+    1086,
+    1448
+  ],
+  "frame_geometry_reference": "poc/assets/generated/ASSET-007/v002/player.png",
+  "normalization": "HUD 8px corner/edge reflow, exact flat fills and title/footer bands; C2 reduced to 4px bezel and exact rectangular alpha aperture",
+  "palette": [
+    "#000000",
+    "#071833",
+    "#0b0a14",
+    "#0b2550",
+    "#536787",
+    "#667b99",
+    "#9db0ca"
+  ],
+  "raw_pixel_grid_exact": false,
+  "delivery_scale": 1,
+  "preview_scales": [
+    4,
+    0.5
+  ]
+}

@@ -1,0 +1,28 @@
+# ASSET-006 v002 image-generation prompts
+
+Tool: image_gen.imagegen. transparent_background=true.
+References inspected before generation: approved ASSET-006/v001/hit_review_4x.png and ASSET-004/v002/fire_burst_source.png (original pixel energy only; source halo is not carried into native delivery).
+
+## hit_small
+
+Create ORIGINAL hi-bit pixel art animation sprite sheet, transparent background. HARD PIXEL EDGES, flat shading, no blur, no glow fringe, no text/numbers/labels, no logos or characters. One horizontal row of evenly spaced separate frames. Keep a generous transparent gap between frames. Match reference's bold pixel energy and square particles. Each phase must be distinctive, growing then dispersing. No opaque backdrop. FOUR frames, each conceptual cell 64x56 drawn 4x (256x224). A SMALL quick four-point grayscale spark: frame1 tiny flash, frame2 sharp compact four cardinal rays, frame3 rays split into four small square fragments, frame4 very few dissipating tiny square flecks. Much smaller and fewer rays than reference's HIT. Five grays only #202020 #585858 #909090 #c8c8c8 #ffffff.
+
+## hit_star
+
+Create ORIGINAL hi-bit pixel art animation sprite sheet, transparent background. HARD PIXEL EDGES, flat shading, no blur, no glow fringe, no text/numbers/labels, no logos or characters. One horizontal row of evenly spaced separate frames. Keep a generous transparent gap between frames. Match reference's bold pixel energy and square particles. Each phase must be distinctive, growing then dispersing. No opaque backdrop. FIVE frames, each conceptual cell 92x86 drawn 4x (368x344). Large SHARP eight-ray grayscale starburst WITH DISTINCT HARD OUTLINE SHOCK RING: frame1 coreflash, frame2 growing star and small ring, frame3 maximum long pointed star plus expanding ring, frame4 broken ring square shards and short rays, frame5 fading square fragments. Five grays only #202020 #585858 #909090 #c8c8c8 #ffffff.
+
+## dust
+
+Create ORIGINAL hi-bit pixel art animation sprite sheet, transparent background. HARD PIXEL EDGES, flat shading, no blur, no glow fringe, no text/numbers/labels, no logos or characters. One horizontal row of evenly spaced separate frames. Keep a generous transparent gap between frames. Match reference's bold pixel energy and square particles. Each phase must be distinctive, growing then dispersing. No opaque backdrop. FOUR frames, each conceptual cell 64x46 drawn 4x (256x184). LOW DUST PUFF spreading sideways from a ground point: frame1 two tiny side puffs, frame2 paired curls bloom sideways, frame3 widest low banks of chunky clouds, frame4 thinning separated small cloud fragments. Constant baseline, growth left and right, no drawn ground line. Five grays only #202020 #585858 #909090 #c8c8c8 #ffffff.
+
+## explode
+
+Create ORIGINAL hi-bit pixel art animation sprite sheet, transparent background. HARD PIXEL EDGES, flat shading, no blur, no glow fringe, no text/numbers/labels, no logos or characters. One horizontal row of evenly spaced separate frames. Keep a generous transparent gap between frames. Match reference's bold pixel energy and square particles. Each phase must be distinctive, growing then dispersing. No opaque backdrop. SIX frames, each conceptual cell 112x112 drawn 4x (448x448). BIG ORIGINAL EXPLOSION: frame1 small white-yellow ignition, frame2 orange-yellow expanding fireball, frame3 biggest fiery blast with square sparks, frame4 cooling blast turning to dark gray smoke, frame5 wide dark gray billowing cloud breaking apart, frame6 scattered final smoke chunks. Flat FIRE palette #9d220f #dc4b24 #fc871f #fef237 #fefdf2 plus dark gray smoke #25212c #514858 #8d8095 #beb0c7. Keep growth centered and frame6 visibly diminishing.
+
+## explode_small
+
+Create ORIGINAL hi-bit pixel art animation sprite sheet, transparent background. HARD PIXEL EDGES, flat shading, no blur, no glow fringe, no text/numbers/labels, no logos or characters. One horizontal row of evenly spaced separate frames. Keep a generous transparent gap between frames. Match reference's bold pixel energy and square particles. Each phase must be distinctive, growing then dispersing. No opaque backdrop. SIX frames, each conceptual cell 64x94 drawn 4x (256x376), narrow portrait boxes. SMALL BOMB EXPLOSION rooted low at a fixed common baseline: frame1 tiny ignition low, frame2 small flame blast lifting, frame3 compact maximum whitecore fireball with small square sparks, frame4 flame turns gray smoke, frame5 rising gray smoke fragments, frame6 very few final small smoke wisps. About half size of big bomb, DO NOT FILL entire height. Flat FIRE palette #9d220f #dc4b24 #fc871f #fef237 #fefdf2 plus dark gray smoke #25212c #514858 #8d8095 #beb0c7.
+
+## smoke
+
+Create ORIGINAL hi-bit pixel art animation sprite sheet, transparent background. HARD PIXEL EDGES, flat shading, no blur, no glow fringe, no text/numbers/labels, no logos or characters. One horizontal row of evenly spaced separate frames. Keep a generous transparent gap between frames. Match reference's bold pixel energy and square particles. Each phase must be distinctive, growing then dispersing. No opaque backdrop. EIGHT frames, each conceptual square cell 48x48 drawn 4x (192x192). GREY-LILAC SMOKE rising and growing, softness suggested ONLY by rounded staircase silhouettes and flat tone clusters, absolutely no blur. frame1 tiny puff, frame2 small curl, frame3 larger rounded billow, frame4 peak rounded cloud, frame5 cloud rises breaking up, frame6 separated clouds, frame7 smaller thin wisps, frame8 few disappearing small puffs. Three gray-lilac material tones and highlight #302c3c #61576d #9486a5 #cdbed8. Clear one-row 8 separate stages.

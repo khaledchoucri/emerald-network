@@ -1,0 +1,137 @@
+{
+  "player": {
+    "size": [
+      96,
+      34
+    ],
+    "opaque_colors": 5,
+    "alpha_values": [
+      0,
+      255
+    ],
+    "uniform_nineslice": {
+      "top": true,
+      "bottom": true,
+      "left": true,
+      "right": true,
+      "center": true
+    }
+  },
+  "foe": {
+    "size": [
+      96,
+      34
+    ],
+    "opaque_colors": 5,
+    "alpha_values": [
+      0,
+      255
+    ],
+    "uniform_nineslice": {
+      "top": true,
+      "bottom": true,
+      "left": true,
+      "right": true,
+      "center": true
+    }
+  },
+  "synchro1": {
+    "size": [
+      96,
+      34
+    ],
+    "opaque_colors": 5,
+    "alpha_values": [
+      0,
+      255
+    ],
+    "uniform_nineslice": {
+      "top": true,
+      "bottom": true,
+      "left": true,
+      "right": true,
+      "center": true
+    }
+  },
+  "synchro2": {
+    "size": [
+      96,
+      34
+    ],
+    "opaque_colors": 5,
+    "alpha_values": [
+      0,
+      255
+    ],
+    "uniform_nineslice": {
+      "top": true,
+      "bottom": true,
+      "left": true,
+      "right": true,
+      "center": true
+    }
+  },
+  "geometry": {
+    "same_index_base_all_colorways": true,
+    "middle_top_stroke_indexes": [
+      1,
+      3,
+      2,
+      2,
+      1,
+      5
+    ],
+    "stroke_widths_outer_frame_inner": [
+      1,
+      3,
+      1
+    ],
+    "corner_slice": 8,
+    "stepped_corner_max_extent": 7,
+    "flat_player_fill": "#0d2347",
+    "synchro_fill_unchanged": true,
+    "sheets_gap": 8,
+    "synchro_holds_game_frames": [
+      8,
+      8
+    ],
+    "playback_tested": false
+  },
+  "stretch": {
+    "player_44x24": {
+      "corners_identical": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "player_200x34": {
+      "corners_identical": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "foe_60x34": {
+      "corners_identical": [
+        true,
+        true,
+        true,
+        true
+      ]
+    }
+  },
+  "source": {
+    "size": [
+      2103,
+      748
+    ],
+    "sha256": "07cbb8c23bf7cc06476d78dd6e1ac8930da3f46fdebeb714ee1645250a495755",
+    "geometry_normalized": true,
+    "raw_native_proportions": false
+  },
+  "font_tested": false,
+  "in_game_tested": false
+}

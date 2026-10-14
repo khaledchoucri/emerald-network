@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 6
 - Assigned producer: Codex
 - Current owner: Codex
 - Brief revision: 2
 - Based on repository commit: 1eb0e3d
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: Codex revises the Rock (and Normal/Ground) ramps, then delivers HIT_SMALL, HIT_STAR, DUST (part A) and part B.
+- Next action / blocker: user/implementation agent reviews v002 revised ramps and remaining six effects; semantic anchors, playback and in-game acceptance remain with implementation agent.
 
 ## Purpose and visual brief
 
@@ -153,6 +153,51 @@ Ice, Dragon, Dark. Also write the hex values as a table in the producer record.
 | Dragon | `#1c164c` | `#44318b` | `#745bd0` | `#aa97f0` | `#e4dcff` |
 | Dark | `#141722` | `#34394b` | `#5b6377` | `#919bb0` | `#d6dfec` |
 
+
+### Delivery v002 — revision 2 ramps and six remaining effects
+
+- Tool: six independent `image_gen.imagegen` calls run concurrently. Exact prompts and inspected original references are in `poc/assets/generated/ASSET-006/v002/PROMPT.md`; raw sources retained in `raw/`. Approved HIT v001 is unchanged.
+- Revision: Normal is lighter warm cream, Rock dark cool grey-brown, Ground richer orange earth. Optional Dragon changed toward blue to separate it from Ghost. The other 13 ramps, including fixed Fire, are unchanged. Numeric original ramps rendered deterministically; full hex table below and `v002/type_ramps.json`.
+- Native outputs under `poc/assets/generated/ASSET-006/v002/`:
+
+| File | Native PNG | Cells | Target holds at 60 fps | Target anchor |
+| --- | --- | --- | --- | --- |
+| hit_small.png | 280×56 | 4 × 64×56, 8 px gaps | 1/1/1/1 (4 total) | (32,28), centre |
+| hit_star.png | 492×86 | 5 × 92×86, 8 px gaps | 2/3/3/2/2 (12 total) | (46,43), burst centre |
+| dust.png | 280×46 | 4 × 64×46, 8 px gaps | 2/2/2/2 (8 total) | (32,43), base |
+| explode.png | 712×112 | 6 × 112×112, 8 px gaps | 2/4/4/4/4/4 (22 total) | (56,56), centre |
+| explode_small.png | 424×94 | 6 × 64×94, 8 px gaps | 2/3/3/3/4/4 (19 total) | (32,90), low base |
+| smoke.png | 440×48 | 8 × 48×48, 8 px gaps | eight holds of 2 (16 total) | (24,24), centre |
+
+- Cleanup is authorized by PIPELINE.md item 7. Reproduce from repository root: `python poc/assets/generated/ASSET-006/v002/process.py`, then `python poc/assets/generated/_tools/prepare_samples.py poc/assets/generated/ASSET-006/v002/ramps_processing.json`. Dependencies Pillow/NumPy. Source columns explicitly partitioned in processing.json; alpha threshold 220 removes generated fringes, components below 48 source pixels removed, alpha crops, one shared aspect-preserving nearest-neighbour scale per effect, packed into exact cells with 8 px transparent gaps. Base alignment used for DUST/EXPLODE_SMALL; others centered. HIT_SMALL deliberately occupies a smaller footprint. Tintables mapped exactly to five specified grays; natural fire/smoke use fixed 9- and 4-color palettes.
+- Raw images did not meet the requested integer scale/cell spacing and contained translucent halos. Native outputs reconstruct the delivery geometry; no claim that raw generation met those constraints. Threshold cleanup removes fringe rather than retaining glow.
+- File checks passed: exact dimensions, binary alpha, palette membership/limits, nonempty individual frames, clear 8 px gaps and outer padding, frame-count/target-duration consistency. Ramps: monotonic linear luminance, Fire match, exact grey-to-ramp replacement preserving HIT geometry; validation.json and ramps_validation.json record checks and SHA-256. Even perceptual luminance spacing is not claimed.
+- Visual review performed at native, half and 4× sizes: small four-point spark, larger pointed/ring HIT_STAR, low widening DUST, white/fire-to-grey blast stages, grey-lilac rising smoke. Tiny final dissipation stages are intentionally faint at half size. All are original art; no extracted sprites.
+- Reviews: each effect has *_review_4x.png and *_review_half.png; combined effects_review_2x.png, effects_native_review.png; revised hit_types_side_by_side_review_4x.png plus type_ramps_review_4x.png. Review-board labels and dark background are preview-only, never included in native sprites.
+- Limitations: intended holds are metadata, not tested playback; cell packing anchors are documented but exact semantic focal-point movement is unverified. Palette/readability review is not engine acceptance. Implementation agent owns preview playback, semantic-anchor adjustment, atlas integration and old/new battle clips. No additional sample approval gate remains from v001; all six requested effects delivered for consolidated review.
+
+### Revision 2 type ramp hex values
+
+| Type | Outline | Shade | Base | Light | Highlight |
+| --- | --- | --- | --- | --- | --- |
+| Normal | `#332f28` | `#827968` | `#c4b9a4` | `#e5dcc8` | `#fff7e7` |
+| Fighting | `#39131b` | `#7d2434` | `#c94250` | `#ef8b87` | `#ffe2d6` |
+| Flying | `#1e2b45` | `#53688f` | `#91aacf` | `#c5d8f0` | `#f0f7ff` |
+| Poison | `#2c123e` | `#5c2877` | `#9744b5` | `#cb87df` | `#f2d6fa` |
+| Ground | `#352015` | `#794528` | `#b97942` | `#e3aa69` | `#ffe0b0` |
+| Rock | `#29282a` | `#514e50` | `#817c79` | `#aaa29a` | `#d6cec3` |
+| Bug | `#1f3014` | `#4b6420` | `#8fa83c` | `#c8db75` | `#edf7c9` |
+| Ghost | `#15132f` | `#39345f` | `#65568f` | `#9c89c2` | `#ddd1f2` |
+| Steel | `#172b34` | `#47636c` | `#819aa4` | `#b5d0d8` | `#edf9fc` |
+| Fire | `#9d220f` | `#dc4b24` | `#fc871f` | `#fef237` | `#fefdf2` |
+| Water | `#092b46` | `#125786` | `#248fc4` | `#75c8ea` | `#d6f3ff` |
+| Grass | `#103019` | `#245f31` | `#45a64a` | `#8cd979` | `#dff7cb` |
+| Electric | `#3c2c06` | `#826011` | `#d5a21b` | `#f6da57` | `#fff4b5` |
+| Psychic | `#3e1634` | `#81245f` | `#c84c98` | `#ed97cb` | `#ffe0f3` |
+| Ice | `#163b43` | `#33747d` | `#77c3cc` | `#b7e9ed` | `#eaffff` |
+| Dragon | `#141d4a` | `#2b4291` | `#526fda` | `#94b0fa` | `#dbeaff` |
+| Dark | `#141722` | `#34394b` | `#5b6377` | `#919bb0` | `#d6dfec` |
+
 ## Consolidated review
 
 - Reviewed delivery: v001 (`hit.png`, `type_ramps.json`, `hit_types_side_by_side_review_4x.png`)
@@ -184,3 +229,5 @@ Ice, Dragon, Dark. Also write the hex values as a table in the producer record.
 - 2026-10-14 — Codex — generated initial sample in parallel with ASSET-005..008; performed authorized scripted cleanup/packing and file checks; published for review, acceptance pending.
 
 - 2026-10-14 — implementation agent (Claude) — reviewed v001 for Khaled: HIT approved; Normal/Rock/Ground ramps to be separated; remaining effects unblocked.
+
+- 2026-10-14 — Codex — revision 2: separated material ramps and Dragon, generated remaining six effects concurrently, scripted native cleanup and inspected native/half/4×; delivered v002 for review, playback/integration pending.

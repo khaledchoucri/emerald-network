@@ -1,0 +1,56 @@
+{
+  "checks": {
+    "size": true,
+    "opaque": true,
+    "palette_at_most_16": true,
+    "four_distinct_sky_steps": true,
+    "horizon_glow_12px": true,
+    "four_dense_floor_rows_in_visible_gap": true,
+    "non_grid_sky_ceiling": true,
+    "no_motes_or_streams_baked_in": true
+  },
+  "all_checks_passed": true,
+  "palette": [
+    "#040c1c",
+    "#071833",
+    "#083e86",
+    "#0b2550",
+    "#103473",
+    "#10539e",
+    "#144283",
+    "#1460b0",
+    "#1a4f9c"
+  ],
+  "native": [
+    528,
+    352
+  ],
+  "dense_floor_rows": [
+    150,
+    152,
+    155,
+    157,
+    161
+  ],
+  "grid_anchor_y": 150,
+  "source": {
+    "file": "raw/backdrop.png",
+    "size": [
+      1536,
+      1024
+    ],
+    "sha256": "9639e1ef9b387358de12e79b5139e910d2675c1f256fc7ceee6952b89e78c38f"
+  },
+  "operations": [
+    "nearest native resize",
+    "replace sky with corrected flat palette steps",
+    "12px discrete horizon band",
+    "translate generated grid down 16px; crop bottom overflow",
+    "extract bright generated strokes at blue>=120",
+    "flatten nongrid floor texture",
+    "depth-dependent grid recolor",
+    "nearest review scaling"
+  ],
+  "preview_limits": "Existing normal panel source crops are approximate and resized for contrast inspection only; not a game renderer test.",
+  "in_game_tested": false
+}

@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 5
 - Assigned producer: Codex
-- Current owner: Codex
+- Current owner: Khaled / implementation agent
 - Brief revision: 2
-- Based on repository commit: 1eb0e3d
+- Based on repository commit: 88ecdd8
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: Codex delivers backdrop A v002 (revision 2 below). B/C wait for its review.
+- Next action / blocker: Review backdrop A v002; B/C remain held until its review.
 
 ## Purpose and visual brief
 
@@ -67,7 +67,7 @@
 
 ## Producer record
 
-- Brief revision used: 1.
+- Brief revision used: 2 (latest delivery v002).
 - Tool: image_gen.imagegen; exact prompt/reference list in the sample's PROMPT.md. Raw outputs retained under raw/ for reproducibility, not intended for runtime use.
 - Programmatic processing: authorized by PIPELINE.md Source-art rules item 7. Exact config and operations are in processing.json / validation.json; shared helper: poc/assets/generated/_tools/prepare_samples.py. Run from repository root with the sample's processing.json. Python dependencies: Pillow and NumPy.
 - Delivery scaling: native files plus exact 4× nearest-neighbor review PNGs and half-size previews. Raw generator dimensions were not native or exact integer multiples; cleanup reconstructs/packs the specified delivery geometry without claiming the raw art met that constraint.
@@ -81,6 +81,14 @@
 - Processing: nearest-neighbor fit preserving 3:2 aspect, fixed palette snapping; flat sky bands replace source grain; grid is translated 8 pixels down, cropping the overflow at the bottom, to set the horizon at y150. No motes, streams, HUD, panels or fighters are baked into A.
 - Checks: dimensions, palette limit, full opacity, nonempty content and preview scaling passed in validation.json. Visible scene reads as a receding grid floor behind a calm sky; no light baked onto future panels.
 - Limitations: pixel raster line thickness varies at perspective stair steps; actual layered contrast with integrated panels/HUD and in-game screenshot remain for POC-24. B/C particles and streams not generated until A is reviewed.
+
+### Delivery v002 — revision 2
+
+- Native: `poc/assets/generated/ASSET-005/v002/backdrop.png`, 528×352, opaque, nine colours. Review: `backdrop_review_4x.png` and `backdrop_review_half.png`; `panel_contrast_preview_review_4x.png` overlays approved panels as a contrast aid.
+- Clearly separated navy steps use #040c1c, #071833, #0b2550 and #103473. A 12 px stepped glow at y138–149 reaches #1a4f9c. Perspective floor begins at y150, with bright #1460b0 near-horizon lines and five visible dense rows before y164.
+- Generated source was 1536×1024. Reproducible `v002/cleanup.py` resizes with nearest neighbour, replaces noisy sky with flat bands, translates generated floor geometry 16 px down and snaps grid colours. Exact prompt, source, processing and validation are retained; Pillow/NumPy required. This version uses its own cleanup script rather than the v001 shared helper.
+- Dimension, opacity, palette, sky-step, glow and dense-floor checks pass. Visual review confirms panels remain brighter in the contrast preview. Preview uses cropped/resized source panels; it is not a renderer screenshot. Pixel staircase line width varies in perspective.
+- User approval and in-game contrast/HUD integration remain pending. B/C are held. v001 is preserved as review history.
 
 ## Consolidated review
 
@@ -115,3 +123,5 @@
 - 2026-10-14 — Codex — generated initial sample in parallel with ASSET-005..008; performed authorized scripted cleanup/packing and file checks; published for review, acceptance pending.
 
 - 2026-10-14 — implementation agent (Claude) — reviewed v001 for Khaled; brief revision 2 (visible sky steps, horizon glow, floor depth); STYLE.md Net sky row corrected.
+
+- 2026-10-14 — Codex — delivered revision 2 backdrop A with visible sky bands, 12 px horizon glow and dense floor depth; source checks passed, user and runtime review pending.

@@ -1,0 +1,54 @@
+{
+  "script": "cleanup.py",
+  "dependencies": [
+    "Pillow",
+    "NumPy"
+  ],
+  "source_horizon": 134,
+  "horizon": 150,
+  "sky_bands": [
+    [
+      0,
+      54,
+      "#040c1c"
+    ],
+    [
+      54,
+      95,
+      "#071833"
+    ],
+    [
+      95,
+      126,
+      "#0b2550"
+    ],
+    [
+      126,
+      138,
+      "#103473"
+    ],
+    [
+      138,
+      142,
+      "#103473"
+    ],
+    [
+      142,
+      146,
+      "#144283"
+    ],
+    [
+      146,
+      150,
+      "#1a4f9c"
+    ]
+  ],
+  "grid_blue_threshold": 120,
+  "grid_tones": [
+    "#1460b0",
+    "#10539e",
+    "#083e86"
+  ],
+  "floor": "#071833",
+  "panel_contrast_preview": "approximate non-engine layout"
+}

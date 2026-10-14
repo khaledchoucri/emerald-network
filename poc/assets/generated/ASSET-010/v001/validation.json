@@ -1,0 +1,54 @@
+{
+  "sheet_dimensions": [
+    244,
+    142
+  ],
+  "opaque_palette": [
+    [
+      32,
+      32,
+      32
+    ],
+    [
+      88,
+      88,
+      88
+    ],
+    [
+      144,
+      144,
+      144
+    ],
+    [
+      200,
+      200,
+      200
+    ],
+    [
+      255,
+      255,
+      255
+    ]
+  ],
+  "alpha_values": [
+    0,
+    255
+  ],
+  "transparent_gap_width": 8,
+  "frame_count": 3,
+  "checks_passed": [
+    "PNG complete decode",
+    "native sheet geometry",
+    "five exact grays",
+    "binary alpha",
+    "empty frame gutters",
+    "no canvas edge clipping"
+  ],
+  "sha256": "2af1ae4f2709485ef00a8ecea0619d1cc4aa45def645d5d1d4a123da0c9b9de1",
+  "unchecked": [
+    "60fps in-game playback",
+    "runtime anchor placement",
+    "type tint playback"
+  ],
+  "provenance": "image_gen original generated abstract slash; approved original HIT reference"
+}

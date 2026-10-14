@@ -1,0 +1,51 @@
+{
+  "script": "cleanup.py",
+  "dependencies": [
+    "Pillow",
+    "NumPy"
+  ],
+  "source": "raw/h1_generated.png",
+  "operations": [
+    "generated shape interpreted as indexed stepped-corner template",
+    "normalize widths to 1px outer+3px frame+1px inner",
+    "flatten player fill to #0d2347",
+    "recolour shared indexes",
+    "uniform 9slice edges",
+    "8px sheet gaps",
+    "nearest4x and half previews"
+  ],
+  "palettes": {
+    "player": [
+      "#000000",
+      "#0b0a14",
+      "#667b99",
+      "#9db0ca",
+      "#536787",
+      "#0d2347"
+    ],
+    "foe": [
+      "#000000",
+      "#0b0a14",
+      "#b85778",
+      "#ec9bb7",
+      "#76304d",
+      "#2c1222"
+    ],
+    "synchro1": [
+      "#000000",
+      "#0b0a14",
+      "#bd923d",
+      "#f8d87d",
+      "#795418",
+      "#302213"
+    ],
+    "synchro2": [
+      "#000000",
+      "#0b0a14",
+      "#dcae4b",
+      "#fff0a5",
+      "#946b25",
+      "#302213"
+    ]
+  }
+}

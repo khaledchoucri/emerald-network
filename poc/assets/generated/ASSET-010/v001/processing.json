@@ -1,0 +1,75 @@
+{
+  "cell": [
+    76,
+    142
+  ],
+  "frames": 3,
+  "gap": 8,
+  "timing_game_frames": [
+    6,
+    4,
+    3
+  ],
+  "total_game_frames": 13,
+  "loop": false,
+  "suggested_anchor": [
+    38,
+    71
+  ],
+  "runtime_anchor_verified": false,
+  "frames_processing": [
+    {
+      "frame": 0,
+      "source_x_range": [
+        60,
+        550
+      ],
+      "retained_components": 6,
+      "native_art_size": [
+        50,
+        108
+      ],
+      "native_offset": [
+        13,
+        17
+      ]
+    },
+    {
+      "frame": 1,
+      "source_x_range": [
+        600,
+        1100
+      ],
+      "retained_components": 7,
+      "native_art_size": [
+        51,
+        108
+      ],
+      "native_offset": [
+        96,
+        17
+      ]
+    },
+    {
+      "frame": 2,
+      "source_x_range": [
+        1170,
+        1610
+      ],
+      "retained_components": 9,
+      "native_art_size": [
+        33,
+        108
+      ],
+      "native_offset": [
+        189,
+        17
+      ]
+    }
+  ],
+  "cleanup": "alpha >=192; retain largest components; shared isotropic scale; nearest-neighbor; exact gray snapping",
+  "raw_dimensions": [
+    1644,
+    957
+  ]
+}
