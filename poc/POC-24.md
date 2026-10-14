@@ -17,8 +17,7 @@ Battles now draw on a 528×352 canvas, twice the game's 264×176. Codex's approv
 
 - **Panels:**
   - all 12 types, in both colours;
-  - the front edge of the bottom row;
-  - stolen columns take the thief's colour, as before.
+  - the front edge of the bottom row.
 - **Fire:**
   - FIREBALL (Ember-type shots), FIRE_BURST (where a Fire move lands), FLAME_JET (Flamethrower and other Fire lines),
     FIRE_TALL (Fire areas) and FIRE_PANEL (Will-O-Wisp).
