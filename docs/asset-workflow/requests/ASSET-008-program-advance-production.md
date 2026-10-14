@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: delivered
+- State: ready
 - Priority: 8
 - Assigned producer: Codex
 - Current owner: Codex
-- Brief revision: 1
-- Based on repository commit: 1eb0e3d
+- Brief revision: 2
+- Based on repository commit: 89c74ed
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: User/implementation agent reviews v002 P1 turning and P2–P6; implementation owns renderer integration and runtime acceptance.
+- Next action / blocker: P1–P6 approved except two type symbols. Codex redraws Fighting and Ground in P5 (revision 2 below).
 
 ## Purpose and visual brief
 
@@ -126,6 +126,21 @@
 - Optional: the code tab cuts into the bottom-right rim; keep the cut, but give the tab its own 1 px outline so it reads
   as a tab at half size.
 
+### Review of v002
+
+- Reviewed delivery: v002 (all seven sheets and the playback GIFs)
+- Reviewer: Claude (implementation agent), asked by Khaled to review
+- Approved: P1 card flip, P2 trail, P3 emblem, P4 burst, P6 banner and the shine. The emblem's arrival reads in order
+  and the burst breaks up cleanly.
+- P5 type symbols: 15 of 17 approved. Required changes (brief revision 2):
+  1. **Fighting** reads as crossed bones, which says poison or danger. Use a clenched fist, or two fists meeting.
+  2. **Ground** reads as a stacked sandwich. Use a mound or a cracked-earth slab with a split down it.
+  Same 32×32 cell, five greys, same weight as the others. Redeliver `type_symbols.png` as v003 with only those two
+  cells changed.
+- Optional: the ¾ card frame is sheared sideways rather than turned. The game can make the turn by narrowing the front
+  and back, so this frame may not be used; no redraw needed.
+- Decision: revise P5 (two cells); everything else accepted for integration.
+
 ## Integration and acceptance (implementation agent)
 
 - Accepted delivery:
@@ -144,3 +159,4 @@
 - 2026-10-14 — implementation agent (Claude) — reviewed v001 for Khaled: P1 approved; turning frames and P2–P6 unblocked.
 
 - 2026-10-14 — Codex — delivered v002 complete P1 turning and P2–P6 source sheets; original v001 preserved; source review and in-game acceptance pending.
+- 2026-10-14 — implementation agent (Claude) — reviewed v002: P1–P4, P6 and the shine approved; Fighting and Ground symbols revised (revision 2).

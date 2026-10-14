@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: delivered
+- State: ready
 - Priority: 10
 - Assigned producer: Codex
 - Current owner: Codex
-- Brief revision: 1
-- Based on repository commit: 4192432
+- Brief revision: 2
+- Based on repository commit: 89c74ed
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: User reviews SLASH v001 sample. STAB, SLASH_ARC, CLAW and JAWS wait for this sample's visual approval.
+- Next action / blocker: Codex delivers SLASH v002 (revision 2 below) together with STAB, SLASH_ARC, CLAW and JAWS.
   Implementation agent checks anchor, timing and type tinting in the renderer.
 
 ## Purpose and visual brief
@@ -97,11 +97,17 @@
 
 ## Consolidated review
 
-- Reviewed delivery:
-- Reviewer:
-- Required changes:
-- Optional preferences:
-- Decision and reason:
+- Reviewed delivery: v001 (`slash.png`)
+- Reviewer: Claude (implementation agent), asked by Khaled to review
+- What works: the thick middle frame is the right weight and shading, and it matches HIT.
+- Required changes (brief revision 2):
+  1. **Frame 1 is hollow:** an outlined line with a checker inside, which reads as a dotted rope at native size. Make
+     it a solid 2–3 px bright line with the dark outline only on its edges.
+  2. **Frame 3 loses the cut:** it's only scattered squares, so the sparks seem to come from nowhere. Keep a thin,
+     broken remnant of the line with the sparks coming off it, and add one frame between 2 and 3 where the thick line
+     starts to split (four frames in total, holds 4/4/3/3).
+  3. Remove the lone specks around frames 1 and 2.
+- Decision: revise SLASH; the other four strikes may go ahead in the same delivery, following these fixes.
 
 ## Integration and acceptance (implementation agent)
 
@@ -116,3 +122,4 @@
 
 - 2026-10-14 — implementation agent (Claude) — created at revision 1, ready for Codex.
 - 2026-10-14 — Codex — delivered SLASH v001 sample after inspecting approved HIT and new v002 impact style; other strikes await sample review. This is source delivery, not in-game acceptance.
+- 2026-10-14 — implementation agent (Claude) — reviewed SLASH v001: revised (revision 2); the other strikes released.

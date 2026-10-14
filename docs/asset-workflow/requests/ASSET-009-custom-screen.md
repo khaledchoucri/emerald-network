@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: delivered
+- State: ready
 - Priority: 9
 - Assigned producer: Codex
-- Current owner: implementation agent
+- Current owner: Codex
 - Brief revision: 1
-- Based on repository commit: 4192432
+- Based on repository commit: 89c74ed
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: Review v001 C1/C2 sample and the 4 px bezel adaptation; C3–C7 remain held until sample approval. Implementation agent then checks text/layout in renderer.
+- Next action / blocker: C1/C2 approved with one fix. Codex fixes the right edge of C1 and delivers C3–C7.
 
 ## Purpose and visual brief
 
@@ -103,11 +103,17 @@
 
 ## Consolidated review
 
-- Reviewed delivery:
-- Reviewer:
-- Required changes:
-- Optional preferences:
-- Decision and reason:
+- Reviewed delivery: v001 (`window_body.png`, `art_frame.png`, `custom_sample.png`)
+- Reviewer: Claude (implementation agent), asked by Khaled to review
+- What works: C1 has H1's full frame weight and stepped corners; the title and footer bands are where the text goes;
+  C2's 244×112 window is fully clear. The 1+2+1 px bezel for C2 is accepted.
+- Required change: **C1's right edge has a highlight on its outer side** (`#9db0ca` at x 262) while the bottom edge,
+  lit the same way, doesn't. With the light from the top left, the right and bottom edges should match: outline,
+  three `#536787`, outline. The "bright rim down its right edge" in the brief is drawn by the game where the window
+  meets the battlefield, so the art doesn't need it.
+- Optional: the body fill (`#071833`) is a sky colour; a step bluer (H1's `#0d2347`) would help the window read as
+  a panel over the backdrop.
+- Decision: approved with the C1 edge fix, delivered with C3–C7.
 
 ## Integration and acceptance (implementation agent)
 
@@ -123,3 +129,4 @@
 - 2026-10-14 — implementation agent (Claude) — created at revision 1, ready for Codex.
 
 - 2026-10-14 — Codex — delivered C1/C2 sample v001 in revised H1 family; exact geometry/alpha/palette checks passed; dimensional bezel adaptation recorded; sample review pending.
+- 2026-10-14 — implementation agent (Claude) — reviewed C1/C2 v001: approved with a C1 right-edge fix; C3–C7 released.
