@@ -1,0 +1,1162 @@
+From c6e3de9c5885e4acdebdb6d8c8ac9512882265d1 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Thu, 15 Oct 2026 01:11:21 +0300
+Subject: [PATCH 96/97] POC-26: out of the buster rut - wild Pokemon punish
+ back-row camping with phase strikes, packs grow with your level lead, counter
+ hits fill a quarter of the gauge; binding moves pull, Mean Look draws in,
+ throws, heavy hits knock back, recoil bounces; Rock Tomb lands in a plus
+ (middle pins); teammates' chips join chains (TAG); codes unlock as you go (6
+ + 2 per Gym Leader / rival) and lean toward your folder's; one new hand a
+ battle (R); knock-back slide direction fixed; Focus Energy / Charge no longer
+ borrow move-flag bits
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/chip_pack.h     |   8 ++
+ include/pkbn/grid_battle.h   |   2 +
+ include/pkbn/grid_internal.h |  14 +++-
+ include/pkbn/move_table.h    |   2 +
+ src/pkbn/busting.c           |   5 +-
+ src/pkbn/chip_trader.c       |   2 +-
+ src/pkbn/folder.c            |  11 ++-
+ src/pkbn/folder_ui.c         |   4 +-
+ src/pkbn/grid_battle.c       | 139 +++++++++++++++++++++++++++++++++--
+ src/pkbn/grid_draw.c         |  29 +++++++-
+ src/pkbn/grid_field.c        |  81 +++++++++++++++++---
+ src/pkbn/grid_moves.c        |  40 ++++++++--
+ src/pkbn/items.c             |   2 +-
+ src/pkbn/move_table.c        |  34 ++++-----
+ src/pkbn/pkbn_save.c         | 136 ++++++++++++++++++++++++++++++++--
+ src/pkbn/post_battle.c       |   5 +-
+ src/pkbn/selftest.c          |  37 +++++++++-
+ 17 files changed, 494 insertions(+), 57 deletions(-)
+
+diff --git a/include/pkbn/chip_pack.h b/include/pkbn/chip_pack.h
+index ea54b43..ee7ec70 100644
+--- a/include/pkbn/chip_pack.h
++++ b/include/pkbn/chip_pack.h
+@@ -32,6 +32,14 @@ u16 PkbnPartner_PowerPct(u8 level);            // 100 / 130 / 160
+ 
+ u8 PkbnPack_Get(u16 move, u8 letter);
+ void PkbnPack_Add(u16 move, u8 letter, s32 n);
++// POC-26 (Khaled's picks T3/K1, T2): the codes a new chip may come in. 6 at the start, 2 more for every Gym Leader and
++// rival battle won; a chip whose codes are all still locked takes a fixed unlocked one. Among the allowed codes, half the time the
++// one your folder already has most of.
++u8 PkbnCode_UnlockedCount(void);
++bool8 PkbnCode_Unlocked(u8 letter);
++u8 PkbnCode_Fit(u16 move, u8 letter);
++u8 PkbnCode_FitStable(u16 move, u8 letter);
++u8 PkbnCode_Substitute(u16 move);            // the unlocked code a fully locked move comes in   // no randomness (shop shelves): the code itself, else its first unlocked
+ u16 PkbnPack_Total(u16 move);
+ void PkbnPack_SyncLearned(void);
+ void PkbnPack_SetGranted(u16 move);
+diff --git a/include/pkbn/grid_battle.h b/include/pkbn/grid_battle.h
+index a73dfb3..c3f0f00 100644
+--- a/include/pkbn/grid_battle.h
++++ b/include/pkbn/grid_battle.h
+@@ -39,5 +39,7 @@ bool8 PkbnGrid_CrossAvailable(void);
+ bool8 PkbnGrid_CrossOpen(void);
+ bool8 PkbnGrid_BeastAvailable(void);
+ bool8 PkbnGrid_BeastArmed(void);
++bool8 PkbnGrid_RedrawAvailable(void);   // POC-26
++bool8 PkbnGrid_HandSelectable(u8 pos);
+ 
+ #endif // GUARD_PKBN_GRID_BATTLE_H
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 3d00bd2..86d79c1 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -67,7 +67,7 @@
+ enum { ST_INTRO, ST_CUSTOM, ST_FIGHT, ST_END, ST_PICK, ST_TIMESTOP, ST_THROW, ST_SENDOUT, ST_OMEGA };
+ enum { SIDE_PLAYER, SIDE_ENEMY };
+ enum { PICK_WILD, PICK_BATON, PICK_FAINT };
+-enum { TS_SWITCH, TS_ASSIST, TS_BENCH };
++enum { TS_SWITCH, TS_ASSIST, TS_BENCH, TS_TAG };   // TS_TAG (POC-26): a teammate's chip in a chain
+ 
+ // Panel types. Numbers in comments are BN6 oPanelData_Type values from the code we model.
+ enum
+@@ -207,6 +207,9 @@ struct Attack
+     u8 cells[GRID_ROWS][GRID_COLS];  // panels threatened right now (telegraph / impact)
+     u16 serial;              // visuals: tells a new attack from a reused slot
+     bool8 windupOnly;        // POC-15: PH_CHARGE is just the user's BN wind-up (no charge-up, no "IS CHARGING UP")
++    u8 warnOverride;         // POC-26: a phase strike's warning (frames); 0 = the move's own
++    bool8 focusCaptured;     // Focus Energy at launch (was info.flags bit 7)
++    bool8 chargeCaptured;    // Charge at launch (was info.flags bit 6)
+ };
+ 
+ // Visual events (POC-15): the rules post what happened, the drawing code plays it. Visual only.
+@@ -251,6 +254,11 @@ struct GridBattle
+     u8 crossOpts[6];
+     u8 beastTurns;             // POC-19j: Beast Out - Customs left (0 = not out)
+     bool8 beastArmed;          // SELECT on the Custom screen: out when it closes
++    bool8 redrawUsed;          // POC-26 (Khaled's pick D5): R on the Custom screen deals a new hand, once a battle
++    u16 campT;                 // POC-26 (P2): frames the player has camped in its back column (decays when it leaves)
++    u16 phaseCd;               // POC-26: frames until the next phase strike may come
++    u8 phaseWarn;              // POC-26: the next enemy Moves_Use is a phase strike with this warning
++    u8 phaseCount;             // POC-26: phase strikes this battle
+     bool8 beastTired;          // a Beast Out ran its course this battle
+     bool8 beastOver;           // this one was pushed while tired: BEAST OVER when it ends
+     bool8 firstBattle;         // POC-18: Birch's rescue (BATTLE_TYPE_FIRST_BATTLE), on the grid as the first lesson
+@@ -436,6 +444,9 @@ bool8 Field_IsAsleep(u8 side);
+ u8 Field_ApplyStatStage(u8 side, u8 stat, s8 delta, bool8 fromFoe);
+ void Field_ResetFighterConditions(struct Fighter *f);
+ void Field_PushBack(u8 side, u8 panels);
++void Field_PullIn(u8 side, u8 panels);   // POC-26: toward the foe
++void Field_Bounce(u8 side);              // POC-26: recoil hop back
++void Field_Throw(u8 side);               // POC-26: to the back column on another row
+ const char *Field_StatName(u8 stat);
+ void Field_NaviStatusBug(u8 side);
+ // POC-13 abilities on the grid (src/pkbn/grid_field.c)
+@@ -457,6 +468,7 @@ void PkbnPostBattle_Start(void);
+ // POC-19i: Cross (grid_battle.c)
+ bool8 PkbnGrid_CrossUnlocked(void);
+ bool8 PkbnGrid_CrossAvailable(void);
++bool8 PkbnGrid_RedrawAvailable(void);   // POC-26
+ u8 PkbnGrid_CrossTypeOf(u8 slot);
+ void PkbnGrid_EndCross(bool8 broken);
+ // POC-19j: Beast Out (grid_battle.c)
+diff --git a/include/pkbn/move_table.h b/include/pkbn/move_table.h
+index afc1a88..021b870 100644
+--- a/include/pkbn/move_table.h
++++ b/include/pkbn/move_table.h
+@@ -54,6 +54,8 @@ enum { BLAST_PLUS, BLAST_X, BLAST_SQUARE, BLAST_SINGLE };
+ #define GF_HOLD     (1 << 3)
+ #define GF_PUSH     (1 << 4)
+ #define GF_RECHARGE (1 << 5)
++#define GF_PULL     (1 << 6)   // POC-26: drags the target one panel toward the user
++#define GF_THROW    (1 << 7)   // POC-26: drops the target in its back column on another row
+ 
+ #define LANE(c)   ((c) - 'A')
+ #define LANE_WILD 26
+diff --git a/src/pkbn/busting.c b/src/pkbn/busting.c
+index 6db935a..70e3607 100644
+--- a/src/pkbn/busting.c
++++ b/src/pkbn/busting.c
+@@ -276,6 +276,7 @@ struct PkbnReward gPkbnReward;
+ 
+ static void GiveChip(u16 move, u8 letter, char *msg, u32 size)
+ {
++    letter = PkbnCode_Fit(move, letter);   // POC-26: unlocked codes, leaning toward your folder's
+     gPkbnReward.kind = RW_CHIP, gPkbnReward.move = move, gPkbnReward.letter = letter, gPkbnReward.copies = 1;
+     char nm[24];
+     struct PkbnNaviStats lead;
+@@ -492,7 +493,7 @@ void Capture_Reward(u8 grade, char *msg, u32 size, bool8 canPick)
+         {
+             u16 mv = GetMonData(mon, MON_DATA_MOVE1 + i);
+             if (PkbnFolder_MoveIsChip(mv))
+-                PkbnPack_Add(mv, ChosenLane(mv), 1), n++;
++                PkbnPack_Add(mv, PkbnCode_Fit(mv, ChosenLane(mv)), 1), n++;
+         }
+         gPkbnReward.kind = RW_CHIPS, gPkbnReward.move = GetMonData(mon, MON_DATA_MOVE1), gPkbnReward.copies = n;
+         snprintf(msg, size, n == 1 ? "MASTER BALL: GOT A CHIP OF ITS MOVE!" : "MASTER BALL: GOT %u CHIPS OF ITS MOVES!", n);
+@@ -500,7 +501,7 @@ void Capture_Reward(u8 grade, char *msg, u32 size, bool8 canPick)
+     else if (tier >= 3 && m1 != MOVE_NONE)
+     {
+         u16 mv = tier == 4 ? m2 : m1;
+-        u8 lane = BallLane(ball, mv, &copies);
++        u8 lane = PkbnCode_Fit(mv, BallLane(ball, mv, &copies));   // POC-26
+         char nm[24];
+         PkbnPack_Add(mv, lane, copies);
+         gPkbnReward.kind = RW_CHIP, gPkbnReward.move = mv, gPkbnReward.letter = lane, gPkbnReward.copies = copies;
+diff --git a/src/pkbn/chip_trader.c b/src/pkbn/chip_trader.c
+index 9c27bbe..01a0f23 100644
+--- a/src/pkbn/chip_trader.c
++++ b/src/pkbn/chip_trader.c
+@@ -106,7 +106,7 @@ static u8 PickCode(u16 mv)
+     }
+     if (nf && (!no || Random() % 4 != 0))   // 75% a new code (BN6 byte_804B068 {0xC0, 0x40})
+         return fresh[Random() % nf];
+-    return no ? old[Random() % no] : in->lanes[0];
++    return PkbnCode_Fit(mv, no ? old[Random() % no] : in->lanes[0]);   // POC-26: unlocked codes only
+ }
+ 
+ bool8 PkbnChipTrader_Roll(bool8 special, u16 *outMove, u8 *outLetter)
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index b81538c..1d24419 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -564,7 +564,16 @@ bool8 PkbnFolder_CanAppend(const struct Folder *folder, const u8 *queue, u8 queu
+             return alive[c->owner];
+         if (c->slot & (LEADER_CHIP | DARK_CHIP))
+             return alive[active];   // a Leader chip calls its own Pokémon, a Dark Chip works for anyone
+-        return alive[active] && Chip_CanUse(&party[active], c->move);
++        if (alive[active] && Chip_CanUse(&party[active], c->move))
++            return TRUE;
++        // POC-26 (Khaled's pick T1): a teammate's chip may join a chain (it matched the code or the chip above), never
++        // start one; a teammate able to use it hops in for that move (grid_battle.c UseNextChip, TS_TAG)
++        if (queueCount == 0)
++            return FALSE;
++        for (i = 0; i < PKBN_PARTY_MAX; i++)
++            if (i != active && alive[i] && Chip_CanUse(&party[i], c->move))
++                return TRUE;
++        return FALSE;
+     }
+ }
+ 
+diff --git a/src/pkbn/folder_ui.c b/src/pkbn/folder_ui.c
+index e2edcd1..c5af309 100644
+--- a/src/pkbn/folder_ui.c
++++ b/src/pkbn/folder_ui.c
+@@ -279,7 +279,7 @@ static void BuildCandy(void)
+                 {
+                     struct CandyRow *r = &sF.candy[sF.candyCount++];
+                     r->move = mv;
+-                    r->letter = gPkbnMoveInfo[mv].lanes[0];
++                    r->letter = PkbnCode_FitStable(mv, gPkbnMoveInfo[mv].lanes[0]);   // POC-26
+                     r->needLevel = sNeed[mv];
+                     r->species = sBy[mv];
+                 }
+@@ -328,7 +328,7 @@ static void BuildShelf(void)
+         if (!PkbnFolder_MoveIsChip(mv) || info->laneCount == 0)
+             continue;
+         sF.shelf[sF.shelfCount].move = mv;
+-        sF.shelf[sF.shelfCount].letter = info->lanes[(i & 1) && info->laneCount > 1 ? 1 : 0];
++        sF.shelf[sF.shelfCount].letter = PkbnCode_FitStable(mv, info->lanes[(i & 1) && info->laneCount > 1 ? 1 : 0]);   // POC-26
+         sF.shelfCount++;
+     }
+ }
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 24f5f1e..283b1a9 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -363,9 +363,10 @@ static void EndTimeStop(void)
+         DoSwitch(sB.tsTarget, sB.tsKeepStages);
+         break;
+     case TS_ASSIST:
++    case TS_TAG:
+     {
+         struct PartyMember *pm = &sB.party[sB.tsTarget];
+-        PKBN_LOG("ASSIST: %s uses move %u", pm->name, sB.tsMove);
++        PKBN_LOG("%s: %s uses move %u", sB.tsKind == TS_TAG ? "TAG" : "ASSIST", pm->name, sB.tsMove);
+         Moves_Use(SIDE_PLAYER, sB.tsMove, sB.tsSlot, &pm->bm, pm->name, sB.tsTarget);
+         break;
+     }
+@@ -823,6 +824,19 @@ static void OpenCustomInner(void)
+     PlaySE(SE_WIN_OPEN);   // POC-16b
+ }
+ 
++// POC-26: how far the player's lead (the first Pokémon able to fight) is above the wild Pokémon (gEnemyParty[0]).
++static s32 LeadLevelGap(void)
++{
++    s32 i;
++    for (i = 0; i < PARTY_SIZE; i++)
++    {
++        struct Pokemon *m = &gPlayerParty[i];
++        if (GetMonData(m, MON_DATA_SPECIES) != SPECIES_NONE && !GetMonData(m, MON_DATA_IS_EGG) && GetMonData(m, MON_DATA_HP))
++            return (s32)GetMonData(m, MON_DATA_LEVEL) - (s32)GetMonData(&gEnemyParty[0], MON_DATA_LEVEL);
++    }
++    return 0;
++}
++
+ // POC-11: how many extra wild Pokémon join (TUNE): none before the first badge 90% of the time; with b badges a pack
+ // of 2 is 25 + 4b %, and 3b % of all battles are a pack of 3. Only standard grass / water encounters
+ // (src/wild_encounter.c PkbnWild_AllowPack). Self-tests: PKBN_TEST_FOES="species:level,species:level".
+@@ -850,10 +864,18 @@ static void AddWildPack(void)
+     for (b = 0, r = FLAG_BADGE01_GET; r <= FLAG_BADGE08_GET; r++)
+         b += FlagGet(r) ? 1 : 0;
+     r = Random() % 100;
+-    if (r < 3 * b)
+-        extra = 2;
+-    else if (r < (b == 0 ? 10 : 25 + 4 * b))
+-        extra = 1;
++    {
++        // POC-26 (Khaled's pick C2): the further your lead is above the wild Pokémon, the likelier a pack. TUNE.
++        s32 gap = LeadLevelGap(), trio = 3 * b, pair = b == 0 ? 10 : 25 + 4 * b;
++        if (gap >= 10)
++            trio += 20, pair += 40;
++        else if (gap >= 5)
++            trio += 5, pair += 20;
++        if (r < trio)
++            extra = 2;
++        else if (r < pair)
++            extra = 1;
++    }
+     if (getenv("PKBN_TEST_PACK_EXTRA") != NULL)   // owtests: force the pack size, still drawn from the map's table
+         extra = atoi(getenv("PKBN_TEST_PACK_EXTRA"));
+     for (n = 0; n < extra; n++)
+@@ -2062,6 +2084,12 @@ static void UpdateCrossWindow(u16 keys)
+     }
+ }
+ 
++// POC-26: can R deal a new hand now? Once a battle, before anything is picked, with chips left to draw.
++bool8 PkbnGrid_RedrawAvailable(void)
++{
++    return !sB.redrawUsed && sB.queueCount == 0 && sB.folder.pileCount > 0 && sB.state == ST_CUSTOM;
++}
++
+ static void UpdateCustom(void)
+ {
+     u16 keys = gMain.newKeys;
+@@ -2089,6 +2117,34 @@ static void UpdateCustom(void)
+         }
+     }
+ 
++    if ((keys & R_BUTTON) && sB.cursor != itemRow)
++    {
++        // POC-26 (Khaled's pick D5): once a battle, R puts the whole hand under the pile and deals a new one, before
++        // anything is picked
++        if (PkbnGrid_RedrawAvailable())
++        {
++            s32 i;
++            u8 back[HAND_MAX], n = 0;
++            for (i = 0; i < sB.handCount; i++)
++                if (sB.hand[i] != FOLDER_STRUGGLE)
++                    back[n++] = sB.hand[i];
++            if (sB.folder.pileCount + n <= FOLDER_MAX)
++            {
++                memmove(sB.folder.pile + n, sB.folder.pile, sB.folder.pileCount);
++                memcpy(sB.folder.pile, back, n);   // the bottom: drawn last
++                sB.folder.pileCount += n;
++            }
++            sB.handCount = 0;
++            sB.redrawUsed = TRUE;
++            RefillHand();
++            UpdatePAPreview();
++            PKBN_LOG("redraw: %u chips back under the pile", (unsigned)n);
++            PlaySE(SE_RG_CARD_FLIP);
++        }
++        else
++            PlaySE(SE_FAILURE);
++        return;
++    }
+     if ((keys & L_BUTTON) && sB.cursor != itemRow)
+     {
+         // POC-18 (Khaled: run from the Custom menu): L escapes, as in BN6's Custom screen
+@@ -2438,6 +2494,23 @@ static void UseNextChip(void)
+     }
+     if (!Chip_CanUse(&p->bm, ch->move))
+     {
++        // POC-26 (Khaled's pick T1): a teammate's chip in a chain - the teammate who can use it hops in for this one
++        // move (time stops, as for Assist) and the Pokémon in battle stays in. It counts as fighting (EXP, habits).
++        s32 t, best = -1;
++        for (t = 0; t < sB.partyCount; t++)
++            if (t != sB.active && PartyAlive(t) && Chip_CanUse(&sB.party[t].bm, ch->move)
++             && (best < 0 || sB.party[t].bm.level > sB.party[best].bm.level))
++                best = t;
++        if (best >= 0)
++        {
++            PlayLog_NoteChip(ch->move);
++            sB.party[best].participated = TRUE;
++            sB.sentIn |= 1 << best;
++            sB.tsMove = ch->move;
++            sB.tsSlot = 0;
++            BeginTimeStop(TS_TAG, best, FALSE);
++            return;
++        }
+         // whoever is in now can't use it (the one who could fainted mid-queue): the copy is spent
+         SetMsg("CAN'T USE THAT NOW", 40);
+         PlaySE(SE_FAILURE);
+@@ -3045,6 +3118,53 @@ static bool8 OmegaGuard(struct Fighter *e)
+     return FALSE;
+ }
+ 
++// ---- POC-26 (Khaled's pick P2): phase strikes ----------------------------------------------------------------
++// A wild Pokémon punishes camping: once the player has stood in its back column for CAMP_START frames, the foe's next
++// attack is its strongest contact move (else its strongest damaging one), and it blinks to its front column in the
++// player's row first. The strike lands on the player's panel after a warning that shortens the longer the camping
++// goes on; the foe stays open the whole time (a counter hit). Wild battles only for now. All numbers TUNE.
++#define CAMP_START      180   // 3 s in the back column
++#define PHASE_WARN_MAX  60
++#define PHASE_WARN_MIN  24
++#define PHASE_COOLDOWN  150
++static bool8 PhaseStrike(struct Fighter *e)
++{
++    struct Fighter *p = &sB.f[SIDE_PLAYER];
++    s32 i, best = -1, bestScore = 0, shrink;
++    u8 warn;
++    if (sB.trainer || sB.challenge || sB.firstBattle || sB.boss || gPkbnGallery || sB.campT < CAMP_START || sB.phaseCd
++     || e->hold || getenv("PKBN_NO_PHASE") != NULL)
++        return FALSE;
++    for (i = 0; i < MAX_MON_MOVES; i++)
++    {
++        u16 mv = e->bm.moves[i];
++        s32 score;
++        if (mv == MOVE_NONE || e->bm.pp[i] == 0 || gBattleMoves[mv].power == 0 || Moves_KindOf(mv) == GK_NONE)
++            continue;
++        score = gBattleMoves[mv].power + ((gBattleMoves[mv].flags & FLAG_MAKES_CONTACT) ? 200 : 0);
++        if (score > bestScore)
++            bestScore = score, best = i;
++    }
++    if (best < 0)
++        return FALSE;
++    if ((e->x != PLAYER_COLS || e->y != p->y) && Field_CanStand(SIDE_ENEMY, PLAYER_COLS, p->y))
++    {
++        Field_Step(SIDE_ENEMY, PLAYER_COLS, p->y);
++        e->statusFlash = 10;
++        PlaySE(SE_M_TELEPORT);
++    }
++    shrink = (sB.campT - CAMP_START) / 8;
++    warn = (u8)(PHASE_WARN_MAX - (shrink > PHASE_WARN_MAX - PHASE_WARN_MIN ? PHASE_WARN_MAX - PHASE_WARN_MIN : shrink));
++    sB.phaseWarn = warn;
++    sB.phaseCd = PHASE_COOLDOWN;
++    sB.phaseCount++;
++    e->bm.pp[best]--;
++    PKBN_LOG("phase strike: %s (camped %u frames, warning %u)", e->name, (unsigned)sB.campT, (unsigned)warn);
++    Moves_Use(SIDE_ENEMY, e->bm.moves[best], best, &e->bm, e->name, 0);
++    sB.phaseWarn = 0;
++    return TRUE;
++}
++
+ static void UpdateOneEnemy(void)
+ {
+     struct Fighter *e = &sB.f[SIDE_ENEMY];
+@@ -3072,6 +3192,8 @@ static void UpdateOneEnemy(void)
+             SetMsg(line, 50);
+             return;
+         }
++        if (PhaseStrike(e))
++            return;
+         if (sB.rivalTier >= 3 && TeamSpecial(e))
+             return;
+         if (sB.rivalTier && RivalSpecial(e))
+@@ -3458,6 +3580,13 @@ static void UpdateFight(void)
+         sB.chipReadyT--;   // POC-18: the gap after Custom
+     if (sB.f[SIDE_PLAYER].x >= 0 && sB.f[SIDE_PLAYER].x < 3)
+         sB.party[sB.active].colFrames[sB.f[SIDE_PLAYER].x]++;   // POC-20b: habits for your ghost
++    // POC-26 (P2): camping in the back column builds up; stepping out lets it drain (4x as fast as it builds)
++    if (sB.f[SIDE_PLAYER].x == 0)
++        sB.campT = sB.campT < 3600 ? sB.campT + 1 : 3600;
++    else
++        sB.campT = sB.campT > 4 ? sB.campT - 4 : 0;
++    if (sB.phaseCd)
++        sB.phaseCd--;
+ 
+     // Custom gauge fills faster/slower with the player's Speed stage (stage 6 = 1x).
+     {
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 8c789c3..b48628a 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -414,6 +414,9 @@ static u8 sWindT[NVIS];      // POC-15: frames left of the wind-up (drawing back
+ static u8 sHurtT[NVIS];      // POC-15: frames left of the flinch after a hit
+ static u8 sPushT[NVIS];      // POC-15: knock-back slide
+ static s8 sPushDx[NVIS];     //   panels it was pushed (signed)
++static u8 sThrowT[NVIS];     // POC-26: a throw - an arc to another row
++static s8 sThrowDx[NVIS], sThrowDy[NVIS];
++#define THROW_FRAMES 16
+ static u32 sLastVis;         // newest visual event played
+ static u8 sDashT[NVIS];      // POC-15: a DASH - the user charges down the row and comes back
+ static u8 sDashPanels[NVIS];
+@@ -557,6 +560,7 @@ static void ResetVisuals(void)
+     memset(sWindT, 0, sizeof(sWindT));
+     memset(sHurtT, 0, sizeof(sHurtT));
+     memset(sPushT, 0, sizeof(sPushT));
++    memset(sThrowT, 0, sizeof(sThrowT));
+     memset(sDashT, 0, sizeof(sDashT));
+     memset(sPendingSound, 0, sizeof(sPendingSound));
+     memset(sAnimSoundLast, 0, sizeof(sAnimSoundLast));
+@@ -768,7 +772,7 @@ static void DrawFighter(u16 *fb, u8 side)
+ 
+     if (FighterHidden(side))
+         return;
+-    if (side == SIDE_PLAYER && sB.state == ST_TIMESTOP && sB.tsKind != TS_ASSIST)
++    if (side == SIDE_PLAYER && sB.state == ST_TIMESTOP && sB.tsKind != TS_ASSIST && sB.tsKind != TS_TAG)
+         return; // the one coming in is drawn by the time-stop overlay
+     Draw_FeetPos(f->x, f->y, &x, &y);
+ 
+@@ -826,7 +830,14 @@ static void DrawFighter(u16 *fb, u8 side)
+             frame = 0;
+         }
+         if (sPushT[v])
+-            dx -= sPushDx[v] * (side == SIDE_PLAYER ? -1 : 1) * PANEL_W * sPushT[v] / 8;   // slide from the old panel
++            dx -= sPushDx[v] * (side == SIDE_PLAYER ? 1 : -1) * PANEL_W * sPushT[v] / 8;   // slide from the old panel (POC-26: sign fixed)
++        if (sThrowT[v])
++        {
++            // POC-26: thrown - from the old panel in an arc (24 px high) to the new one
++            s32 t = sThrowT[v];
++            dx -= sThrowDx[v] * (side == SIDE_PLAYER ? 1 : -1) * PANEL_W * t / THROW_FRAMES;
++            y -= sThrowDy[v] * PANEL_H * t / THROW_FRAMES + t * (THROW_FRAMES - t) * 24 / (THROW_FRAMES * THROW_FRAMES / 4);
++        }
+         if (sDashT[v])
+         {
+             // out in 6 frames, a beat at the far end, back in 8 (TUNE), with two after-images trailing
+@@ -1786,7 +1797,8 @@ static void DrawCustomScreen(u16 *fb)
+         Draw_Box(fb, 10, SLOTS_Y + 6, 112, 14, RGB(16, 2, 2), COL_HP_LOW, 15);
+         TextCentered(fb, 66, SLOTS_Y + 5, "MUST RECHARGE!", COL_WHITE, FALSE);
+     }
+-    Text(fb, 4, CH - 11, sB.crossOpen ? "A:OK  B:BACK" : "A:ADD  B:UNDO", COL_DIM);
++    // POC-26: while the one new hand a battle is still there, its key takes A's hint (A to add is plain enough)
++    Text(fb, 4, CH - 11, sB.crossOpen ? "A:OK  B:BACK" : PkbnGrid_RedrawAvailable() ? "B:UNDO R:NEW" : "A:ADD  B:UNDO", COL_DIM);
+     DrawChosenColumn(fb, t);
+ }
+ 
+@@ -1851,6 +1863,8 @@ static void DrawTimeStop(u16 *fb)
+     Gfx_Draw(fb, &img, x, y, GFX_FLIPX | ((t & 4) ? GFX_TINT : 0), COL_WHITE, 8);
+     if (sB.tsKind == TS_ASSIST)
+         snprintf(line, sizeof(line), "ASSIST: %s!", pm->name);
++    else if (sB.tsKind == TS_TAG)
++        snprintf(line, sizeof(line), "TAG: %s!", pm->name);   // POC-26
+     else
+         snprintf(line, sizeof(line), "GO! %s!", pm->name);
+     Draw_Box(fb, -2, 34, CW + 4, 20, COL_BOX, COL_BOX_EDGE, 15);
+@@ -1930,6 +1944,8 @@ static void VisTrack(u8 s, u8 v)
+         sHurtT[v]--;
+     if (sPushT[v])
+         sPushT[v]--;
++    if (sThrowT[v])
++        sThrowT[v]--;
+     if (sDashT[v])
+         sDashT[v]--;
+     if (sAppearT[v] && --sAppearT[v] == 0 && f->bm.hp)
+@@ -2174,6 +2190,13 @@ void Draw_Overlay(u16 *fb)
+                 }
+                 break;
+             case VEV_PUSH:
++                if (e->kind)
++                {
++                    sThrowDx[v] = e->arg;                  // POC-26: a throw (kind = 1 + rows moved + 2)
++                    sThrowDy[v] = (s8)e->kind - 3;
++                    sThrowT[v] = THROW_FRAMES;
++                    break;
++                }
+                 sPushDx[v] = e->arg;
+                 sPushT[v] = 8;
+                 break;
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index 7f7d676..2a3deca 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -415,25 +415,88 @@ void Field_Step(u8 side, s8 nx, s8 ny)
+         Field_SetPanel(nx, ny, PANEL_CRACKED);
+ }
+ 
++// Move a fighter `panels` columns along its row: dir -1 = toward its own back column, +1 = toward the foe. Stops at
++// the first panel it can't stand on. Anchored Pokémon (Ingrain, Suction Cups) and the SuprArmr program don't budge.
++// POC-26: pulls (binding moves) and the recoil bounce share this with the knock-back.
++static bool8 Shove(u8 side, s8 dir, u8 panels, bool8 quiet)
++{
++    struct Fighter *f = &sB.f[side];
++    s8 step = (side == SIDE_PLAYER) ? dir : -dir;
++    s8 ox = f->x;
++    if (f->rooted || f->bm.ability == ABILITY_SUCTION_CUPS)
++    {
++        if (!quiet)
++            SetMsg("IT ANCHORED ITSELF!", 40);
++        return FALSE;
++    }
++    if (f->navi.flags & NCPF_SUPER_ARMOR)
++        return FALSE;   // SuprArmr program: no knock-back
++    while (panels-- && Field_CanStand(side, f->x + step, f->y))
++        Field_Step(side, f->x + step, f->y);
++    if (f->x != ox)
++    {
++        Vis_Post(VEV_PUSH, side, MOVE_NONE, 0, (s8)(f->x - ox), ox, f->y);   // POC-15: the slide
++        PKBN_LOG("%s %s to (%d,%d)", f->name, dir > 0 ? "pulled in" : "knocked back", f->x, f->y);
++    }
++    return f->x != ox;
++}
++
+ void Field_PushBack(u8 side, u8 panels)
++{
++    if (side == SIDE_PLAYER && !(sB.f[side].rooted || sB.f[side].bm.ability == ABILITY_SUCTION_CUPS
++                                 || (sB.f[side].navi.flags & NCPF_SUPER_ARMOR)))
++        Busting_NotePush();   // BN6 counts the push state among the busting "hits" (asm/asm00_2.s:18735)
++    Shove(side, -1, panels, FALSE);
++}
++
++// POC-26 (Khaled's picks M1/M2): binding moves drag the target toward the user; Mean Look, Block and Spider Web drag
++// it all the way to its front column.
++void Field_PullIn(u8 side, u8 panels)
++{
++    Shove(side, +1, panels, FALSE);
++}
++
++// POC-26 (M6): a recoil move bounces its user one panel back after the hit (quiet: no message, no busting push).
++void Field_Bounce(u8 side)
++{
++    Shove(side, -1, 1, TRUE);
++}
++
++// POC-26 (M3): a throw lifts the target and drops it in its back column on another row, briefly stunned. Rows are
++// tried nearest first (TUNE); if no panel is free it lands back where it was, still stunned.
++void Field_Throw(u8 side)
+ {
+     struct Fighter *f = &sB.f[side];
+-    s8 back = (side == SIDE_PLAYER) ? -1 : 1;
++    s8 back = (side == SIDE_PLAYER) ? 0 : GRID_COLS - 1, ox = f->x, oy = f->y, d, nx = -1, ny = -1;
+     if (f->rooted || f->bm.ability == ABILITY_SUCTION_CUPS)
+     {
+         SetMsg("IT ANCHORED ITSELF!", 40);
+         return;
+     }
+     if (f->navi.flags & NCPF_SUPER_ARMOR)
+-        return;   // SuprArmr program: no knock-back
+-    if (side == SIDE_PLAYER)
+-        Busting_NotePush();   // BN6 counts the push state among the busting "hits" (asm/asm00_2.s:18735)
++        return;
++    for (d = 1; d < GRID_ROWS && nx < 0; d++)
++    {
++        s8 order[2] = { (s8)(oy + d), (s8)(oy - d) };
++        s32 k;
++        if (Random() & 1)
++            order[0] = (s8)(oy - d), order[1] = (s8)(oy + d);
++        for (k = 0; k < 2 && nx < 0; k++)
++            if (order[k] >= 0 && order[k] < GRID_ROWS && Field_CanStand(side, back, order[k]))
++                nx = back, ny = order[k];
++    }
++    if (nx >= 0)
+     {
+-        s8 ox = f->x;
+-        while (panels-- && Field_CanStand(side, f->x + back, f->y))
+-            Field_Step(side, f->x + back, f->y);
+-        if (f->x != ox)
+-            Vis_Post(VEV_PUSH, side, MOVE_NONE, 0, (s8)(f->x - ox), ox, f->y);   // POC-15: the slide back
++        Field_Step(side, nx, ny);
++        Vis_Post(VEV_PUSH, side, MOVE_NONE, (u8)(1 + (ny - oy + 2)), (s8)(nx - ox), ox, oy);   // kind != 0: a throw
++        PKBN_LOG("%s thrown to (%d,%d)", f->name, nx, ny);
++    }
++    if (f->stun < 30)
++        f->stun = 30;   // TUNE
++    {
++        char line[40];
++        snprintf(line, sizeof(line), "%s WAS THROWN!", f->name);
++        SetMsg(line, 40);
+     }
+ }
+ 
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 37dda43..3738499 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -695,7 +695,7 @@ static s32 CalcHitDamage(struct Attack *a, u8 defSide, u16 *eff, bool8 *crit)
+     // Cmd_critcalc
+     {
+         u8 e = EffectOf(a);
+-        u16 c = 2 * (a->info.flags & 0x80 ? 1 : 0) // focus energy captured at launch (bit 7)
++        u16 c = 2 * (a->focusCaptured ? 1 : 0) // focus energy captured at launch
+               + (e == EFFECT_HIGH_CRITICAL) + (e == EFFECT_SKY_ATTACK)
+               + (e == EFFECT_BLAZE_KICK) + (e == EFFECT_POISON_TAIL);
+         if (AttackNavi(a))
+@@ -714,7 +714,7 @@ static s32 CalcHitDamage(struct Attack *a, u8 defSide, u16 *eff, bool8 *crit)
+                atk.attack, atk.spAttack, def.defense, def.spDefense, (int)dmg, atk.ability, def.ability, atk.item, def.item,
+                gBattleWeather, gSideStatuses[0], gSideStatuses[1], atk.statStages[STAT_SPATK], def.statStages[STAT_SPDEF]);
+     dmg = dmg * gCritMultiplier * gBattleScripting.dmgMultiplier;
+-    if ((a->info.flags & 0x40) && type == TYPE_ELECTRIC) // Charge captured at launch (bit 6)
++    if (a->chargeCaptured && type == TYPE_ELECTRIC) // Charge captured at launch
+         dmg *= 2;
+ 
+     // Cmd_typecalc: STAB, Levitate, chart, Wonder Guard
+@@ -1050,6 +1050,8 @@ static void ApplyHit(struct Attack *a, bool8 last)
+         // keep it going. Stun length TUNE.
+         if (!(def->navi.flags & NCPF_SUPER_ARMOR) && def->stun < 40)
+             def->stun = 40;
++        // POC-26 (Khaled's pick X1): a counter also fills a quarter of the Custom gauge. TUNE.
++        sB.gauge = sB.gauge + CUSTOM_FRAMES / 4 < CUSTOM_FRAMES ? sB.gauge + CUSTOM_FRAMES / 4 : CUSTOM_FRAMES;
+         if (!sB.fullSynchro && !sB.darkUsed)
+             PKBN_LOG("FULL SYNCHRO");
+         sB.fullSynchro = !sB.darkUsed;   // POC-20c: no Full Synchro after a Dark Chip
+@@ -1160,6 +1162,9 @@ static void ApplyHit(struct Attack *a, bool8 last)
+         else if (m->effect == EFFECT_DOUBLE_EDGE)
+             Moves_DamageFighter(a->side, dmg / 3 ? dmg / 3 : 1, "IS HIT WITH RECOIL!");
+     }
++    // POC-26 (M6): a recoil move bounces its user one panel back (the dash brings it home first)
++    if (me && !a->pa && (m->effect == EFFECT_RECOIL || m->effect == EFFECT_DOUBLE_EDGE) && me->bm.hp)
++        Field_Bounce(a->side);
+     if (a->move == MOVE_STRUGGLE && me)
+         Moves_DamageFighter(a->side, dmg / 4 ? dmg / 4 : 1, "IS HIT WITH RECOIL!");
+     // POC-13: the defender's contact abilities hit back (Gen 3 ABILITYEFFECT_MOVE_END, battle_util.c:2767-2860)
+@@ -1169,14 +1174,23 @@ static void ApplyHit(struct Attack *a, bool8 last)
+     if (def->bm.hp == 0)
+         return;
+     SecondaryEffect(a, defSide);
+-    if ((a->info.flags & GF_HOLD) && !def->trapTurns)
++    // POC-26 (Khaled's pick R1): a bomb that holds (Rock Tomb) lands in a plus, and only its middle panel pins
++    bool8 newHold = FALSE;
++    if ((a->info.flags & GF_HOLD) && !def->trapTurns && !(a->kind == GK_BOMB && (def->x != a->tx || def->y != a->ty)))
+     {
+         def->hold = HOLD_FRAMES;
+         def->trapTurns = (Random() % 4) + 2; // Gen 3 wrap: 2-5 turns
+         SayFighter(def, "IS TRAPPED!", 50);
++        newHold = TRUE;
+     }
+     if (a->info.flags & GF_PUSH)
+         Field_PushBack(defSide, 1);
++    // POC-26 (M1): binding moves drag the target one panel in - once, as the bind takes hold (a whirlpool's ticks
++    // don't keep pulling)
++    if ((a->info.flags & GF_PULL) && (newHold || !(a->info.flags & GF_HOLD)))
++        Field_PullIn(defSide, 1);
++    if (a->info.flags & GF_THROW)
++        Field_Throw(defSide);
+ }
+ 
+ // POC-17d (our rules, TUNE): a Fire attack burns away grass and melts ice; a Water attack cools lava.
+@@ -1513,7 +1527,13 @@ static void Launch(struct Attack *a)
+             Mark(a->cells, a->tx, a->ty - 1);
+             Mark(a->cells, a->tx, a->ty + 1);
+         }
+-        a->timer = FireHitWarn(a);
++        a->timer = a->warnOverride ? a->warnOverride : FireHitWarn(a);
++        if (a->warnOverride)
++        {
++            // POC-26: the striker stays open for the whole warning - hitting it now is a counter hit
++            if (me->lockout < a->timer + 8)
++                me->lockout = a->timer + 8;
++        }
+         break;
+     case GK_METEORS:
+         a->hitsLeft = a->pa ? PAOf(a)->hits : 3; // TUNE: three rocks
+@@ -2134,6 +2154,7 @@ static void ApplyStatusEffect(u8 side, u16 move, u8 target)
+         // (POC-15: the move's own sound comes from its Emerald animation)
+         break;
+     case EFFECT_MEAN_LOOK:
++        Field_PullIn(target, GRID_COLS);   // POC-26 (M2): drawn to its front column first
+         t->hold = 180; // TUNE
+         t->noEscape = TRUE;
+         SayFighter(t, "CAN'T ESCAPE NOW!", 50);
+@@ -2569,9 +2590,13 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+ 
+     bool8 combo = sB.nextCombo;
+     u16 powerPct = sB.nextPowerPct ? sB.nextPowerPct : 100;
++    u8 phaseWarn = side == SIDE_ENEMY ? sB.phaseWarn : 0;
+     (void)slot;
+     sB.nextCombo = FALSE;
+     sB.nextPowerPct = 0;
++    sB.phaseWarn = 0;
++    if (phaseWarn)
++        kind = GK_FIREHIT;   // POC-26 (P2): a phase strike lands on the camper's panel after its warning
+     if (move == MOVE_NONE || move >= MOVES_COUNT)
+         return;
+     // Chain payoff on a move that doesn't hit: the panel reward lands on the foe's panel.
+@@ -2745,6 +2770,7 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+     a->kind = kind;
+     a->combo = combo;
+     a->powerPct = powerPct;
++    a->warnOverride = phaseWarn;
+     if (side == SIDE_PLAYER && sB.fullSynchro && info->kind != GK_NONE && gBattleMoves[move].power > 0)
+     {
+         a->synchro = TRUE;          // spent by the next damaging chip
+@@ -2755,9 +2781,9 @@ void Moves_Use(u8 side, u16 move, u8 slot, const struct BattlePokemon *user, con
+     a->userSlot = userSlot;
+     strncpy(a->userName, userName, sizeof(a->userName) - 1);
+ 
+-    // captured user conditions (bits in info.flags: 0x80 Focus Energy, 0x40 Charge)
+-    if (me->focusEnergy) a->info.flags |= 0x80;
+-    if (me->chargeNext && m->type == TYPE_ELECTRIC) { a->info.flags |= 0x40; me->chargeNext = FALSE; }
++    // captured user conditions (POC-26: their own fields - they used to borrow info.flags bits 6-7, now GF_PULL/GF_THROW)
++    if (me->focusEnergy) a->focusCaptured = TRUE;
++    if (me->chargeNext && m->type == TYPE_ELECTRIC) { a->chargeCaptured = TRUE; me->chargeNext = FALSE; }
+ 
+     // Lock-On / Thunder in rain: can't be dodged (Gen 3: sure hit)
+     if (me->lockOnNext)
+diff --git a/src/pkbn/items.c b/src/pkbn/items.c
+index 0085b17..c67b32f 100644
+--- a/src/pkbn/items.c
++++ b/src/pkbn/items.c
+@@ -121,7 +121,7 @@ static void GrantChips(u16 move, u16 copies)
+     if (!PkbnFolder_MoveIsChip(move) || info->laneCount == 0)
+         return;
+     for (k = 0; k < copies; k++)
+-        PkbnPack_Add(move, info->lanes[k % info->laneCount], 1);
++        PkbnPack_Add(move, PkbnCode_Fit(move, info->lanes[k % info->laneCount]), 1);   // POC-26
+ }
+ 
+ bool8 PkbnItem_Acquire(u16 item, u16 count, bool8 quiet)
+diff --git a/src/pkbn/move_table.c b/src/pkbn/move_table.c
+index 44748b3..0e8a6dd 100644
+--- a/src/pkbn/move_table.c
++++ b/src/pkbn/move_table.c
+@@ -12,7 +12,7 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_KARATE_CHOP] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('K'), LANE('U')} },
+     [MOVE_DOUBLE_SLAP] = { GK_SWORD, BLAST_PLUS, HITS_2_TO_5, 0, 1, 0, 2, {LANE('F'), LANE('P')} },
+     [MOVE_COMET_PUNCH] = { GK_SWORD, BLAST_PLUS, HITS_2_TO_5, 0, 1, 0, 2, {LANE('F'), LANE('P')} },
+-    [MOVE_MEGA_PUNCH] = { GK_FIREHIT, BLAST_PLUS, 1, 0, 1, GF_SLOW, 2, {LANE('P'), LANE('L')} },
++    [MOVE_MEGA_PUNCH] = { GK_FIREHIT, BLAST_PLUS, 1, 0, 1, GF_SLOW | GF_PUSH, 2, {LANE('P'), LANE('L')} },
+     [MOVE_PAY_DAY] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('N'), LANE_WILD} },
+     [MOVE_FIRE_PUNCH] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('P'), LANE('S')} },
+     [MOVE_ICE_PUNCH] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('P'), LANE('I')} },
+@@ -27,12 +27,12 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_WING_ATTACK] = { GK_WIDESWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('W'), LANE('A')} },
+     [MOVE_WHIRLWIND] = { GK_STATUS, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('W'), LANE('T'), LANE_WILD} },
+     [MOVE_FLY] = { GK_BOMB, BLAST_PLUS, 1, 0, 1, GF_SLOW | GF_INVULN, 2, {LANE('W'), LANE('R')} },
+-    [MOVE_BIND] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, GF_HOLD, 3, {LANE('B'), LANE('F'), LANE_WILD} },
++    [MOVE_BIND] = { GK_LONGSWORD, BLAST_PLUS, 1, 0, 1, GF_HOLD | GF_PULL, 3, {LANE('B'), LANE('F'), LANE_WILD} },
+     [MOVE_SLAM] = { GK_LONGSWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('L'), LANE('B')} },
+     [MOVE_VINE_WHIP] = { GK_LONGSWORD, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('G'), LANE('B'), LANE_WILD} },
+     [MOVE_STOMP] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('A'), LANE('T')} },
+     [MOVE_DOUBLE_KICK] = { GK_LINE3, BLAST_PLUS, 2, 0, 1, 0, 3, {LANE('K'), LANE('F'), LANE_WILD} },
+-    [MOVE_MEGA_KICK] = { GK_LINE3, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('K')} },
++    [MOVE_MEGA_KICK] = { GK_LINE3, BLAST_PLUS, 1, 0, 1, GF_PUSH, 1, {LANE('K')} },
+     [MOVE_JUMP_KICK] = { GK_LINE3, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('K'), LANE('W')} },
+     [MOVE_ROLLING_KICK] = { GK_LINE3, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('K'), LANE('A')} },
+     [MOVE_SAND_ATTACK] = { GK_STATS, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('Q'), LANE('N'), LANE_WILD} },
+@@ -41,8 +41,8 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_FURY_ATTACK] = { GK_LONGSWORD, BLAST_PLUS, HITS_2_TO_5, 0, 1, 0, 3, {LANE('F'), LANE('L'), LANE_WILD} },
+     [MOVE_HORN_DRILL] = { GK_NONE, BLAST_PLUS, 1, 0, 1, 0, 0, {0} },  // removed (review)
+     [MOVE_TACKLE] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 4, {LANE('L'), LANE('H'), LANE('A'), LANE_WILD} },
+-    [MOVE_BODY_SLAM] = { GK_LONGSWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('C'), LANE('L')} },
+-    [MOVE_WRAP] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, GF_HOLD, 3, {LANE('B'), LANE('F'), LANE_WILD} },
++    [MOVE_BODY_SLAM] = { GK_LONGSWORD, BLAST_PLUS, 1, 0, 1, GF_PUSH, 2, {LANE('C'), LANE('L')} },
++    [MOVE_WRAP] = { GK_LONGSWORD, BLAST_PLUS, 1, 0, 1, GF_HOLD | GF_PULL, 3, {LANE('B'), LANE('F'), LANE_WILD} },
+     [MOVE_TAKE_DOWN] = { GK_DASH, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('H')} },
+     [MOVE_THRASH] = { GK_LIFESWORD, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('X')} },
+     [MOVE_DOUBLE_EDGE] = { GK_DASH, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('X')} },
+@@ -73,10 +73,10 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_HYPER_BEAM] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, GF_RECHARGE, 1, {LANE('X')} },
+     [MOVE_PECK] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 4, {LANE('W'), LANE('F'), LANE('A'), LANE_WILD} },
+     [MOVE_DRILL_PECK] = { GK_LONGSWORD, BLAST_PLUS, 1, 0, 1, GF_PUSH, 1, {LANE('W')} },
+-    [MOVE_SUBMISSION] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('K')} },
++    [MOVE_SUBMISSION] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, GF_THROW, 1, {LANE('K')} },
+     [MOVE_LOW_KICK] = { GK_WIDESWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('K'), LANE('T')} },
+     [MOVE_COUNTER] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('E'), LANE('K')} },
+-    [MOVE_SEISMIC_TOSS] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('K'), LANE('E')} },
++    [MOVE_SEISMIC_TOSS] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, GF_THROW, 2, {LANE('K'), LANE('E')} },
+     [MOVE_STRENGTH] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, GF_PUSH, 2, {LANE('H'), LANE('L')} },
+     [MOVE_ABSORB] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('G'), LANE('O'), LANE_WILD} },
+     [MOVE_MEGA_DRAIN] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('G'), LANE('O')} },
+@@ -90,7 +90,7 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_PETAL_DANCE] = { GK_LIFESWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('G'), LANE('D')} },
+     [MOVE_STRING_SHOT] = { GK_STATS, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('T'), LANE('B'), LANE_WILD} },
+     [MOVE_DRAGON_RAGE] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('A'), LANE('E')} },
+-    [MOVE_FIRE_SPIN] = { GK_AIRHOCKEY, BLAST_PLUS, 1, 0, 1, GF_HOLD, 2, {LANE('B'), LANE('S')} },
++    [MOVE_FIRE_SPIN] = { GK_AIRHOCKEY, BLAST_PLUS, 1, 0, 1, GF_HOLD | GF_PULL, 2, {LANE('B'), LANE('S')} },
+     [MOVE_THUNDER_SHOCK] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('C'), LANE('A'), LANE_WILD} },
+     [MOVE_THUNDERBOLT] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('C')} },
+     [MOVE_THUNDER_WAVE] = { GK_STATUS, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('C'), LANE('T')} },
+@@ -139,7 +139,7 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_SWIFT] = { GK_LOCKON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('T'), LANE('A')} },
+     [MOVE_SKULL_BASH] = { GK_DASH, BLAST_PLUS, 1, 60, 1, 0, 1, {LANE('H')} },
+     [MOVE_SPIKE_CANNON] = { GK_VULCAN, BLAST_PLUS, HITS_2_TO_5, 0, 1, 0, 2, {LANE('F'), LANE('Q')} },
+-    [MOVE_CONSTRICT] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('B'), LANE('T'), LANE_WILD} },
++    [MOVE_CONSTRICT] = { GK_LONGSWORD, BLAST_PLUS, 1, 0, 1, GF_PULL, 3, {LANE('B'), LANE('T'), LANE_WILD} },
+     [MOVE_AMNESIA] = { GK_STATS, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('M'), LANE('H')} },
+     [MOVE_KINESIS] = { GK_STATS, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('M'), LANE('N'), LANE_WILD} },
+     [MOVE_SOFT_BOILED] = { GK_SELF, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('Y')} },
+@@ -159,7 +159,7 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_PSYWAVE] = { GK_WAVE, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('M'), LANE('E')} },
+     [MOVE_SPLASH] = { GK_NOTHING, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE_WILD} },
+     [MOVE_ACID_ARMOR] = { GK_STATS, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('H'), LANE('O')} },
+-    [MOVE_CRABHAMMER] = { GK_WIDESWORD, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('R')} },
++    [MOVE_CRABHAMMER] = { GK_WIDESWORD, BLAST_PLUS, 1, 0, 1, GF_PUSH, 1, {LANE('R')} },
+     [MOVE_EXPLOSION] = { GK_FIELD, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('X')} },
+     [MOVE_FURY_SWIPES] = { GK_SWORD, BLAST_PLUS, HITS_2_TO_5, 0, 1, 0, 3, {LANE('F'), LANE('L'), LANE_WILD} },
+     [MOVE_BONEMERANG] = { GK_AIRHOCKEY, BLAST_PLUS, 2, 0, 1, 0, 2, {LANE('Q'), LANE('F')} },
+@@ -230,7 +230,7 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_PAIN_SPLIT] = { GK_NONE, BLAST_PLUS, 1, 0, 1, 0, 0, {0} },  // removed (review)
+     [MOVE_SACRED_FIRE] = { GK_GOLEMHIT, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('S')} },
+     [MOVE_MAGNITUDE] = { GK_SHOCKWAVE, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('Q')} },
+-    [MOVE_DYNAMIC_PUNCH] = { GK_FIREHIT, BLAST_PLUS, 1, 0, 1, GF_SLOW, 1, {LANE('P')} },
++    [MOVE_DYNAMIC_PUNCH] = { GK_FIREHIT, BLAST_PLUS, 1, 0, 1, GF_SLOW | GF_PUSH, 1, {LANE('P')} },
+     [MOVE_MEGAHORN] = { GK_DASH, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('X')} },
+     [MOVE_DRAGON_BREATH] = { GK_CONE, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('C'), LANE('S')} },
+     [MOVE_BATON_PASS] = { GK_BATON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('T'), LANE_WILD} },
+@@ -240,7 +240,7 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_SWEET_SCENT] = { GK_STATS, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('G'), LANE('N'), LANE_WILD} },
+     [MOVE_IRON_TAIL] = { GK_WIDESWORD, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('L')} },
+     [MOVE_METAL_CLAW] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('U'), LANE('H'), LANE_WILD} },
+-    [MOVE_VITAL_THROW] = { GK_AIRHOCKEY, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('K'), LANE('T')} },
++    [MOVE_VITAL_THROW] = { GK_AIRHOCKEY, BLAST_PLUS, 1, 0, 1, GF_THROW, 2, {LANE('K'), LANE('T')} },
+     [MOVE_MORNING_SUN] = { GK_SELF, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('S'), LANE('Y')} },
+     [MOVE_SYNTHESIS] = { GK_SELF, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('G'), LANE('Y')} },
+     [MOVE_MOONLIGHT] = { GK_SELF, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('Y'), LANE('N')} },
+@@ -257,7 +257,7 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_SHADOW_BALL] = { GK_BALL, BLAST_PLUS, 1, 0, 1, GF_FAST, 1, {LANE('N')} },
+     [MOVE_FUTURE_SIGHT] = { GK_DELAYED, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('M')} },
+     [MOVE_ROCK_SMASH] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('K'), LANE('L'), LANE_WILD} },
+-    [MOVE_WHIRLPOOL] = { GK_TORNADO, BLAST_PLUS, 1, 0, 1, GF_HOLD, 2, {LANE('B'), LANE('R')} },
++    [MOVE_WHIRLPOOL] = { GK_TORNADO, BLAST_PLUS, 1, 0, 1, GF_HOLD | GF_PULL, 2, {LANE('B'), LANE('R')} },
+     [MOVE_BEAT_UP] = { GK_VULCAN, BLAST_PLUS, HITS_PARTY, 0, 1, 0, 2, {LANE('N'), LANE('Y')} },
+     [MOVE_FAKE_OUT] = { GK_FIREHIT, BLAST_PLUS, 1, 0, 1, GF_FAST, 3, {LANE('A'), LANE('N'), LANE_WILD} },
+     [MOVE_UPROAR] = { GK_NONE, BLAST_PLUS, 1, 0, 1, 0, 0, {0} },  // removed (review)
+@@ -271,7 +271,7 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_WILL_O_WISP] = { GK_BALL, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('O'), LANE('S')} },
+     [MOVE_MEMENTO] = { GK_STATUS, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('E'), LANE('Y')} },
+     [MOVE_FACADE] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('E'), LANE('O')} },
+-    [MOVE_FOCUS_PUNCH] = { GK_SWORD, BLAST_PLUS, 1, 48, 1, 0, 1, {LANE('P')} },
++    [MOVE_FOCUS_PUNCH] = { GK_SWORD, BLAST_PLUS, 1, 48, 1, GF_PUSH, 1, {LANE('P')} },
+     [MOVE_SMELLING_SALT] = { GK_NONE, BLAST_PLUS, 1, 0, 1, 0, 0, {0} },  // removed (review)
+     [MOVE_FOLLOW_ME] = { GK_NONE, BLAST_PLUS, 1, 0, 1, 0, 0, {0} },  // removed (review)
+     [MOVE_NATURE_POWER] = { GK_CALL, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE_WILD} },
+@@ -324,7 +324,7 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_AIR_CUTTER] = { GK_WAVE, BLAST_PLUS, 1, 0, 3, GF_FAST, 2, {LANE('W'), LANE('U')} },
+     [MOVE_OVERHEAT] = { GK_BOMB, BLAST_SQUARE, 1, 0, 1, 0, 1, {LANE('X')} },
+     [MOVE_ODOR_SLEUTH] = { GK_NONE, BLAST_PLUS, 1, 0, 1, 0, 0, {0} },  // removed (review)
+-    [MOVE_ROCK_TOMB] = { GK_BOMB, BLAST_SINGLE, 1, 0, 1, GF_HOLD, 2, {LANE('Q'), LANE('T')} },
++    [MOVE_ROCK_TOMB] = { GK_BOMB, BLAST_PLUS, 1, 0, 1, GF_HOLD, 2, {LANE('Q'), LANE('T')} },
+     [MOVE_SILVER_WIND] = { GK_SPREADER, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('W')} },
+     [MOVE_METAL_SOUND] = { GK_STATS, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('V'), LANE('L')} },
+     [MOVE_GRASS_WHISTLE] = { GK_BALL, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('Z'), LANE('G'), LANE_WILD} },
+@@ -334,8 +334,8 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_SIGNAL_BEAM] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('Z'), LANE('M')} },
+     [MOVE_SHADOW_PUNCH] = { GK_LOCKON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('P'), LANE('N')} },
+     [MOVE_EXTRASENSORY] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('M')} },
+-    [MOVE_SKY_UPPERCUT] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('P')} },
+-    [MOVE_SAND_TOMB] = { GK_TORNADO, BLAST_PLUS, 1, 0, 1, GF_HOLD, 2, {LANE('B'), LANE('Q')} },
++    [MOVE_SKY_UPPERCUT] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, GF_PUSH, 1, {LANE('P')} },
++    [MOVE_SAND_TOMB] = { GK_TORNADO, BLAST_PLUS, 1, 0, 1, GF_HOLD | GF_PULL, 2, {LANE('B'), LANE('Q')} },
+     [MOVE_SHEER_COLD] = { GK_NONE, BLAST_PLUS, 1, 0, 1, 0, 0, {0} },  // removed (review)
+     [MOVE_MUDDY_WATER] = { GK_LIFESWORD, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('R')} },
+     [MOVE_BULLET_SEED] = { GK_VULCAN, BLAST_PLUS, HITS_2_TO_5, 0, 1, 0, 3, {LANE('G'), LANE('F'), LANE_WILD} },
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index 7ea048f..add5b38 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -19,6 +19,11 @@
+ #include "string_util.h"
+ #include "constants/characters.h"
+ #include "data.h"
++#include "battle_setup.h"
++#include "event_data.h"
++#include "constants/flags.h"
++#include "constants/opponents.h"
++#include "pkbn/folder.h"
+ 
+ #ifdef PORTABLE
+ #include <stdio.h>
+@@ -329,6 +334,125 @@ u8 Navi_ProgramsInUse(u8 prog)
+ 
+ // ---- Chip pack, candy (POC-10) ------------------------------------------------------------------------------
+ 
++// ---- POC-26: codes unlock as you go (T3/K1) and lean toward your folder's (T2) -------------------------------------
++// The order the codes open in (TUNE): a greedy cover of the chips that early Hoenn Pokémon learn by level 25, so the
++// first six already fit three in four of them (computed from move_table.c and the level-up learnsets).
++static const char sCodeOrder[] = "AVLHGTQKYZONFUSMCEXRWPBIDJ";
++#define CODES_START 6
++#define CODES_PER_STEP 2
++static const u16 sRivalBattles[][6] = {
++    { TRAINER_BRENDAN_ROUTE_103_MUDKIP, TRAINER_BRENDAN_ROUTE_103_TREECKO, TRAINER_BRENDAN_ROUTE_103_TORCHIC,
++      TRAINER_MAY_ROUTE_103_MUDKIP, TRAINER_MAY_ROUTE_103_TREECKO, TRAINER_MAY_ROUTE_103_TORCHIC },
++    { TRAINER_BRENDAN_RUSTBORO_MUDKIP, TRAINER_BRENDAN_RUSTBORO_TREECKO, TRAINER_BRENDAN_RUSTBORO_TORCHIC,
++      TRAINER_MAY_RUSTBORO_MUDKIP, TRAINER_MAY_RUSTBORO_TREECKO, TRAINER_MAY_RUSTBORO_TORCHIC },
++    { TRAINER_BRENDAN_ROUTE_110_MUDKIP, TRAINER_BRENDAN_ROUTE_110_TREECKO, TRAINER_BRENDAN_ROUTE_110_TORCHIC,
++      TRAINER_MAY_ROUTE_110_MUDKIP, TRAINER_MAY_ROUTE_110_TREECKO, TRAINER_MAY_ROUTE_110_TORCHIC },
++    { TRAINER_BRENDAN_ROUTE_119_MUDKIP, TRAINER_BRENDAN_ROUTE_119_TREECKO, TRAINER_BRENDAN_ROUTE_119_TORCHIC,
++      TRAINER_MAY_ROUTE_119_MUDKIP, TRAINER_MAY_ROUTE_119_TREECKO, TRAINER_MAY_ROUTE_119_TORCHIC },
++    { TRAINER_BRENDAN_LILYCOVE_MUDKIP, TRAINER_BRENDAN_LILYCOVE_TREECKO, TRAINER_BRENDAN_LILYCOVE_TORCHIC,
++      TRAINER_MAY_LILYCOVE_MUDKIP, TRAINER_MAY_LILYCOVE_TREECKO, TRAINER_MAY_LILYCOVE_TORCHIC },
++};
++
++u8 PkbnCode_UnlockedCount(void)
++{
++    s32 steps = 0, i, k, n;
++    if (getenv("PKBN_CODES_ALL") != NULL)
++        return sizeof(sCodeOrder) - 1;
++    for (i = FLAG_BADGE01_GET; i <= FLAG_BADGE08_GET; i++)
++        steps += FlagGet(i) ? 1 : 0;
++    for (i = 0; i < (s32)ARRAY_COUNT(sRivalBattles); i++)
++        for (k = 0; k < 6; k++)
++            if (HasTrainerBeenFought(sRivalBattles[i][k]))
++            {
++                steps++;
++                break;
++            }
++    n = CODES_START + CODES_PER_STEP * steps;
++    return n > (s32)sizeof(sCodeOrder) - 1 ? sizeof(sCodeOrder) - 1 : n;
++}
++
++bool8 PkbnCode_Unlocked(u8 letter)
++{
++    s32 i, n;
++    if (letter == LETTER_WILD)
++        return TRUE;
++    n = PkbnCode_UnlockedCount();
++    for (i = 0; i < n; i++)
++        if (sCodeOrder[i] - 'A' == letter)
++            return TRUE;
++    return FALSE;
++}
++
++// How many chips of this code your folder has: the equipped folder, or the whole pack while the folder is auto-built.
++static u32 FolderCodeCount(u8 letter)
++{
++    u16 moves[FOLDER_MAX];
++    u8 letters[FOLDER_MAX], n = PkbnFolderEdit_Get(moves, letters), i;
++    u32 c = 0;
++    if (n > 0)
++    {
++        for (i = 0; i < n; i++)
++            c += letters[i] == letter;
++        return c;
++    }
++    {
++        u16 mv;
++        for (mv = 1; mv < MOVES_COUNT; mv++)
++            c += sSave.pack[mv][letter];
++    }
++    return c;
++}
++
++// A move none of whose codes is unlocked yet takes one of the unlocked codes instead, the same one every time for that
++// move (so its copies chain with each other). TUNE: Khaled's K1 said "*", but with 6 codes open about a third of
++// early chips would have come as * and chained with anything.
++u8 PkbnCode_Substitute(u16 move)
++{
++    u8 n = PkbnCode_UnlockedCount();
++    return (u8)(sCodeOrder[(move * 7) % n] - 'A');
++}
++
++u8 PkbnCode_FitStable(u16 move, u8 letter)
++{
++    const struct PkbnMoveInfo *info;
++    u8 i;
++    if (move == MOVE_NONE || move >= MOVES_COUNT || PkbnCode_Unlocked(letter))
++        return letter;
++    info = &gPkbnMoveInfo[move];
++    for (i = 0; i < info->laneCount; i++)
++        if (PkbnCode_Unlocked(info->lanes[i]))
++            return info->lanes[i];
++    return PkbnCode_Substitute(move);
++}
++
++u8 PkbnCode_Fit(u16 move, u8 letter)
++{
++    const struct PkbnMoveInfo *info;
++    u8 allowed[4], na = 0, i;
++    if (move == MOVE_NONE || move >= MOVES_COUNT || letter == LETTER_WILD)
++        return letter;   // a * stays a * (rare drops, shiny catches)
++    info = &gPkbnMoveInfo[move];
++    for (i = 0; i < info->laneCount; i++)
++        if (PkbnCode_Unlocked(info->lanes[i]))
++            allowed[na++] = info->lanes[i];
++    if (na == 0)
++        allowed[na++] = PkbnCode_Substitute(move);   // every code it comes in is still locked
++    if (na > 1 && (Random() & 1))
++    {
++        // T2: the allowed code your folder already has the most of
++        u8 best = allowed[0];
++        u32 bestN = FolderCodeCount(best);
++        for (i = 1; i < na; i++)
++            if (FolderCodeCount(allowed[i]) > bestN)
++                bestN = FolderCodeCount(allowed[i]), best = allowed[i];
++        if (bestN > 0)
++            return best;
++    }
++    if (letter == LETTER_WILD || PkbnCode_Unlocked(letter))
++        return letter;
++    return allowed[Random() % na];
++}
++
+ u8 PkbnPack_Get(u16 move, u8 letter)
+ {
+     return (move < MOVES_COUNT && letter < PACK_LETTERS) ? sSave.pack[move][letter] : 0;
+@@ -372,7 +496,7 @@ static void GrantLearned(u16 move)
+     {
+         u8 k, n = gPkbnMoveInfo[move].laneCount ? gPkbnMoveInfo[move].laneCount : 1;
+         for (k = 0; k < LEARN_COPIES; k++)
+-            PkbnPack_Add(move, gPkbnMoveInfo[move].lanes[k % n], 1);
++            PkbnPack_Add(move, PkbnCode_Fit(move, gPkbnMoveInfo[move].lanes[k % n]), 1);   // POC-26
+     }
+ }
+ 
+@@ -467,7 +591,7 @@ void PkbnPack_GrantTM(u16 item, u16 count)
+     move = ItemIdToBattleMoveId(item);
+     if (!PkbnFolder_MoveIsChip(move))
+         return;
+-    PkbnPack_Add(move, gPkbnMoveInfo[move].lanes[0], 2 * count);
++    PkbnPack_Add(move, PkbnCode_Fit(move, gPkbnMoveInfo[move].lanes[0]), 2 * count);   // POC-26
+     printf("[pkbn] chip grant: TM/HM item %u -> move %u x%u\n", item, move, 2 * count);
+ }
+ 
+@@ -482,11 +606,11 @@ void PkbnPack_GrantRelearned(u16 move)
+     for (i = 0; i < info->laneCount; i++)
+         if (PkbnPack_Get(move, info->lanes[i]) == 0)
+         {
+-            PkbnPack_Add(move, info->lanes[i], 1);
++            PkbnPack_Add(move, PkbnCode_Fit(move, info->lanes[i]), 1);
+             printf("[pkbn] chip grant: relearned move %u code %c\n", move, PkbnFolder_LetterChar(info->lanes[i]));
+             return;
+         }
+-    PkbnPack_Add(move, info->lanes[0], 1);
++    PkbnPack_Add(move, PkbnCode_Fit(move, info->lanes[0]), 1);
+ }
+ 
+ // Releasing a Pokémon: 1 candy of each of its types, +1 at level 30 or more (design 10 §10.1).
+@@ -531,7 +655,7 @@ bool8 PkbnPack_GrantHiddenData(u8 *nameOut)
+         return FALSE;
+     mv = cand[Random() % n];
+     info = &gPkbnMoveInfo[mv];
+-    letter = info->lanes[Random() % info->laneCount];
++    letter = PkbnCode_Fit(mv, info->lanes[Random() % info->laneCount]);   // POC-26
+     PkbnPack_Add(mv, letter, 1);
+     printf("[pkbn] chip grant: hidden data move %u code %c (wild species %u)\n", mv, PkbnFolder_LetterChar(letter), species);
+     if (nameOut != NULL)
+@@ -559,7 +683,7 @@ void PkbnPack_GrantEggMoves(struct Pokemon *mon)
+         for (m = 0; m < MAX_MON_MOVES; m++)
+             if (GetMonData(mon, MON_DATA_MOVE1 + m) == gEggMoves[i] && PkbnFolder_MoveIsChip(gEggMoves[i]))
+             {
+-                PkbnPack_Add(gEggMoves[i], gPkbnMoveInfo[gEggMoves[i]].lanes[0], 1);
++                PkbnPack_Add(gEggMoves[i], PkbnCode_Fit(gEggMoves[i], gPkbnMoveInfo[gEggMoves[i]].lanes[0]), 1);
+                 printf("[pkbn] chip grant: egg move %u\n", gEggMoves[i]);
+             }
+ }
+diff --git a/src/pkbn/post_battle.c b/src/pkbn/post_battle.c
+index 7b586c8..6009f58 100644
+--- a/src/pkbn/post_battle.c
++++ b/src/pkbn/post_battle.c
+@@ -525,7 +525,10 @@ static u8 PickLanes(u16 move, u8 *out)
+     const struct PkbnMoveInfo *info = &gPkbnMoveInfo[move];
+     u8 i, n = 0;
+     for (i = 0; i < info->laneCount; i++)
+-        out[n++] = info->lanes[i];
++        if (PkbnCode_Unlocked(info->lanes[i]))   // POC-26: only the codes unlocked so far
++            out[n++] = info->lanes[i];
++    if (n == 0 && info->laneCount)
++        out[n++] = PkbnCode_Substitute(move);
+     return n;
+ }
+ 
+diff --git a/src/pkbn/selftest.c b/src/pkbn/selftest.c
+index 097d648..6f562e3 100644
+--- a/src/pkbn/selftest.c
++++ b/src/pkbn/selftest.c
+@@ -76,6 +76,14 @@ static void WrappedOverlay(u16 *fb)
+         DumpFrame(fb, d.frame);
+     else if (sDumpDir != NULL && lesson != sLastLesson && lesson != 0)
+         DumpFrame(fb, 90000 + sLessonShots++);   // POC-18: each lesson line once (the battle is frozen on it)
++    if (sDumpDir != NULL && getenv("PKBN_TEST_REDRAW") != NULL && d.state == PKBN_GRID_CUSTOM)
++    {
++        // POC-26: the Custom screen just before and after the redraw (the battle frame doesn't move while it's open)
++        static u32 sCustomTicks;
++        sCustomTicks++;
++        if (sCustomTicks == 40 || sCustomTicks == 60)
++            DumpFrame(fb, 91000 + sCustomTicks);
++    }
+     sLastState = d.state;
+     sLastLesson = lesson;
+ }
+@@ -128,6 +136,19 @@ static void Autopilot(void)
+     switch (d.state)
+     {
+     case PKBN_GRID_CUSTOM:
++        if (getenv("PKBN_TEST_REDRAW") != NULL && PkbnGrid_RedrawAvailable())
++        {
++            // POC-26: the one new hand a battle, at the first Custom (after 50 ticks, so frame dumps show both hands)
++            static u32 sWaitR;
++            pressed = ++sWaitR > 50 ? R_BUTTON : 0;
++            break;
++        }
++        if (getenv("PKBN_TEST_REDRAW") != NULL)
++        {
++            static u32 sWaitAfter;
++            if (++sWaitAfter < 20)
++                break;   // hold the new hand on screen for the dump
++        }
+         if (getenv("PKBN_BOT") != NULL && strcmp(getenv("PKBN_BOT"), "buster") == 0)
+         {
+             pressed = START_BUTTON;   // POC-19: the buster-only bot takes no chips
+@@ -202,7 +223,21 @@ static void Autopilot(void)
+         if (d.cursorSelectable && !d.cursorIsWild)
+             pressed = A_BUTTON;
+         else if (d.anySelectable)
+-            pressed = PkbnGrid_CursorKeyToward(PkbnGrid_CursorNext());
++        {
++            // POC-26: head for the first selectable chip (stepping to the next cell can circle past a chip that only
++            // became selectable mid-chain, e.g. a teammate's chip joining it)
++            u8 k, n = d.handCount + 2, target = PkbnGrid_CursorNext();   // hand + wildcard, item row, OK
++            for (k = 1; k <= n; k++)
++            {
++                u8 at = (d.cursor + k) % n;
++                if (at + 1 < d.handCount && PkbnGrid_HandSelectable(at))
++                {
++                    target = at;   // the next selectable chip after the cursor, as the old cell-by-cell walk found it
++                    break;
++                }
++            }
++            pressed = PkbnGrid_CursorKeyToward(target);
++        }
+         else
+             pressed = START_BUTTON;
+         break;
+-- 
+2.43.0
+

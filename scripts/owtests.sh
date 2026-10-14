@@ -55,8 +55,9 @@ bt() {   # name spec expect [extra env...]
 bt milestone_10 "283:14:33/45,288:5:33/45" "10 SPECIES CAUGHT! GOT A PP UP" PKBN_TEST_DEX_CAUGHT=9 PKBN_TEST_BALLS=4:5 PKBN_TEST_THROW=5
 bt milestone_50 "283:14:33/45,288:5:33/45" "50 SPECIES CAUGHT! GOT A PP MAX" PKBN_TEST_DEX_CAUGHT=49 PKBN_TEST_BALLS=4:5 PKBN_TEST_THROW=5
 bt shiny_catch "283:14:33/45,288:5:33/45" "IT'S SHINY! GOT 2 \* CHIPS" PKBN_TEST_SHINY=1 PKBN_TEST_BALLS=4:5 PKBN_TEST_THROW=5
-# the folder used up with nothing usable in hand -> a Struggle chip (status-only 18-chip folder vs Wailmer)
-bt struggle "283:14:45/193/300/182,313:20:150" "folder used up: STRUGGLE chip" PKBN_TEST_PACK_LEARNED=1 \
+# the folder used up with nothing usable in hand -> a Struggle chip (status-only 18-chip folder vs Wailmer; POC-26: Lv 40,
+# so the buster can't win before the folder runs out now that chains of one code use it up faster)
+bt struggle "283:14:45/193/300/182,313:40:150" "folder used up: STRUGGLE chip" PKBN_TEST_PACK_LEARNED=1 \
     PKBN_TEST_PACK="45:A:5,193:A:5,300:A:5,182:A:5,156:A:5,104:A:5"
 # POC-13: rain on the map is rain in battle (Route 120, field weather set to rain)
 run weather_rain 0:35:10:10 "W200,V3,W30,G288:20,W200,Q" "battle weather 5 (permanent)" PKBN_OW_AUTOBATTLE=1
@@ -100,8 +101,9 @@ bt team_pa "285:60:57/89/58/182|279:60:348/337/89/98,288:3" "team program advanc
 # POC-14: battle replay - record a battle, replay it, and the fight log must be the same line for line
 bt replay_record "285:60:57/89/58/182|279:60:348/337/89/98,288:3" "replay saved" PKBN_BOT=smart PKBN_TEST_TRAINER=271
 bt replay_play "285:60:57/89/58/182|279:60:348/337/89/98,288:3" "replay: " PKBN_TEST_REPLAY=1
-if diff <(grep -a '^\[pkbn f[0-9]*\]' "$OUT/replay_record/log.txt" | grep -v ' f0\]' | grep -v busting) \
-        <(grep -a '^\[pkbn f[0-9]*\]' "$OUT/replay_play/log.txt" | grep -v ' f0\]' | grep -v busting) > /dev/null; then
+# (bond lines are left out: Bond is saved progress, which a replay never touches - BondEvent skips it)
+if diff <(grep -a '^\[pkbn f[0-9]*\]' "$OUT/replay_record/log.txt" | grep -v ' f0\]' | grep -v busting | grep -v '\] bond ') \
+        <(grep -a '^\[pkbn f[0-9]*\]' "$OUT/replay_play/log.txt" | grep -v ' f0\]' | grep -v busting | grep -v '\] bond ') > /dev/null; then
   echo "PASS replay_identical"; else echo "FAIL replay_identical (the replay played out differently)"; fi
 rm -f pkbn_replay.bin
 # POC-15: the chip gallery plays every chip on a fixed stage (PKBN_DUMP_DIR + tools/chip_gallery_sheet.py for pictures)
@@ -118,7 +120,9 @@ bt shield_program "285:30:57/89/58/182,288:3:45" "B+back program 1" PKBN_TEST_NC
 bt omega_kyogre "257:90:299/24/7/89|282:90:94/85/247/104,74:5" "KYOGRE, tier 5, 1 at once, 0 s, rules 3" PKBN_BOT=smart PKBN_TEST_CHALLENGE=21
 # POC-17d: the place shapes the field - Fiery Path is lava; Route 120's grass burns away under Combusken's Ember
 run field_lava 24:14:10:10 "W200,G288:20,W60,P,W200,P,W400,P,W10,Q" "place field: map 180e" PKBN_OW_AUTOBATTLE=1
-run field_grass 0:35:10:10 "W200,G288:20,W60,P,W200,P,W1200,P,W10,Q" "panel react: type 10" PKBN_OW_AUTOBATTLE=1
+# (POC-26: Combusken alone with Ember and Growl, so the first chips are sure to include a Fire one - with Wingull's chips
+# chaining in and codes unlocking as you go, the old party could win before any Ember)
+OWPARTY="281:20:52/45" run field_grass 0:35:10:10 "W200,G288:20,W60,P,W200,P,W1200,P,W10,Q" "panel react: type 10" PKBN_OW_AUTOBATTLE=1
 # POC-18: Birch's rescue on the grid teaches the basics (the bot follows the lesson); the first wild battle with balls
 # teaches the ball slot
 bt rescue_lesson "283:5:33/45" "lesson 1 done" PKBN_TEST_FIRST_BATTLE=1 PKBN_TEST_TUTORIAL=1

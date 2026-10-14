@@ -68,7 +68,7 @@ ATTACKS = {
  'KARATE_CHOP':   'SWORD',                    # high crit (effect)
  'DOUBLE_SLAP':   'SWORD hits=2-5',
  'COMET_PUNCH':   'SWORD hits=2-5',
- 'MEGA_PUNCH':    'FIREHIT slow',             # big fist from above; 85% acc = longer warning
+ 'MEGA_PUNCH':    'FIREHIT slow push',             # big fist from above; 85% acc = longer warning; POC-26 M4
  'PAY_DAY':       'CANNON',
  'FIRE_PUNCH':    'SWORD',
  'ICE_PUNCH':     'SWORD',
@@ -83,12 +83,12 @@ ATTACKS = {
  'WING_ATTACK':   'WIDESWORD',                # review
  'WHIRLWIND':     'STATUS',                   # blows the target to its back column (BN GoingRd "Push an enemy to the back")
  'FLY':           'BOMB plus slow invuln',    # review: slow bomb, immune while throwing, long recovery
- 'BIND':          'SWORD hold',
+ 'BIND':          'LONGSWORD hold pull',       # POC-26 M1: lashes out two panels and drags the target in
  'SLAM':          'LONGSWORD',
  'VINE_WHIP':     'LONGSWORD',                # vines reach 2
  'STOMP':         'SWORD',
  'DOUBLE_KICK':   'LINE3 hits=2',             # review: 3 columns
- 'MEGA_KICK':     'LINE3',                    # review
+ 'MEGA_KICK':     'LINE3 push',                    # review; POC-26 M4
  'JUMP_KICK':     'LINE3',                    # review; Gen 3 crash damage if it hits nothing
  'ROLLING_KICK':  'LINE3',                    # review
  'SAND_ATTACK':   'STATS',
@@ -97,8 +97,8 @@ ATTACKS = {
  'FURY_ATTACK':   'LONGSWORD hits=2-5',
  'HORN_DRILL':    'NONE',                     # removed (OHKO)
  'TACKLE':        'SWORD',
- 'BODY_SLAM':     'LONGSWORD',
- 'WRAP':          'SWORD hold',
+ 'BODY_SLAM':     'LONGSWORD push',            # POC-26 M4
+ 'WRAP':          'LONGSWORD hold pull',       # POC-26 M1: lashes out two panels and drags the target in
  'TAKE_DOWN':     'DASH',                     # STAMPEDE's charge; recoil from effect
  'THRASH':        'LIFESWORD',                # review: Life Sword 2x3
  'DOUBLE_EDGE':   'DASH',
@@ -129,10 +129,10 @@ ATTACKS = {
  'HYPER_BEAM':    'CANNON recharge',          # review: no chips at the next Custom
  'PECK':          'SWORD',
  'DRILL_PECK':    'LONGSWORD push',           # BN DrilArm "Knocks enmy 2sq away"
- 'SUBMISSION':    'SWORD',
+ 'SUBMISSION':    'SWORD throw',               # POC-26 M3
  'LOW_KICK':      'WIDESWORD',                # review
  'COUNTER':       'SWORD',                    # Gen 3: 2x the physical damage taken (here: in the last 2 seconds)
- 'SEISMIC_TOSS':  'SWORD',                    # level = damage (effect)
+ 'SEISMIC_TOSS':  'SWORD throw',                    # level = damage (effect); POC-26 M3
  'STRENGTH':      'SWORD push',               # the boulder-pushing move pushes
  'ABSORB':        'CANNON',
  'MEGA_DRAIN':    'CANNON',
@@ -146,7 +146,7 @@ ATTACKS = {
  'PETAL_DANCE':   'LIFESWORD',                # rampage family = Thrash
  'STRING_SHOT':   'STATS',
  'DRAGON_RAGE':   'CANNON',                   # fixed 40
- 'FIRE_SPIN':     'AIRHOCKEY hold',           # review: Air Hockey
+ 'FIRE_SPIN':     'AIRHOCKEY hold pull',           # review: Air Hockey; POC-26 M1
  'THUNDER_SHOCK': 'CANNON',
  'THUNDERBOLT':   'CANNON',
  'THUNDER_WAVE':  'STATUS',                   # review: always lands, through Barrier
@@ -191,11 +191,11 @@ ATTACKS = {
  'BONE_CLUB':     'LONGSWORD',
  'FIRE_BLAST':    'BOMB x',                   # review: centre + the 4 diagonals (star)
  'WATERFALL':     'DASH',                     # review: whole row
- 'CLAMP':         'WIDESWORD hold',           # review
+ 'CLAMP':         'WIDESWORD hold',           # review (POC-26: no pull - it only reaches the next column anyway)
  'SWIFT':         'LOCKON',
  'SKULL_BASH':    'DASH charge=60',           # Gen 3 charges a turn
  'SPIKE_CANNON':  'VULCAN hits=2-5',
- 'CONSTRICT':     'SWORD',
+ 'CONSTRICT':     'LONGSWORD pull',            # POC-26 M1: lashes out two panels and drags the target in
  'AMNESIA':       'STATS',
  'KINESIS':       'STATS',
  'SOFT_BOILED':   'SELF',
@@ -215,7 +215,7 @@ ATTACKS = {
  'PSYWAVE':       'WAVE',
  'SPLASH':        'NOTHING',
  'ACID_ARMOR':    'STATS',
- 'CRABHAMMER':    'WIDESWORD',                # review
+ 'CRABHAMMER':    'WIDESWORD push',                # review; POC-26 M4
  'EXPLOSION':     'FIELD',
  'FURY_SWIPES':   'SWORD hits=2-5',
  'BONEMERANG':    'AIRHOCKEY hits=2',         # review: Air Hockey
@@ -286,7 +286,7 @@ ATTACKS = {
  'PAIN_SPLIT':    'NONE',                     # removed
  'SACRED_FIRE':   'GOLEMHIT',                 # a pillar of fire on the target's column
  'MAGNITUDE':     'SHOCKWAVE',                # random power 10-150 (effect)
- 'DYNAMIC_PUNCH': 'FIREHIT slow',             # 50% accuracy: long warning, guaranteed confusion
+ 'DYNAMIC_PUNCH': 'FIREHIT slow push',             # 50% accuracy: long warning, guaranteed confusion; POC-26 M4
  'MEGAHORN':      'DASH',
  'DRAGON_BREATH': 'CONE',                     # review
  'BATON_PASS':    'BATON',
@@ -296,7 +296,7 @@ ATTACKS = {
  'SWEET_SCENT':   'STATS',
  'IRON_TAIL':     'WIDESWORD',                # review
  'METAL_CLAW':    'SWORD',
- 'VITAL_THROW':   'AIRHOCKEY',                # review
+ 'VITAL_THROW':   'AIRHOCKEY throw',                # review; POC-26 M3
  'MORNING_SUN':   'SELF',
  'SYNTHESIS':     'SELF',
  'MOONLIGHT':     'SELF',
@@ -313,7 +313,7 @@ ATTACKS = {
  'SHADOW_BALL':   'BALL fast',
  'FUTURE_SIGHT':  'DELAYED',                  # review
  'ROCK_SMASH':    'SWORD',
- 'WHIRLPOOL':     'TORNADO hold',
+ 'WHIRLPOOL':     'TORNADO hold pull',         # POC-26 M1
  'BEAT_UP':       'VULCAN hits=party',        # one hit per healthy party member (Gen 3)
  'FAKE_OUT':      'FIREHIT fast',             # priority; flinches; only right after coming in
  'UPROAR':        'NONE',                     # removed
@@ -327,7 +327,7 @@ ATTACKS = {
  'WILL_O_WISP':   'BALL',                     # 75% accuracy
  'MEMENTO':       'STATUS',                   # user faints; foe Atk/Sp.Atk -2
  'FACADE':        'SWORD',
- 'FOCUS_PUNCH':   'SWORD charge=48',          # Gen 3: fails if the user is hit while focusing
+ 'FOCUS_PUNCH':   'SWORD charge=48 push',          # Gen 3: fails if the user is hit while focusing; POC-26 M4
  'SMELLING_SALT': 'NONE',                     # removed
  'FOLLOW_ME':     'NONE',                     # removed
  'NATURE_POWER':  'CALL',
@@ -380,7 +380,7 @@ ATTACKS = {
  'AIR_CUTTER':    'WAVE rows=3 fast',
  'OVERHEAT':      'BOMB square',
  'ODOR_SLEUTH':   'NONE',                     # removed
- 'ROCK_TOMB':     'BOMB single hold',         # rocks pin the target
+ 'ROCK_TOMB':     'BOMB plus hold',         # rocks pin the target; POC-26 R1
  'SILVER_WIND':   'SPREADER',                 # review
  'METAL_SOUND':   'STATS',
  'GRASS_WHISTLE': 'BALL',
@@ -390,8 +390,8 @@ ATTACKS = {
  'SIGNAL_BEAM':   'CANNON',
  'SHADOW_PUNCH':  'LOCKON',
  'EXTRASENSORY':  'CANNON',
- 'SKY_UPPERCUT':  'SWORD',                    # also hits a Pokemon in the air (Fly / Bounce)
- 'SAND_TOMB':     'TORNADO hold',
+ 'SKY_UPPERCUT':  'SWORD push',                    # also hits a Pokemon in the air (Fly / Bounce); POC-26 M4
+ 'SAND_TOMB':     'TORNADO hold pull',         # POC-26 M1
  'SHEER_COLD':    'NONE',                     # removed (OHKO)
  'MUDDY_WATER':   'LIFESWORD',                # review
  'BULLET_SEED':   'VULCAN hits=2-5',

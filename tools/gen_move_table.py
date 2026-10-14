@@ -15,7 +15,7 @@ order = [n[5:] for n in re.findall(r'\[(MOVE_\w+)\]\s*=\s*\{', bm) if n != 'MOVE
 
 PATTERNS = {'plus': 'BLAST_PLUS', 'x': 'BLAST_X', 'square': 'BLAST_SQUARE', 'single': 'BLAST_SINGLE'}
 FLAGS = {'slow': 'GF_SLOW', 'fast': 'GF_FAST', 'invuln': 'GF_INVULN', 'hold': 'GF_HOLD', 'push': 'GF_PUSH',
-         'recharge': 'GF_RECHARGE'}
+         'recharge': 'GF_RECHARGE', 'pull': 'GF_PULL', 'throw': 'GF_THROW'}
 
 def parse_attack(spec):
     toks = spec.split()
@@ -86,7 +86,9 @@ h += ['    GK_COUNT', '};', '',
       '#define GF_INVULN   (1 << 2)',
       '#define GF_HOLD     (1 << 3)',
       '#define GF_PUSH     (1 << 4)',
-      '#define GF_RECHARGE (1 << 5)', '',
+      '#define GF_RECHARGE (1 << 5)',
+      '#define GF_PULL     (1 << 6)   // POC-26: drags the target one panel toward the user',
+      '#define GF_THROW    (1 << 7)   // POC-26: drops the target in its back column on another row', '',
       "#define LANE(c)   ((c) - 'A')",
       '#define LANE_WILD 26', '',
       'struct PkbnMoveInfo',
