@@ -5,7 +5,7 @@
 # effects from its Emerald battle animation (POC-15), hit sounds and cries.
 #   bash scripts/chip_gallery_video.sh [out.mp4] [moves: all | 52,85,...] [side: player | enemy] [frames per move]
 # Examples:
-#   bash scripts/chip_gallery_video.sh                                   # all 312 chips, ~7 minutes
+#   bash scripts/chip_gallery_video.sh                                   # all 358 chips, ~8 minutes
 #   bash scripts/chip_gallery_video.sh fire.mp4 52,53,126,172,221,257    # just these move numbers
 #   bash scripts/chip_gallery_video.sh enemy.mp4 all enemy               # the foe uses them on you (telegraphs)
 set -eu

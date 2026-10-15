@@ -38,9 +38,9 @@ LANES = {
 }
 
 MOVES = {
- 'POUND':        'Lp Fs Px *',   # contest: Pound starts Double Slap / Slam
+ 'POUND':        'Lp Fs Px * Ax',   # contest: Pound starts Double Slap / Slam  # POC-31 L4a: +A for the ladder of WHISMUR
  'KARATE_CHOP':  'Kp Up',        # high-crit: pays off Focus Energy
- 'DOUBLE_SLAP':  'Fp Px',
+ 'DOUBLE_SLAP':  'Fp Px Lx',  # POC-31 L4a: +L for the ladder of SKITTY
  'COMET_PUNCH':  'Fp Pp',
  'MEGA_PUNCH':   'Pp Lp',
  'PAY_DAY':      'Nx *',
@@ -65,18 +65,18 @@ MOVES = {
  'JUMP_KICK':    'Kp Wx',
  'ROLLING_KICK': 'Kp Ax',
  'SAND_ATTACK':  'Qs Ns *',
- 'HEADBUTT':     'Ap Hx',
+ 'HEADBUTT':     'Ap Hx Lx',  # POC-31 L4a: +L for the ladder of ZIGZAGOON
  'HORN_ATTACK':  'Lp Fs',        # contest: Horn Attack starts Fury Attack / Horn Drill
  'FURY_ATTACK':  'Fp Lx *',
  'TACKLE':       'Lp Hp Ax *',   # contest: follows Leer, Harden AND Defense Curl -> the glue move
- 'BODY_SLAM':    'Cs Lp',
+ 'BODY_SLAM':    'Cs Lp Ax',  # POC-31 L4a: +A for the ladder of AZURILL, CASTFORM
  'WRAP':         'Bs Fx *',
  'TAKE_DOWN':    'Hp',           # review: too weak for X; stays on H for STAMPEDE
  'THRASH':       'Xp',
  'DOUBLE_EDGE':  'Xp',
  'TAIL_WHIP':    'Ls Vx *',
  'POISON_STING': 'Os Fx *',
- 'TWINEEDLE':    'Fp Op',
+ 'TWINEEDLE':    'Fp Op Zx',  # POC-31 L4a: +Z for the ladder of VOLBEAT, WURMPLE
  'PIN_MISSILE':  'Fp Ax',
  'LEER':         'Ls Ns *',      # contest: Leer starts Scratch / Tackle / Bite
  'BITE':         'Np Ap',        # contest: follows Leer
@@ -176,7 +176,7 @@ MOVES = {
  'SKY_ATTACK':   'Wp',
  'TRANSFORM':    '*',
  'BUBBLE':       'Rs Ts *',
- 'DIZZY_PUNCH':  'Pp Zs',
+ 'DIZZY_PUNCH':  'Pp Zs Lx',  # POC-31 L4a: +L for the ladder of SPINDA
  'SPORE':        'Zs Gs',
  'FLASH':        'Ns Ss *',
  'PSYWAVE':      'Mp Ex',
@@ -193,7 +193,7 @@ MOVES = {
  'CONVERSION':   '*',
  'TRI_ATTACK':   'Sp Cp Ip',     # deliberate three-way bridge: burn / paralyse / freeze
  'SUPER_FANG':   'Np Ep',
- 'SLASH':        'Up Np',
+ 'SLASH':        'Up Np Lx',  # POC-31 L4a: +L for the ladder of KECLEON
  'SKETCH':       '*',
  'TRIPLE_KICK':  'Kp Fp',
  'THIEF':        'Np Ax *',
@@ -245,7 +245,7 @@ MOVES = {
  'MAGNITUDE':    'Qp',
  'DYNAMIC_PUNCH':'Pp',
  'MEGAHORN':     'Xp',
- 'DRAGON_BREATH':'Cs Sx',        # was D; paralysing breath
+ 'DRAGON_BREATH':'Cs Sx Ux',        # was D; paralysing breath  # POC-31 L4a: +U for the ladder of BAGON, LATIAS, LATIOS, RAYQUAZA, SWABLU
  'BATON_PASS':   'Ts *',
  'PURSUIT':      'Np Ap *',
  'RAPID_SPIN':   'Hx Tx *',
@@ -258,7 +258,7 @@ MOVES = {
  'MOONLIGHT':    'Ys Ns',
  'HIDDEN_POWER': '*',
  'CROSS_CHOP':   'Kp',
- 'TWISTER':      'Wp Rx *',      # review: W R * (leaves the old Dragon lane)
+ 'TWISTER':      'Wp Rx * Ux',      # review: W R * (leaves the old Dragon lane)  # POC-31 L4a: +U for the ladder of BAGON, LATIAS, LATIOS, RAYQUAZA, SWABLU
  'RAIN_DANCE':   '* Rs Cs Ds',   # a Dance (review: D = all Dance moves). Its ONE copy (5 PP) is * so it can open
                                  # both TSUNAMI (R) and STORM CALLER (C); letter order = copy order
  'SUNNY_DAY':    'Ss',
@@ -309,7 +309,7 @@ MOVES = {
  'ICE_BALL':     'Ip Fp',
  'NEEDLE_ARM':   'Gp Ap',
  'SLACK_OFF':    'Ys',
- 'HYPER_VOICE':  'Vp',
+ 'HYPER_VOICE':  'Vp Ax Fx',  # POC-31 L4a: +AF for the ladder of IGGLYBUFF, WHISMUR
  'POISON_FANG':  'Op Np',
  'CRUSH_CLAW':   'Lp Up',
  'BLAST_BURN':   'Xp',
@@ -322,13 +322,13 @@ MOVES = {
  'AIR_CUTTER':   'Wp Up',
  'OVERHEAT':     'Xp',
  'ROCK_TOMB':    'Qp Ts',
- 'SILVER_WIND':  'Wp',
+ 'SILVER_WIND':  'Wp Ox Gx Zx',  # POC-31 L4a: +OGZ for the ladder of CASCOON, ILLUMISE, NINCADA, NINJASK, SHEDINJA, SILCOON, SURSKIT, VOLBEAT
  'METAL_SOUND':  'Vs Ls',
  'GRASS_WHISTLE':'Zs Gs *',      # review: Z G *
  'TICKLE':       'Ls Ys *',
  'COSMIC_POWER': 'Hs Ms',
  'WATER_SPOUT':  'Rp',
- 'SIGNAL_BEAM':  'Zs Mp',
+ 'SIGNAL_BEAM':  'Zs Mp Gx Ox',  # POC-31 L4a: +GO for the ladder of HERACROSS, NINCADA, SHEDINJA
  'SHADOW_PUNCH': 'Pp Np',        # was J
  'EXTRASENSORY': 'Mp',
  'SKY_UPPERCUT': 'Pp',
@@ -357,6 +357,54 @@ MOVES = {
  'WATER_PULSE':  'Rp Zs',
  'DOOM_DESIRE':  'Mp',
  'PSYCHO_BOOST': 'Xp',
+
+ # POC-31: the Gen 4 moves. Codes by type; ladder codes (L4a) as x, from data/learnset_ladders.json
+ 'WAKE_UP_SLAP': 'Zp Kp',
+ 'HAMMER_ARM':   'Kp Pp',
+ 'BRINE':        'Rp Ex',
+ 'PLUCK':        'Wp Ax',
+ 'CLOSE_COMBAT': 'Kp Xp',
+ 'FLARE_BLITZ':  'Sp Xp',
+ 'FORCE_PALM':   'Kp Cx Lx',  # ladder: MEDITITE
+ 'POISON_JAB':   'Op Px',
+ 'NIGHT_SLASH':  'Np Up',
+ 'AQUA_TAIL':    'Rp Lx',
+ 'SEED_BOMB':    'Gp Fx',
+ 'AIR_SLASH':    'Wp Ax',
+ 'X_SCISSOR':    'Fp Up Gx Ox',  # ladder: NINJASK, PINSIR
+ 'BUG_BUZZ':     'Vp Lx Ox',  # ladder: CASCOON, ILLUMISE, SILCOON, SURSKIT
+ 'DRAGON_PULSE': 'Up Mx',
+ 'POWER_GEM':    'Qp Mx',
+ 'ENERGY_BALL':  'Gp Lx',
+ 'BRAVE_BIRD':   'Wp Xp',
+ 'EARTH_POWER':  'Qp Lx',  # ladder: BALTOY, GROUDON, TRAPINCH
+ 'GIGA_IMPACT':  'Xp',
+ 'BULLET_PUNCH': 'Pp Ap Hx',  # ladder: BELDUM
+ 'ICE_SHARD':    'Ip Ap',
+ 'SHADOW_CLAW':  'Np Up',
+ 'THUNDER_FANG': 'Cp Np',
+ 'ICE_FANG':     'Ip Np',  # ladder: SNORUNT
+ 'FIRE_FANG':    'Sp Np',
+ 'SHADOW_SNEAK': 'Np Ap',  # ladder: SHUPPET
+ 'MUD_BOMB':     'Qp Ns',
+ 'PSYCHO_CUT':   'Mp Up',
+ 'ZEN_HEADBUTT': 'Mp Hx',
+ 'MIRROR_SHOT':  'Hp Ns',
+ 'FLASH_CANNON': 'Hp Lx',
+ 'DISCHARGE':    'Cp',
+ 'LAVA_PLUME':   'Sp Ox',  # ladder: NUMEL, SLUGMA, TORKOAL
+ 'LEAF_STORM':   'Gp Xp',
+ 'CROSS_POISON': 'Op Up',  # ladder: ZUBAT
+ 'GUNK_SHOT':    'Op',
+ 'IRON_HEAD':    'Hp Ax',  # ladder: ARON, JIRACHI, MAWILE, REGISTEEL, SKARMORY
+ 'MAGNET_BOMB':  'Hp Cx',
+ 'STONE_EDGE':   'Qp Up',
+ 'BUG_BITE':     'Fp Np Zx',  # ladder: WURMPLE
+ 'CHARGE_BEAM':  'Cs Up',  # ladder: VOLTORB
+ 'AQUA_JET':     'Rp Ap',  # ladder: CARVANHA, PSYDUCK
+ 'HEAD_SMASH':   'Xp Qp',
+ 'DOUBLE_HIT':   'Fp Lx',
+ 'OMINOUS_WIND': 'Np Wx',
 }
 
 # Program Advances: an exact 3-move sequence in one chain becomes a brand-new move.

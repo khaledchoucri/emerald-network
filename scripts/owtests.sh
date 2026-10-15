@@ -97,7 +97,9 @@ bt challenge_deep_current "285:70:57/89/58/182|279:70:348/337/89/98,74:5" "net c
 # POC-14: Maxie & Tabitha with Steven as the partner (his Pokémon assist), and their team Program Advance
 bt steven_partner "285:45:57/89/58/182|279:45:348/337/89/98,288:3" "partner: STEVEN's" PKBN_BOT=smart \
     PKBN_TEST_TRAINER=734 PKBN_TEST_TRAINER_B=514 PKBN_TEST_PARTNER=1
-bt team_pa "285:60:57/89/58/182|279:60:348/337/89/98,288:3" "team program advance: TATE&LIZA" PKBN_BOT=smart PKBN_TEST_TRAINER=271
+# POC-31: Sceptile has Giga Drain instead of Leaf Blade (physical with the Gen 4 split, it no longer took Lunatone down
+# in time for the pair to form their Program Advance)
+bt team_pa "285:60:57/89/58/182|279:60:202/337/89/98,288:3" "team program advance: TATE&LIZA" PKBN_BOT=smart PKBN_TEST_TRAINER=271
 # POC-14: battle replay - record a battle, replay it, and the fight log must be the same line for line
 bt replay_record "285:60:57/89/58/182|279:60:348/337/89/98,288:3" "replay saved" PKBN_BOT=smart PKBN_TEST_TRAINER=271
 bt replay_play "285:60:57/89/58/182|279:60:348/337/89/98,288:3" "replay: " PKBN_TEST_REPLAY=1
@@ -107,7 +109,7 @@ if diff <(grep -a '^\[pkbn f[0-9]*\]' "$OUT/replay_record/log.txt" | grep -v ' f
   echo "PASS replay_identical"; else echo "FAIL replay_identical (the replay played out differently)"; fi
 rm -f pkbn_replay.bin
 # POC-15: the chip gallery plays every chip on a fixed stage (PKBN_DUMP_DIR + tools/chip_gallery_sheet.py for pictures)
-bt chip_gallery "151:50,143:100" "done: 312 moves" PKBN_GALLERY=all PKBN_GALLERY_FRAMES=2
+bt chip_gallery "151:50,143:100" "done: 358 moves" PKBN_GALLERY=all PKBN_GALLERY_FRAMES=2
 # POC-16c: FOLDER -> SELECT -> BUILD THIS FOLDER -> VS NEXT GYM (Oldale Town, START menu -> FOLDER)
 run folder_style 0:10:10:10 "W240,S,W30,D,W15,D,W15,A,W200,P,W10,Q" "folder style VS NEXT GYM" \
     PKBN_TEST_FOLDER_KEYS=".,.,.,.,.,.,.,.,.,.,E,.,.,.,.,.,D,.,.,.,.,.,A"

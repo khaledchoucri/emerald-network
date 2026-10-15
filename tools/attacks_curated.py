@@ -418,6 +418,54 @@ ATTACKS = {
  'WATER_PULSE':   'WAVE',
  'DOOM_DESIRE':   'DELAYED',                  # review (Future Sight family)
  'PSYCHO_BOOST':  'CANNON',
+
+ # POC-31: the Gen 4 moves (tools/new_moves_curated.py); kind and fx= (the BN6 effect drawn on impact in the type's colours) as on the New Moves and Ladders page (M4a)
+ 'WAKE_UP_SLAP':  'SWORD fx=HIT_STAR',             # a slap (blow); x2 on a sleeping target
+ 'HAMMER_ARM':    'GOLEMHIT fx=CRACK',             # a heavy fist on the target and the panels above and below
+ 'BRINE':         'CANNON fx=BUBBLE',              # x2 once the target is at half HP
+ 'PLUCK':         'SWORD fx=FANG',                 # a peck (stab)
+ 'CLOSE_COMBAT':  'SWORD fx=HIT_STAR',             # a flurry up close (blow)
+ 'FLARE_BLITZ':   'DASH fx=FIRE_BURST',            # charges through the row like Volt Tackle; 1/3 recoil
+ 'FORCE_PALM':    'SWORD fx=HIT_STAR',             # a blow
+ 'POISON_JAB':    'SWORD',                         # a stab (STAB picture, Poison ramp)
+ 'NIGHT_SLASH':   'SWORD fx=SLASH',
+ 'AQUA_TAIL':     'WIDESWORD fx=WAVE',             # a tail swung like a wave (whip)
+ 'SEED_BOMB':     'BOMB plus fx=LEAF',
+ 'AIR_SLASH':     'AIRSHOT fx=WIND',               # knocks the target back
+ 'X_SCISSOR':     'WIDESWORD fx=SLASH',            # two crossing blades
+ 'BUG_BUZZ':      'LINE3 fx=WIND',
+ 'DRAGON_PULSE':  'CANNON fx=BEAM',
+ 'POWER_GEM':     'CANNON fx=BEAM',
+ 'ENERGY_BALL':   'BALL fx=LEAF',
+ 'BRAVE_BIRD':    'DASH fx=WIND',                  # a dive through the row; 1/3 recoil
+ 'EARTH_POWER':   'SHOCKWAVE fx=CRACK',
+ 'GIGA_IMPACT':   'DASH recharge fx=EXPLODE',      # Hyper Beam's cost
+ 'BULLET_PUNCH':  'FIREHIT fast fx=HIT_SMALL',     # priority, like Mach Punch
+ 'ICE_SHARD':     'FIREHIT fast fx=ICE_SPIKE',      # priority
+ 'SHADOW_CLAW':   'SWORD fx=CLAW',
+ 'THUNDER_FANG':  'SWORD fx=SPARK',                # a bite
+ 'ICE_FANG':      'SWORD fx=ICE',                  # a bite
+ 'FIRE_FANG':     'SWORD fx=FIRE_BURST',           # a bite
+ 'SHADOW_SNEAK':  'FIREHIT fast fx=HIT',           # priority: rises under the target
+ 'MUD_BOMB':      'BOMB plus fx=SPLASH',
+ 'PSYCHO_CUT':    'LONGSWORD fx=SLASH_ARC',
+ 'ZEN_HEADBUTT':  'DASH fx=CONFUSE',              # a charge with the mind (body)
+ 'MIRROR_SHOT':   'CANNON fx=BEAM',
+ 'FLASH_CANNON':  'CANNON fx=CANNON',              # BN's Cannon, in Steel's colours
+ 'DISCHARGE':     'CONE fx=SPARKS',
+ 'LAVA_PLUME':    'CONE fx=FIRE_BURST',
+ 'LEAF_STORM':    'TORNADO fx=LEAF',
+ 'CROSS_POISON':  'WIDESWORD fx=SLASH',            # a cross slash
+ 'GUNK_SHOT':     'BOMB plus fx=POISON',
+ 'IRON_HEAD':     'DASH fx=HIT',                   # a charge, head first (body)
+ 'MAGNET_BOMB':   'LOCKON fx=BOMB',                # never misses, like Shock Wave
+ 'STONE_EDGE':    'SHOCKWAVE fx=SPIKE',            # stones stab up along the row
+ 'BUG_BITE':      'SWORD fx=FANG',                 # a bite
+ 'CHARGE_BEAM':   'CANNON fx=BEAM',
+ 'AQUA_JET':      'DASH fast fx=SPLASH',           # priority
+ 'HEAD_SMASH':    'DASH fx=ROCKS',                 # 1/2 recoil
+ 'DOUBLE_HIT':    'SWORD hits=2 fx=HIT',           # a tail, twice (whip)
+ 'OMINOUS_WIND':  'TORNADO fx=WIND',
 }
 
 
