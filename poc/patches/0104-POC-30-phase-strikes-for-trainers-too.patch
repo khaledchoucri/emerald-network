@@ -1,0 +1,107 @@
+From 009ec492056ea2d3b6b59bd7f90f5b98cc1e6b56 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Thu, 15 Oct 2026 21:11:44 +0300
+Subject: [PATCH 104/105] POC-30: phase strikes for trainers too (N7b) - camp
+ in your back column and a trainer's Pokemon, Gym Leaders' and rivals'
+ included, blinks in front of you and strikes your panel; the strike now comes
+ on top of the foe's own attacks (it used to replace one, which made campers
+ safer) and the striker blinks back once it has struck; not in NET CHALLENGE,
+ boss battles or Birch's rescue
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |  2 ++
+ src/pkbn/grid_battle.c       | 33 ++++++++++++++++++++++++++-------
+ 2 files changed, 28 insertions(+), 7 deletions(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index bd66da7..1a2e196 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -127,6 +127,8 @@ struct Fighter
+     u16 charging;        // frames left on a charge-up (Focus Punch fails if hit)
+     u16 chargeMove;
+     bool8 focusBroken;
++    bool8 phaseHome;     // POC-30: blinked in for a phase strike; goes back to (homeX, homeY) once it has struck
++    s8 homeX, homeY;
+     u8 confTurns;        // Gen 3 confusion 2-5 turns
+     u8 trapTurns;        // Gen 3 wrap damage 2-5 turns (1/16 per turn)
+     u8 yawn;             // turns until Yawn's sleep
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index b796364..09143ee 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -3129,10 +3129,11 @@ static bool8 OmegaGuard(struct Fighter *e)
+ }
+ 
+ // ---- POC-26 (Khaled's pick P2): phase strikes ----------------------------------------------------------------
+-// A wild Pokémon punishes camping: once the player has stood in its back column for CAMP_START frames, the foe's next
+-// attack is its strongest contact move (else its strongest damaging one), and it blinks to its front column in the
+-// player's row first. The strike lands on the player's panel after a warning that shortens the longer the camping
+-// goes on; the foe stays open the whole time (a counter hit). Wild battles only for now. All numbers TUNE.
++// A foe punishes camping: once the player has stood in its back column for CAMP_START frames, the foe strikes with its
++// strongest contact move (else its strongest damaging one) as soon as it's free, on top of its own attacks, and it
++// blinks to its front column in the player's row first. The strike lands on the player's panel after a warning that shortens the longer the camping
++// goes on; the foe stays open the whole time (a counter hit), then blinks back where it was. POC-30 (Khaled's N7b):
++// trainers' Pokémon too, Gym Leaders and rivals included. Not in NET CHALLENGE simulations, legendary boss battles or Birch's rescue. All TUNE.
+ #define CAMP_START      180   // 3 s in the back column
+ #define PHASE_WARN_MAX  60
+ #define PHASE_WARN_MIN  24
+@@ -3142,7 +3143,7 @@ static bool8 PhaseStrike(struct Fighter *e)
+     struct Fighter *p = &sB.f[SIDE_PLAYER];
+     s32 i, best = -1, bestScore = 0, shrink;
+     u8 warn;
+-    if (sB.trainer || sB.challenge || sB.firstBattle || sB.boss || gPkbnGallery || sB.campT < CAMP_START || sB.phaseCd
++    if (sB.challenge || sB.firstBattle || sB.boss || gPkbnGallery || sB.campT < CAMP_START || sB.phaseCd
+      || e->hold || getenv("PKBN_NO_PHASE") != NULL)
+         return FALSE;
+     for (i = 0; i < MAX_MON_MOVES; i++)
+@@ -3159,6 +3160,8 @@ static bool8 PhaseStrike(struct Fighter *e)
+         return FALSE;
+     if ((e->x != PLAYER_COLS || e->y != p->y) && Field_CanStand(SIDE_ENEMY, PLAYER_COLS, p->y))
+     {
++        // POC-30: it blinks back afterwards (UpdateOneEnemy), so it doesn't stay in the camper's line of fire
++        e->phaseHome = TRUE, e->homeX = e->x, e->homeY = e->y;
+         Field_Step(SIDE_ENEMY, PLAYER_COLS, p->y);
+         e->statusFlash = 10;
+         PlaySE(SE_M_TELEPORT);
+@@ -3180,8 +3183,26 @@ static void UpdateOneEnemy(void)
+     struct Fighter *e = &sB.f[SIDE_ENEMY];
+ 
+     EnemyDodge();
++    if (e->phaseHome && !Moves_SideHasPending(SIDE_ENEMY) && e->bm.hp && !e->stun && !e->hold)
++    {
++        // POC-30: the phase strike has landed - straight back where it came from, as BN's viruses do after a dash
++        // attack, so a camper can't keep it in the line of fire
++        e->phaseHome = FALSE;
++        if ((e->x != e->homeX || e->y != e->homeY) && Field_CanStand(SIDE_ENEMY, e->homeX, e->homeY))
++        {
++            Field_Step(SIDE_ENEMY, e->homeX, e->homeY);
++            e->statusFlash = 10;
++            PlaySE(SE_M_TELEPORT);
++            PKBN_LOG("phase strike over: %s back to (%d,%d)", e->name, e->homeX, e->homeY);
++        }
++    }
+     if (BusyOrDisabled(SIDE_ENEMY) || Moves_SideHasPending(SIDE_ENEMY))
+         return;
++    // POC-30: a phase strike comes on top of the foe's own attacks, on its own cooldown. (It used to take the place of
++    // the next attack, so a camper faced only telegraphed strikes instead of the foe's lock-ons: campaign runs showed a
++    // camper taking less damage with phase strikes than without.)
++    if (PhaseStrike(e))
++        return;
+     if (sB.omega && OmegaGuard(e))
+         return;
+     if (sB.omega && sB.chipReadyT == 0 && sB.f[SIDE_PLAYER].lockout && sB.aiAttackTimer > 8 && sB.frame - sB.omegaPunishFrame > 60)
+@@ -3202,8 +3223,6 @@ static void UpdateOneEnemy(void)
+             SetMsg(line, 50);
+             return;
+         }
+-        if (PhaseStrike(e))
+-            return;
+         if (sB.rivalTier >= 3 && TeamSpecial(e))
+             return;
+         if (sB.rivalTier && RivalSpecial(e))
+-- 
+2.43.0
+

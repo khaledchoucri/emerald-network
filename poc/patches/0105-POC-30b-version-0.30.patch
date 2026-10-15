@@ -1,0 +1,25 @@
+From 560a16883f3fd1648033e80c0e6194a420ead9bc Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Thu, 15 Oct 2026 21:11:45 +0300
+Subject: [PATCH 105/105] POC-30b: version 0.30
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/version.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/include/pkbn/version.h b/include/pkbn/version.h
+index 880d9be..32212db 100644
+--- a/include/pkbn/version.h
++++ b/include/pkbn/version.h
+@@ -1,5 +1,5 @@
+ #ifndef GUARD_PKBN_VERSION_H
+ #define GUARD_PKBN_VERSION_H
+ // POC-18: the build friends are playing, shown on the title screen and in the window title, so bug reports say which.
+-#define PKBN_VERSION "0.28"
++#define PKBN_VERSION "0.30"
+ #endif
+-- 
+2.43.0
+

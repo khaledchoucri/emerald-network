@@ -1,0 +1,257 @@
+From 745b1541cc508c687430b5479f2227771d15444c Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Thu, 15 Oct 2026 20:57:24 +0300
+Subject: [PATCH 103/105] POC-29: fewer * chips (N1a: * is never the folder's
+ code to lean toward, ordinary drops never roll *, rare drops keep their 1 in
+ 4), the bench shares the EXP from the start out of the fighters' share (N2a:
+ 2/3 fighters, 1/3 bench; the Exp. Share item now switches it off), Gen 5
+ scaled EXP (N3a); fix: Castform's four-form palette overflowed the picture
+ loader (any Castform battle crashed); campaign runs go to the eighth badge
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/busting.c     | 18 ++++++++++++-----
+ src/pkbn/campaign.c    | 29 +++++++++++++++++++++++++--
+ src/pkbn/gfx.c         |  5 +++--
+ src/pkbn/grid_battle.c | 45 +++++++++++++++++++++++++++++++-----------
+ src/pkbn/items.c       |  6 ++++--
+ src/pkbn/pkbn_save.c   |  4 ++--
+ 6 files changed, 83 insertions(+), 24 deletions(-)
+
+diff --git a/src/pkbn/busting.c b/src/pkbn/busting.c
+index 70e3607..e633fbf 100644
+--- a/src/pkbn/busting.c
++++ b/src/pkbn/busting.c
+@@ -220,7 +220,9 @@ static bool8 HasLane(u16 move, u8 letter)
+ }
+ 
+ // A random lane; the first lane (what learning gives) at half weight (design 08 §4). rare: never the first lane,
+-// and `*` (when the move allows it) 1 in 4.
++// and `*` (when the move allows it) 1 in 4. POC-29 (Khaled's N1a): that 1 in 4 is the only way a drop comes as `*`;
++// ordinary drops and the rest of the rare ones pick among the lettered codes.
++#define LANE_WEIGHT(i) (info->lanes[i] == LETTER_WILD ? 0 : (i) == 0 ? 1 : 2)
+ static u8 RandomLane(u16 move, bool8 rare)
+ {
+     const struct PkbnMoveInfo *info = &gPkbnMoveInfo[move];
+@@ -229,18 +231,24 @@ static u8 RandomLane(u16 move, bool8 rare)
+         return 0;
+     if (rare)
+     {
++        u8 pick[4], n = 0;
+         if (HasLane(move, LETTER_WILD) && Random() % 4 == 0)
+             return LETTER_WILD;
+-        if (info->laneCount == 1)
++        for (i = 1; i < info->laneCount; i++)
++            if (info->lanes[i] != LETTER_WILD)
++                pick[n++] = info->lanes[i];
++        if (n == 0)
+             return info->lanes[0];
+-        return info->lanes[1 + Random() % (info->laneCount - 1)];
++        return pick[Random() % n];
+     }
+     for (i = 0; i < info->laneCount; i++)
+-        w += i == 0 ? 1 : 2;
++        w += LANE_WEIGHT(i);
++    if (w == 0)
++        return info->lanes[0];   // a move whose only code is *
+     r = Random() % w;
+     for (i = 0; i < info->laneCount; i++)
+     {
+-        u32 wi = i == 0 ? 1 : 2;
++        u32 wi = LANE_WEIGHT(i);
+         if (r < wi)
+             return info->lanes[i];
+         r -= wi;
+diff --git a/src/pkbn/campaign.c b/src/pkbn/campaign.c
+index e0af128..435f400 100644
+--- a/src/pkbn/campaign.c
++++ b/src/pkbn/campaign.c
+@@ -12,8 +12,8 @@
+ //   wild <n>                 n encounters from this map's own grass / cave table (stands on an encounter tile first)
+ //   scripted <species> <lv>  a scripted wild battle (Birch's Poochyena)
+ //   trainer <id> [x y]       fight that trainer (skipped if already beaten); x y: stand there first
+-//   leader <id> <x> <y> <key>    a Gym Leader, then the gym's own "defeated" script (badge, TM): key = stone / knuckle /
+-//                            dynamo
++//   leader <id> <x> <y> <key>    a Gym Leader, then the gym's own "defeated" script (badge, TM): key = stone, knuckle,
++//                            dynamo, heat, balance, feather, mind, rain
+ //   heal                     a Pokémon Center
+ //   buy <item> <n>           buy up to n at the item's price, keeping 500 in hand
+ //   end                      print the summary and quit
+@@ -44,6 +44,8 @@
+ #include "constants/battle.h"
+ #include "constants/maps.h"
+ #include "constants/moves.h"
++#include "constants/flags.h"
++#include "constants/items.h"
+ 
+ #ifdef PORTABLE
+ 
+@@ -219,12 +221,35 @@ static void StartTrainer(u16 id)
+ extern const u8 RustboroCity_Gym_EventScript_RoxanneDefeated[];
+ extern const u8 DewfordTown_Gym_EventScript_BrawlyDefeated[];
+ extern const u8 MauvilleCity_Gym_EventScript_WattsonDefeated[];
++extern const u8 LavaridgeTown_Gym_1F_EventScript_FlanneryDefeated[];
++extern const u8 FortreeCity_Gym_EventScript_WinonaDefeated[];
++extern const u8 MossdeepCity_Gym_EventScript_TateAndLizaDefeated[];
++extern const u8 SootopolisCity_Gym_1F_EventScript_JuanDefeated[];
+ 
++// After a Gym Leader: the gym's own "defeated" script (badge, flags, TM). Norman's badge is given inside his battle
++// script (PetalburgCity_Gym_EventScript_NormanBattle), so for him the same steps run here: the badge, the gym flag and
++// TM42 (Facade, PetalburgCity_Gym_EventScript_GiveFacade).
+ static const u8 *LeaderScript(const char *key)
+ {
++    static u8 sNorman[16];
+     if (!strcmp(key, "stone"))   return RustboroCity_Gym_EventScript_RoxanneDefeated;
+     if (!strcmp(key, "knuckle")) return DewfordTown_Gym_EventScript_BrawlyDefeated;
+     if (!strcmp(key, "dynamo"))  return MauvilleCity_Gym_EventScript_WattsonDefeated;
++    if (!strcmp(key, "heat"))    return LavaridgeTown_Gym_1F_EventScript_FlanneryDefeated;
++    if (!strcmp(key, "feather")) return FortreeCity_Gym_EventScript_WinonaDefeated;
++    if (!strcmp(key, "mind"))    return MossdeepCity_Gym_EventScript_TateAndLizaDefeated;
++    if (!strcmp(key, "rain"))    return SootopolisCity_Gym_1F_EventScript_JuanDefeated;
++    if (!strcmp(key, "balance"))
++    {
++        FlagSet(FLAG_BADGE05_GET);
++        FlagSet(FLAG_DEFEATED_PETALBURG_GYM);
++        // giveitem ITEM_TM42 (the obtain-item standard script, as owtest.c's O command builds it)
++        sNorman[0] = 0x16, sNorman[1] = 0x00, sNorman[2] = 0x80, sNorman[3] = ITEM_TM42 & 0xFF, sNorman[4] = ITEM_TM42 >> 8;
++        sNorman[5] = 0x16, sNorman[6] = 0x01, sNorman[7] = 0x80, sNorman[8] = 1, sNorman[9] = 0;
++        sNorman[10] = 0x09, sNorman[11] = 0;
++        sNorman[12] = 0x02;
++        return sNorman;
++    }
+     return NULL;
+ }
+ 
+diff --git a/src/pkbn/gfx.c b/src/pkbn/gfx.c
+index d462508..a29ab6f 100644
+--- a/src/pkbn/gfx.c
++++ b/src/pkbn/gfx.c
+@@ -198,7 +198,7 @@ void Gfx_Ellipse(u16 *fb, s32 cx, s32 cy, s32 rx, s32 ry, u16 color, u8 amt)
+ void Gfx_LoadMonPic(struct PkbnMonPic *dst, u16 species, u32 personality, u32 otId)
+ {
+     static u8 sTiles[MON_PIC_SIZE * MAX_MON_PIC_FRAMES];
+-    u16 pal[16];
++    u16 pal[16 * 4];   // Castform's palette holds one 16-colour palette per form (normal, sun, rain, snow)
+     s32 f, px, py;
+ 
+     LoadSpecialPokePic(&gMonFrontPicTable[species], sTiles, species, personality, TRUE);
+@@ -207,7 +207,8 @@ void Gfx_LoadMonPic(struct PkbnMonPic *dst, u16 species, u32 personality, u32 ot
+         dst->pal[f] = pal[f] & 0x7FFF;
+     for (f = 0; f < 2; f++)
+     {
+-        const u8 *tiles = sTiles + f * MON_PIC_SIZE;
++        // Castform's frames are its four forms, not an animation: both frames are its normal form
++        const u8 *tiles = sTiles + (species == SPECIES_CASTFORM ? 0 : f) * MON_PIC_SIZE;
+         for (py = 0; py < 64; py++)
+             for (px = 0; px < 64; px++)
+             {
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 9464c36..b796364 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -3323,23 +3323,46 @@ static void Tick(struct Fighter *f)
+ 
+ // Cmd_getexp (battle_script_commands.c:3255-3420), run when an opponent faints. The EXP is banked and
+ // given level by level after the battle (src/pkbn/post_battle.c), where the level-up screens live.
++//
++// POC-29 (Khaled's N2a, N3a):
++//  - The bench shares from the start: with the Exp. Share on (PkbnExpShare_On), the Pokémon that fought split 2/3 of
++//    the EXP as in Gen 3 and the other Pokémon able to fight split the last 1/3. Their share comes out of the
++//    fighters', not on top of it (Gen 6 gave the bench extra). With nobody on the bench the fighters get it all.
++//  - Gen 5's scaled EXP: each Pokémon's share is multiplied by ((2L + 10) / (L + Lp + 10))^2.5, L the foe's level and
++//    Lp its own (Gen 5's formula; ours keeps Gen 3's yield / 7 under it, so at equal levels nothing changes). A Pokémon
++//    above the foe earns less, one below earns more.
++#define EXP_BENCH_PART 3   // the bench's part is 1/3 (TUNE)
++static u32 ScaledExp(u32 exp, u8 foeLevel, u8 ownLevel)
++{
++    double r = (2.0 * foeLevel + 10.0) / ((double)foeLevel + ownLevel + 10.0), s = r, v;
++    s32 k;
++    for (k = 0; k < 20; k++)
++        s = 0.5 * (s + r / s);   // the square root (Newton), so the game needs no libm
++    v = exp * r * r * s;
++    return v < 1.0 ? 1 : (u32)v;
++}
++
+ static void AwardExpForFaintedEnemy(void)
+ {
+-    // POC-21: held items do nothing in grid battles, so the Exp. Share is no longer held. Khaled's note: a party-wide
+-    // Exp. Share toggle "similar to newer Gens" - Gen 6's Exp. Share (a key item, ON/OFF): the Pokémon that fought split
+-    // the EXP as in Gen 3, and with it ON every other Pokémon able to fight gets half of a fighter's share (TUNE).
+     const struct BattlePokemon *e = &sB.f[SIDE_ENEMY].bm;
+     u32 calculatedExp = gSpeciesInfo[e->species].expYield * e->level / 7;
+-    u32 exp;
+-    s32 i, viaSentIn = 0;
++    u32 fighterPool, benchPool, fighterExp, benchExp;
++    s32 i, fighters = 0, bench = 0;
+     bool8 shareOn = PkbnExpShare_On();
+ 
+     for (i = 0; i < sB.partyCount; i++)
+-        if (PartyAlive(i) && (sB.sentIn & (1 << i)))
+-            viaSentIn++;
+-    exp = viaSentIn ? calculatedExp / viaSentIn : calculatedExp;
+-    if (exp == 0)
+-        exp = 1;
++    {
++        if (!PartyAlive(i) || GetMonData(&gPlayerParty[i], MON_DATA_LEVEL) == MAX_LEVEL)
++            continue;
++        if (sB.sentIn & (1 << i))
++            fighters++;
++        else if (shareOn)
++            bench++;
++    }
++    benchPool = bench ? calculatedExp / EXP_BENCH_PART : 0;
++    fighterPool = calculatedExp - benchPool;
++    fighterExp = fighters ? fighterPool / fighters : fighterPool;
++    benchExp = bench ? benchPool / bench : 0;
+     for (i = 0; i < sB.partyCount; i++)
+     {
+         bool8 fought = (sB.sentIn & (1 << i)) != 0;
+@@ -3348,7 +3371,7 @@ static void AwardExpForFaintedEnemy(void)
+             continue;
+         if (GetMonData(&gPlayerParty[i], MON_DATA_LEVEL) == MAX_LEVEL || !PartyAlive(i))
+             continue;
+-        gain = fought ? exp : (exp / 2 ? exp / 2 : 1);
++        gain = ScaledExp(fought ? fighterExp : benchExp, e->level, GetMonData(&gPlayerParty[i], MON_DATA_LEVEL));
+         if (sB.party[i].navi.luckyEgg)
+             gain = gain * (100 + sB.party[i].navi.luckyEgg) / 100;   // LuckyEgg program (the Lucky Egg item is now it)
+         if (sB.trainer)
+diff --git a/src/pkbn/items.c b/src/pkbn/items.c
+index c67b32f..e8dd502 100644
+--- a/src/pkbn/items.c
++++ b/src/pkbn/items.c
+@@ -221,12 +221,14 @@ u8 PkbnRelearner_AddChipMoves(struct Pokemon *mon, u16 *moves, u8 n, u8 max)
+     return n;
+ }
+ 
+-// ---- Gen 6's Exp. Share: ON/OFF ------------------------------------------------------------------------------------
++// ---- The Exp. Share: ON/OFF ----------------------------------------------------------------------------------------
++// POC-29 (Khaled's N2a): the bench shares the EXP from the start. The Exp. Share item (Mr. Stone's, Devon Corp. 3F) is
++// now the switch that turns it OFF, as Gen 6's key item turns it on and off.
+ bool8 PkbnExpShare_On(void)
+ {
+     if (getenv("PKBN_TEST_EXP_SHARE") != NULL)
+         return TRUE;
+-    return CheckBagHasItem(ITEM_EXP_SHARE, 1) && PkbnSave_ExpShareOn();
++    return !CheckBagHasItem(ITEM_EXP_SHARE, 1) || PkbnSave_ExpShareOn();
+ }
+ 
+ // ---- Old saves: convert once on load ---------------------------------------------------------------------------
+diff --git a/src/pkbn/pkbn_save.c b/src/pkbn/pkbn_save.c
+index add5b38..8ecac23 100644
+--- a/src/pkbn/pkbn_save.c
++++ b/src/pkbn/pkbn_save.c
+@@ -433,8 +433,8 @@ u8 PkbnCode_Fit(u16 move, u8 letter)
+         return letter;   // a * stays a * (rare drops, shiny catches)
+     info = &gPkbnMoveInfo[move];
+     for (i = 0; i < info->laneCount; i++)
+-        if (PkbnCode_Unlocked(info->lanes[i]))
+-            allowed[na++] = info->lanes[i];
++        if (info->lanes[i] != LETTER_WILD && PkbnCode_Unlocked(info->lanes[i]))
++            allowed[na++] = info->lanes[i];   // POC-29 (N1a): * isn't a code to lean toward (it snowballed to 59%)
+     if (na == 0)
+         allowed[na++] = PkbnCode_Substitute(move);   // every code it comes in is still locked
+     if (na > 1 && (Random() & 1))
+-- 
+2.43.0
+

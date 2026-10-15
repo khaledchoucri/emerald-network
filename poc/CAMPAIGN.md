@@ -1,10 +1,12 @@
-# Campaign runs: simulated playthroughs to the third badge
+# Campaign runs: simulated playthroughs through the eight gyms
 
 **Patch:** `0102-Campaign-runs-…`, on top of 0001–0101. It's a test tool: the game plays the same with it as without it.
 
-A test player starts a new game and fights the story's battles in Emerald's order. It plays from Birch's Poochyena to
-Wattson, about 100 battles, and its logs can be read like a playtester's. With no screen and no frame limit, one run
-takes about a minute.
+A test player starts a new game and fights the story's battles in Emerald's order, and its logs can be read like a
+playtester's. With no screen and no frame limit:
+
+- **To Wattson:** about 100 battles, about a minute (`GYMS=3`).
+- **To Juan:** about 400 battles, 2 to 5 minutes (the default since POC-29).
 
 ## Running it
 
