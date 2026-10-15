@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: delivered
+- State: accepted
 - Priority: 8
 - Assigned producer: Codex
-- Current owner: Codex
+- Current owner: —
 - Brief revision: 2
-- Based on repository commit: 89c74ed
+- Based on repository commit: cd6822b
 - Last update (UTC date): 2026-10-15
-- Next action / blocker: Reviewer checks v003 Fighting clenched fist and Ground fissured mound; other15 P5 cells and approved P1–P4/P6 remain unchanged.
+- Next action / blocker: Closed: P1–P6 in the game since POC-28.
 
 ## Purpose and visual brief
 
@@ -150,6 +150,18 @@
   and back, so this frame may not be used; no redraw needed.
 - Decision: revise P5 (two cells); everything else accepted for integration.
 
+### Review of v003 and integration
+
+- Reviewed delivery: v003 (`type_symbols.png`, Fighting and Ground cells)
+- Reviewer: Claude (implementation agent), asked by Khaled to review
+- Decision: **approved, request accepted.** The fist and the fissured mound read as Fighting and Ground at native
+  size.
+- In the game (POC-28, `DrawPAFormingHi` in `src/pkbn/grid_draw.c`), the same 44 frames as before:
+  - The three chips' cards fly in, each with its move's type symbol in its type's ramp and a trail in that ramp.
+  - They turn edge-on as they meet.
+  - The burst, in the Program Advance's type ramp, plays behind the emblem arriving.
+  - The settled emblem carries the PA's type symbol, with the name banner (9-slice) and its shine below.
+
 ## Integration and acceptance (implementation agent)
 
 - Accepted delivery:
@@ -171,3 +183,4 @@
 - 2026-10-14 — implementation agent (Claude) — reviewed v002: P1–P4, P6 and the shine approved; Fighting and Ground symbols revised (revision 2).
 
 - 2026-10-15 — Codex — delivered v003 P5 Fighting/Ground revision; verified other15 cells and gaps unchanged from v002; review pending.
+- 2026-10-15 — implementation agent (Claude) — reviewed v003 symbols: approved; P1–P6 integrated in POC-28; accepted.

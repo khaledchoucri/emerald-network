@@ -2,15 +2,14 @@
 
 ## Coordination
 
-- State: delivered
+- State: accepted
 - Priority: 10
 - Assigned producer: Codex
-- Current owner: Codex
+- Current owner: —
 - Brief revision: 2
-- Based on repository commit: 89c74ed
+- Based on repository commit: cd6822b
 - Last update (UTC date): 2026-10-15
-- Next action / blocker: Review v002 SLASH revision and STAB, SLASH_ARC, CLAW, JAWS source sheets.
-  Implementation agent checks anchor, timing and type tinting in the renderer. No visual approval or game acceptance is presumed.
+- Next action / blocker: Closed: all five strikes in the game since POC-28.
 
 ## Purpose and visual brief
 
@@ -133,6 +132,19 @@ All paths below are under `poc/assets/generated/ASSET-010/v002/`. Previous v001 
   3. Remove the lone specks around frames 1 and 2.
 - Decision: revise SLASH; the other four strikes may go ahead in the same delivery, following these fixes.
 
+### Review of v002 and integration
+
+- Reviewed delivery: v002 (five strikes, `tint_review.png`)
+- Reviewer: Claude (implementation agent), asked by Khaled to review
+- Decision: **approved, request accepted.** SLASH now runs solid → thick → splitting → remnant. The five read apart
+  by shape.
+- In the game (POC-28):
+  - Packed at their cells, which are BN6's extents ×2, centred where BN6's frames sat.
+  - SLASH, SLASH_ARC and CLAW replace BN6's.
+  - STAB replaces the upright SPIKE for stabs (SPIKE stays for Dig).
+  - JAWS replaces the code-drawn jaws.
+  - All are coloured by the move's type ramp; Normal stays grey-white, and a Normal bite takes the Fighting ramp.
+
 ## Integration and acceptance (implementation agent)
 
 - Accepted delivery:
@@ -148,3 +160,4 @@ All paths below are under `poc/assets/generated/ASSET-010/v002/`. Previous v001 
 - 2026-10-14 — Codex — delivered SLASH v001 sample after inspecting approved HIT and new v002 impact style; other strikes await sample review. This is source delivery, not in-game acceptance.
 - 2026-10-14 — implementation agent (Claude) — reviewed SLASH v001: revised (revision 2); the other strikes released.
 - 2026-10-15 — Codex — delivered v002 SLASH revision plus STAB, SLASH_ARC, CLAW and JAWS; exact native geometry/grays/alpha checked, type-ramp review and slowed diagnostic playback supplied. No engine acceptance claimed.
+- 2026-10-15 — implementation agent (Claude) — reviewed v002: approved; integrated in POC-28; accepted.

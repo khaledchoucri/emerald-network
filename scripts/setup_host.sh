@@ -72,7 +72,7 @@ python3 "$PROJECT_DIR/tools/gen_bn6_gfx.py" "$PROJECT_DIR/upstream/bn6f" "$HOST_
 python3 "$PROJECT_DIR/tools/gen_bn6_results.py" "$PROJECT_DIR/upstream/bn6f" "$HOST_DIR/include/pkbn/bn6_results_data.h"   # POC-19: BN6's results window
 
 # 3b. POC-24: our own hi-bit battle art (poc/assets/generated), packed for the build (not committed in the host either)
-echo "==> Packing the hi-bit art (panels, fire)"
+echo "==> Packing the hi-bit art (panels, effects, backdrop, HUD, Custom screen, Program Advance)"
 python3 "$PROJECT_DIR/tools/pack_hibit.py" "$PROJECT_DIR" "$HOST_DIR/include/pkbn/hibit_gfx_data.h"
 
 # 3c. POC-25: animated Pokémon from the player's own Black 2 / White 2, when PKBN_SPRITE_ROM points at its .nds.

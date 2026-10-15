@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: delivered
+- State: accepted
 - Priority: 9
 - Assigned producer: Codex
-- Current owner: implementation agent
+- Current owner: —
 - Brief revision: 1
-- Based on repository commit: 89c74ed
+- Based on repository commit: cd6822b
 - Last update (UTC date): 2026-10-15
-- Next action / blocker: Review v002 complete C1–C7 delivery; implementation agent checks text, slices, blink playback and Custom-screen states in renderer.
+- Next action / blocker: Closed: C1–C7 in the game since POC-28.
 
 ## Purpose and visual brief
 
@@ -126,6 +126,18 @@
   a panel over the backdrop.
 - Decision: approved with the C1 edge fix, delivered with C3–C7.
 
+### Review of v002 and integration
+
+- Reviewed delivery: v002 (C1 corrected, C3–C7, layout and stretch checks)
+- Reviewer: Claude (implementation agent), asked by Khaled to review
+- Decision: **approved, request accepted.** The C1 edge is fixed, and the bluer fill separates the window from the
+  sky.
+- In the game (POC-28):
+  - C1 window, C2 art frame.
+  - C3 slots in each chip's colour, dimmed when it can't be picked; the ball slot is 9-sliced wide.
+  - C4 bracket cursor with its blink; C5 OK with its pulse.
+  - C6 chosen tabs in the chip's type colour; C7 Program Advance preview.
+
 ## Integration and acceptance (implementation agent)
 
 - Accepted delivery:
@@ -143,3 +155,4 @@
 - 2026-10-14 — implementation agent (Claude) — reviewed C1/C2 v001: approved with a C1 right-edge fix; C3–C7 released.
 
 - 2026-10-15 — Codex — delivered v002 corrected C1, preserved approved C2, and C3–C7 with palette/alpha/slice/geometry checks; implementation review pending.
+- 2026-10-15 — implementation agent (Claude) — reviewed v002: approved; C1–C7 integrated in POC-28; accepted.

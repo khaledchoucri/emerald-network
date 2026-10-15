@@ -122,6 +122,10 @@ bt omega_kyogre "257:90:299/24/7/89|282:90:94/85/247/104,74:5" "KYOGRE, tier 5, 
 run field_lava 24:14:10:10 "W200,G288:20,W60,P,W200,P,W400,P,W10,Q" "place field: map 180e" PKBN_OW_AUTOBATTLE=1
 # (POC-26: Combusken alone with Ember and Growl, so the first chips are sure to include a Fire one - with Wingull's chips
 # chaining in and codes unlocking as you go, the old party could win before any Ember)
+# POC-27: places with their own grid - rain brings puddles, a cave falling rocks, Petalburg Woods hidden snares
+run place_rain 0:35:10:10 "W200,V3,W30,G288:20,W200,Q" "place: .*puddles" PKBN_OW_AUTOBATTLE=1
+run place_cave 24:7:10:10 "W200,G41:15,W300,Q" "place: rocks" PKBN_OW_AUTOBATTLE=1
+run place_woods 24:11:10:10 "W200,G265:5,W200,Q" "place: snares" PKBN_OW_AUTOBATTLE=1
 OWPARTY="281:20:52/45" run field_grass 0:35:10:10 "W200,G288:20,W60,P,W200,P,W1200,P,W10,Q" "panel react: type 10" PKBN_OW_AUTOBATTLE=1
 # POC-18: Birch's rescue on the grid teaches the basics (the bot follows the lesson); the first wild battle with balls
 # teaches the ball slot

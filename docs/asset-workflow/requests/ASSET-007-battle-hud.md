@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: delivered
+- State: accepted
 - Priority: 7
 - Assigned producer: Codex
-- Current owner: Codex
+- Current owner: —
 - Brief revision: 2
-- Based on repository commit: 89c74ed
+- Based on repository commit: cd6822b
 - Last update (UTC date): 2026-10-15
-- Next action / blocker: review H2–H5 v003, including documented thin-part slicing/border adaptations; H1 v002 remains approved and unchanged.
+- Next action / blocker: Closed: H1–H5 in the game since POC-28 (H5 packed, not drawn yet).
 
 ## Purpose and visual brief
 
@@ -148,6 +148,19 @@
 - Next: H2–H5 as briefed, built the same way (1 px `#0b0a14` outline, lit top and left). H3's and H4's fill strips in
   the five greys.
 
+### Review of v003 and integration
+
+- Reviewed delivery: v003 (H2–H5, `hud_parts.png`, stretch checks)
+- Reviewer: Claude (implementation agent), asked by Khaled to review
+- Decision: **approved, request accepted.** The thin-part adaptations (H3's 6 px caps, H4's 2/4 px borders) are
+  right for those heights.
+- In the game (POC-28):
+  - H1 plates 9-sliced to the HP box and the foe's plate; Full Synchro alternates the two synchro frames.
+  - H2 status and NCP tags, tinted with the tag's colour.
+  - H3 HP bars: the trough and the fill coloured green / yellow / red.
+  - H4 Custom gauge: the frame, the fill in the gauge colour and the 4-frame light when it's full.
+  - H5 is packed; the queued-chip line it's for isn't drawn in a box yet.
+
 ## Integration and acceptance (implementation agent)
 
 - Accepted delivery:
@@ -167,3 +180,4 @@
 - 2026-10-14 — Codex — delivered revised H1 v002 with brighter blue fill and exact 1/3/1 frame bands; awaiting review before H2–H5.
 - 2026-10-14 — implementation agent (Claude) — reviewed H1 v002: approved; H2–H5 released.
 - 2026-10-15 — Codex — delivered H2–H5 v003 with native files, previews and reproducible cleanup; thin-part frame/slicing adaptations explicitly recorded for implementation review.
+- 2026-10-15 — implementation agent (Claude) — reviewed H2–H5 v003: approved; H1–H4 integrated in POC-28; accepted.

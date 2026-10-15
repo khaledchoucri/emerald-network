@@ -1,0 +1,568 @@
+From a7334b89eca9c45a54673bace6f28fc67c50604b Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Thu, 15 Oct 2026 14:16:04 +0300
+Subject: [PATCH 099/101] POC-27: places with their own grid - the tide washes
+ over both back columns on beaches and the sea, rocks fall in caves (a growing
+ shadow, then an obstacle that blocks shots until broken), hidden snares in
+ Petalburg Woods and long grass, puddles in the rain (slow non-Water types;
+ Electric spreads over a pool); PKBN_TEST_PLACE for self-tests
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/grid_internal.h |  23 +++
+ src/pkbn/grid_battle.c       |   9 ++
+ src/pkbn/grid_draw.c         |  49 ++++++-
+ src/pkbn/grid_field.c        | 274 +++++++++++++++++++++++++++++++++++
+ src/pkbn/grid_moves.c        |  36 ++++-
+ 5 files changed, 389 insertions(+), 2 deletions(-)
+
+diff --git a/include/pkbn/grid_internal.h b/include/pkbn/grid_internal.h
+index 86d79c1..bd66da7 100644
+--- a/include/pkbn/grid_internal.h
++++ b/include/pkbn/grid_internal.h
+@@ -88,8 +88,19 @@ enum
+     // POC-17d (our design, TUNE; BN6 has no lava panel): burns whoever isn't a Fire type standing on it; Fire types
+     // heal on it, as Grass types do on grass.
+     PANEL_LAVA,
++    // POC-27 (our design, TUNE): rain routes - slows whoever isn't a Water type; an Electric hit spreads across a
++    // pool of joined puddles
++    PANEL_PUDDLE,
+ };
+ 
++// POC-27: places with their own grid (Khaled's picks C3a-d), set at the start of a battle. Bits.
++#define PLACE_TIDE     (1 << 0)   // beaches and the sea: the tide washes over both back columns now and then
++#define PLACE_ROCKS    (1 << 1)   // caves: rocks fall where a shadow grows, and stay as obstacles
++#define PLACE_SNARES   (1 << 2)   // woods and long grass: hidden snares root whoever steps in
++#define PLACE_PUDDLES  (1 << 3)   // rain: puddle panels
++#define ROCK_HP        3          // buster shots a fallen rock takes; any move breaks it at once
++#define ROCK_SHADOW    70         // the shadow grows this long before the rock lands
++
+ struct Fighter
+ {
+     struct BattlePokemon bm;
+@@ -259,6 +270,13 @@ struct GridBattle
+     u16 phaseCd;               // POC-26: frames until the next phase strike may come
+     u8 phaseWarn;              // POC-26: the next enemy Moves_Use is a phase strike with this warning
+     u8 phaseCount;             // POC-26: phase strikes this battle
++    u8 place;                  // POC-27: PLACE_* bits
++    u16 tideT;                 // POC-27: frames to the tide's next stage
++    u8 tideStage;              // 0 calm, 1 coming (the back columns shimmer), 2 washing over
++    u8 rockHp[GRID_ROWS][GRID_COLS];   // POC-27: a fallen rock on the panel (hits left), 0 = none
++    s8 rockX, rockY;           // POC-27: where the next rock falls (rockX < 0: none coming)
++    u16 rockT;                 // frames until it lands, or until the next shadow appears
++    u8 snare[GRID_ROWS][GRID_COLS];    // POC-27: 1 hidden, >1 sprung (frames left to show it)
+     bool8 beastTired;          // a Beast Out ran its course this battle
+     bool8 beastOver;           // this one was pushed while tired: BEAST OVER when it ends
+     bool8 firstBattle;         // POC-18: Birch's rescue (BATTLE_TYPE_FIRST_BATTLE), on the grid as the first lesson
+@@ -447,6 +465,11 @@ void Field_PushBack(u8 side, u8 panels);
+ void Field_PullIn(u8 side, u8 panels);   // POC-26: toward the foe
+ void Field_Bounce(u8 side);              // POC-26: recoil hop back
+ void Field_Throw(u8 side);               // POC-26: to the back column on another row
++// POC-27: places with their own grid
++void Place_Start(u8 place);              // sets them up (Field_StartConditions, or PKBN_TEST_PLACE in self-tests)
++void Place_Update(void);                 // once a fight frame
++bool8 Place_HitRock(s8 x, s8 y, bool8 move);   // an attack reaches (x, y): TRUE if a rock was there (it stops)
++void Place_Conduct(u8 hitSide, u16 move, s32 dmg);   // Electric damage spreading over joined puddles
+ const char *Field_StatName(u8 stat);
+ void Field_NaviStatusBug(u8 side);
+ // POC-13 abilities on the grid (src/pkbn/grid_field.c)
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index bd4cd5e..9464c36 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -1031,6 +1031,15 @@ static void Begin(void)
+         Field_ChallengeConditions(PKBN_CHAL(sB.challenge - 1).weather, PKBN_CHAL(sB.challenge - 1).panels);
+     else if (gMapHeader.mapLayout != NULL && getenv("PKBN_SELFTEST") == NULL)
+         Field_StartConditions();   // self-tests have no map: their battles start as before
++    if (getenv("PKBN_TEST_PLACE") != NULL)
++    {
++        // self-tests: PKBN_TEST_PLACE=tide,rocks,snares,puddles (POC-27)
++        const char *t = getenv("PKBN_TEST_PLACE");
++        Place_Start((strstr(t, "tide") ? PLACE_TIDE : 0) | (strstr(t, "rocks") ? PLACE_ROCKS : 0)
++                  | (strstr(t, "snares") ? PLACE_SNARES : 0) | (strstr(t, "puddles") ? PLACE_PUDDLES : 0));
++        if (strstr(t, "flood"))
++            memset(sB.panel, PANEL_PUDDLE, sizeof(sB.panel));   // every panel a puddle: one pool (conduction test)
++    }
+ 
+     // POC-14: with an in-game partner (Steven) the player's half of gPlayerParty is the first 3 (FillPartnerParty puts
+     // the partner's Pokémon in slots 3-5, battle_tower.c:2977); those assist from the side instead.
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index b48628a..143c162 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -185,10 +185,56 @@ static void PanelColorsFor(s32 c, u8 type, struct PanelColors *pc)
+     }
+ }
+ 
++// POC-27: what a place puts on a panel (code-drawn until there's art for it: TUNE)
++static void DrawPlace(u16 *fb, s32 c, s32 r, s32 x, s32 y, u32 t)
++{
++    s32 cx = x + PANEL_W / 2, cy = y + PANEL_H / 2;
++    if (sB.panel[r][c] == PANEL_PUDDLE)
++    {
++        Gfx_Ellipse(fb, cx, cy + 1, 15, 6, RGB(4, 12, 26), 11);
++        Gfx_Ellipse(fb, cx - 3, cy - 1, 7, 2, RGB(22, 28, 31), (t & 32) ? 9 : 6);   // the light on the water
++    }
++    if ((sB.place & PLACE_TIDE) && (c == 0 || c == GRID_COLS - 1) && sB.tideStage)
++    {
++        if (sB.tideStage == 1)
++            Gfx_FillBlend(fb, x + 2, y + 2, PANEL_W - 4, PANEL_H - 4, RGB(14, 26, 31), (t & 8) ? 7 : 3);   // it's coming
++        else
++        {
++            s32 k;
++            Gfx_FillBlend(fb, x + 2, y + 2, PANEL_W - 4, PANEL_H - 4, RGB(10, 22, 31), 8);
++            for (k = 0; k < 3; k++)   // foam lines running toward the middle
++            {
++                s32 fx = (s32)((t * 2 + k * 15) % (PANEL_W - 10));
++                if (c != 0)
++                    fx = PANEL_W - 10 - fx;
++                Pkbn_FillRect(fb, x + 4 + fx, y + 5 + k * 7, 6, 1, RGB(28, 31, 31));
++            }
++        }
++    }
++    if (sB.snare[r][c] > 1)
++    {
++        // a sprung snare: a knot of vines
++        s32 k;
++        for (k = -4; k <= 4; k++)
++            Pkbn_FillRect(fb, cx + k * 4, cy - 4 + ((k & 1) ? 3 : 0), 2, 8, (k & 1) ? RGB(6, 18, 4) : RGB(12, 26, 6));
++        Pkbn_FillRect(fb, cx - 17, cy + 2, 34, 2, RGB(10, 24, 6));
++    }
++    if (sB.rockX == c && sB.rockY == r && (sB.place & PLACE_ROCKS))
++    {
++        // the falling rock's shadow grows; the rock drops in over the last 16 frames
++        s32 k = ROCK_SHADOW - sB.rockT, rx = 3 + k * 11 / ROCK_SHADOW;
++        Gfx_Ellipse(fb, cx, cy + 3, rx, rx / 3 + 1, RGB(0, 0, 0), 10);
++        if (sB.rockT < 16)
++            Gfx_Draw(fb, Fx_Frame(FX_BOULDER, 0), cx, cy + 4 - sB.rockT * 8, 0, 0, 0);
++    }
++    if (sB.rockHp[r][c])
++        Gfx_Draw(fb, Fx_Frame(FX_BOULDER, 0), cx, cy + 4, 0, 0, 0);
++}
++
+ static void DrawPanel(u16 *fb, s32 c, s32 r, u32 t)
+ {
+     s32 x, y, i;
+-    u8 type = sB.panel[r][c];
++    u8 type = sB.panel[r][c] == PANEL_PUDDLE ? PANEL_NORMAL : sB.panel[r][c];   // POC-27: a puddle sits on a panel
+     struct PanelColors pc;
+     PanelOrigin(c, r, &x, &y);
+     PanelColorsFor(c, type, &pc);
+@@ -390,6 +436,7 @@ static void DrawField(u16 *fb, u32 t)
+             s32 x, y;
+             DrawPanel(fb, c, r, t);
+             PanelOrigin(c, r, &x, &y);
++            DrawPlace(fb, c, r, x, y, t);   // POC-27
+             if (sB.panel[r][c] == PANEL_BROKEN)
+                 continue;
+             if (shadow[r][c])
+diff --git a/src/pkbn/grid_field.c b/src/pkbn/grid_field.c
+index 2a3deca..58cadd1 100644
+--- a/src/pkbn/grid_field.c
++++ b/src/pkbn/grid_field.c
+@@ -116,6 +116,249 @@ static bool8 PlaceField(void)
+     return TRUE;
+ }
+ 
++// ---- POC-27: places with their own grid (Khaled's picks C3a-d; our design, all numbers TUNE) ---------------------
++#define TIDE_PERIOD    420   // calm between tides (7 s)
++#define TIDE_WARN       60   // the back columns shimmer first
++#define TIDE_WASH       72   // the wash: their panels carry whoever stands there forward
++#define ROCK_FIRST     240
++#define ROCK_PERIOD    360   // between rocks
++#define ROCK_MAX         2   // fallen rocks on the grid at once
++#define SNARE_HOLD      50
++#define SNARE_SHOW      90
++
++void Place_Start(u8 place)
++{
++    s32 side, r, c;
++    sB.place |= place;
++    sB.tideT = TIDE_PERIOD / 2;
++    sB.tideStage = 0;
++    sB.rockX = -1;
++    sB.rockT = ROCK_FIRST;
++    if (place & PLACE_PUDDLES)
++        Scatter(PANEL_PUDDLE, 2);
++    if (place & PLACE_SNARES)
++        for (side = 0; side < 2; side++)
++        {
++            // two hidden snares a side, on grass panels when there are any
++            s32 n = 2, tries = 200;
++            bool8 grass = FALSE;
++            for (r = 0; r < GRID_ROWS; r++)
++                for (c = side ? PLAYER_COLS : 0; c < (side ? GRID_COLS : PLAYER_COLS); c++)
++                    grass |= sB.panel[r][c] == PANEL_GRASS;
++            while (n > 0 && tries-- > 0)
++            {
++                s8 x = (side ? PLAYER_COLS : 0) + Random() % PLAYER_COLS, y = Random() % GRID_ROWS;
++                if (sB.snare[y][x] || (y == 1 && (x == 1 || x == 4)) || (grass && sB.panel[y][x] != PANEL_GRASS)
++                 || sB.panel[y][x] == PANEL_BROKEN)
++                    continue;
++                sB.snare[y][x] = 1;
++                n--;
++            }
++        }
++    PKBN_LOG("place: %s%s%s%s", (place & PLACE_TIDE) ? "tide " : "", (place & PLACE_ROCKS) ? "rocks " : "",
++             (place & PLACE_SNARES) ? "snares " : "", (place & PLACE_PUDDLES) ? "puddles" : "");
++}
++
++static u8 RockCount(void)
++{
++    s32 r, c, n = 0;
++    for (r = 0; r < GRID_ROWS; r++)
++        for (c = 0; c < GRID_COLS; c++)
++            n += sB.rockHp[r][c] != 0;
++    return n;
++}
++
++// Whoever stands on (x, y): the player, and every foe of a pack. Calls fn(side) with that foe selected.
++static void ForEachOn(s8 x, s8 y, void (*fn)(u8 side))
++{
++    s32 k;
++    u8 cur = sB.cur;
++    if (sB.f[SIDE_PLAYER].x == x && sB.f[SIDE_PLAYER].y == y && sB.f[SIDE_PLAYER].bm.hp && !sB.f[SIDE_PLAYER].invuln)
++        fn(SIDE_PLAYER);
++    for (k = 0; k < sB.foeCount; k++)
++    {
++        const struct Fighter *f = Foe_Get(k);
++        if (f->x == x && f->y == y && f->bm.hp && !f->invuln)
++        {
++            Foe_Select(k);
++            fn(SIDE_ENEMY);
++        }
++    }
++    Foe_Select(cur);
++}
++
++static bool8 sRockHitSomeone;
++static void RockHits(u8 side)
++{
++    struct Fighter *f = &sB.f[side];
++    s32 dmg = f->bm.maxHP / 8 ? f->bm.maxHP / 8 : 1;
++    Moves_DamageFighter(side, dmg, "IS HIT BY A FALLING ROCK!");
++    if (f->stun < 20)
++        f->stun = 20;
++    sRockHitSomeone = TRUE;
++}
++
++static void Tide(void)
++{
++    s32 r, k;
++    if (sB.tideT && --sB.tideT)
++        return;
++    switch (sB.tideStage)
++    {
++    case 0:
++        sB.tideStage = 1;   // the shimmer
++        sB.tideT = TIDE_WARN;
++        break;
++    case 1:
++        sB.tideStage = 2;   // the wash: both back columns carry forward
++        sB.tideT = TIDE_WASH;
++        for (r = 0; r < GRID_ROWS; r++)
++            for (k = 0; k < 2; k++)
++            {
++                s8 c = k ? GRID_COLS - 1 : 0;
++                if (sB.panel[r][c] == PANEL_NORMAL)
++                    sB.panel[r][c] = k ? PANEL_ROAD_LEFT : PANEL_ROAD_RIGHT;
++            }
++        PlaySE(SE_M_SURF);
++        PKBN_LOG("tide: the back columns wash over");
++        break;
++    default:
++        sB.tideStage = 0;
++        sB.tideT = TIDE_PERIOD;
++        for (r = 0; r < GRID_ROWS; r++)
++        {
++            if (sB.panel[r][0] == PANEL_ROAD_RIGHT)
++                sB.panel[r][0] = PANEL_NORMAL;
++            if (sB.panel[r][GRID_COLS - 1] == PANEL_ROAD_LEFT)
++                sB.panel[r][GRID_COLS - 1] = PANEL_NORMAL;
++        }
++        break;
++    }
++}
++
++static void Rocks(void)
++{
++    if (sB.rockT && --sB.rockT)
++        return;
++    if (sB.rockX < 0)
++    {
++        // a shadow appears: on the player's panel 6 times in 10, else anywhere free
++        s32 tries = 30;
++        if (RockCount() >= ROCK_MAX)
++        {
++            sB.rockT = ROCK_PERIOD / 2;
++            return;
++        }
++        if (Random() % 10 < 6)
++            sB.rockX = sB.f[SIDE_PLAYER].x, sB.rockY = sB.f[SIDE_PLAYER].y;
++        else
++            while (tries--)
++            {
++                s8 x = Random() % GRID_COLS, y = Random() % GRID_ROWS;
++                if (sB.panel[y][x] != PANEL_BROKEN && !sB.rockHp[y][x])
++                {
++                    sB.rockX = x, sB.rockY = y;
++                    break;
++                }
++            }
++        sB.rockT = sB.rockX >= 0 ? ROCK_SHADOW : ROCK_PERIOD;
++        return;
++    }
++    // it lands: whoever is there is hurt and the rock shatters; on an empty panel it stays as an obstacle
++    sRockHitSomeone = FALSE;
++    ForEachOn(sB.rockX, sB.rockY, RockHits);
++    if (!sRockHitSomeone && sB.panel[sB.rockY][sB.rockX] != PANEL_BROKEN)
++        sB.rockHp[sB.rockY][sB.rockX] = ROCK_HP;
++    PlaySE(SE_M_ROCK_THROW);
++    Vis_Shake(1, 10);
++    PKBN_LOG("rock lands on (%d,%d)%s", sB.rockX, sB.rockY, sRockHitSomeone ? ": a hit" : "");
++    sB.rockX = -1;
++    sB.rockT = ROCK_PERIOD;
++}
++
++void Place_Update(void)
++{
++    s32 r, c;
++    if (sB.place & PLACE_TIDE)
++        Tide();
++    if (sB.place & PLACE_ROCKS)
++        Rocks();
++    for (r = 0; r < GRID_ROWS; r++)
++        for (c = 0; c < GRID_COLS; c++)
++            if (sB.snare[r][c] > 1 && --sB.snare[r][c] == 1)
++                sB.snare[r][c] = 0;   // a sprung snare shows a moment, then it's gone
++}
++
++bool8 Place_HitRock(s8 x, s8 y, bool8 move)
++{
++    if (!InGrid(x, y) || sB.rockHp[y][x] == 0)
++        return FALSE;
++    sB.rockHp[y][x] = move ? 0 : sB.rockHp[y][x] - 1;
++    if (sB.rockHp[y][x] == 0)
++    {
++        PlaySE(SE_BREAKABLE_DOOR);
++        PKBN_LOG("rock at (%d,%d) broken", x, y);
++    }
++    return TRUE;
++}
++
++// A snare springs on whoever steps in (not Grass or Bug types, not floating): held a moment, and it shows.
++static void Snare(u8 side, s8 x, s8 y)
++{
++    struct Fighter *f = &sB.f[side];
++    if (sB.snare[y][x] != 1 || Field_Floats(f) || HasType(f, TYPE_GRASS) || HasType(f, TYPE_BUG))
++        return;
++    sB.snare[y][x] = SNARE_SHOW;
++    if (f->hold < SNARE_HOLD)
++        f->hold = SNARE_HOLD;
++    PlaySE(SE_M_BIND);
++    PKBN_LOG("%s is snared at (%d,%d)", f->name, x, y);
++}
++
++static u16 sConductDmg;
++static void Shock(u8 side)
++{
++    const struct Fighter *f = &sB.f[side];
++    if (HasType(f, TYPE_ELECTRIC) || HasType(f, TYPE_GROUND) || Field_Floats(f))
++        return;   // Electric types shrug it off, Ground types are immune (Gen 3), a floating one isn't in the water
++    Moves_DamageFighter(side, sConductDmg, "IS SHOCKED THROUGH THE WATER!");
++}
++
++void Place_Conduct(u8 hitSide, u16 move, s32 dmg)
++{
++    u8 pool[GRID_ROWS][GRID_COLS], stack[GRID_ROWS * GRID_COLS][2];
++    s32 n = 0, r, c;
++    const struct Fighter *hit = &sB.f[hitSide];
++    if (dmg <= 0 || gBattleMoves[move].type != TYPE_ELECTRIC || sB.panel[hit->y][hit->x] != PANEL_PUDDLE)
++        return;
++    memset(pool, 0, sizeof(pool));
++    pool[hit->y][hit->x] = 1;
++    stack[n][0] = hit->x, stack[n][1] = hit->y, n++;
++    while (n > 0)
++    {
++        s32 k, x, y;
++        n--;
++        x = stack[n][0], y = stack[n][1];
++        for (k = 0; k < 4; k++)
++        {
++            s32 nx = x + (k == 0) - (k == 1), ny = y + (k == 2) - (k == 3);
++            if (InGrid(nx, ny) && !pool[ny][nx] && sB.panel[ny][nx] == PANEL_PUDDLE)
++            {
++                pool[ny][nx] = 1;
++                stack[n][0] = nx, stack[n][1] = ny, n++;
++            }
++        }
++    }
++    pool[hit->y][hit->x] = 0;   // the one hit already took it
++    sConductDmg = dmg / 2 ? dmg / 2 : 1;
++    for (r = 0; r < GRID_ROWS; r++)
++        for (c = 0; c < GRID_COLS; c++)
++            if (pool[r][c])
++                ForEachOn(c, r, Shock);
++}
++
++static u8 sPlacePending;
++
+ // POC-13: the overworld follows you into battle.
+ //  - Weather: Emerald starts a battle with the map's weather (ABILITYEFFECT_SWITCH_IN_WEATHER, battle_util.c:2490-2530):
+ //    rain / thunderstorm / downpour -> permanent rain, sandstorm -> sandstorm, drought -> sun. Permanent = no turn
+@@ -150,8 +393,31 @@ void Field_StartConditions(void)
+         sB.panel[1][0] = PANEL_ROAD_LEFT;
+         sB.panel[1][GRID_COLS - 1] = PANEL_ROAD_RIGHT;
+     }
++    {
++        // POC-27: the place's own hazards (gyms and the Elite Four keep their fields as they are)
++        u8 place = 0;
++        u16 map = gSaveBlock1Ptr->location.mapNum | (gSaveBlock1Ptr->location.mapGroup << 8);
++        bool8 gym = map == MAP_RUSTBORO_CITY_GYM || map == MAP_DEWFORD_TOWN_GYM || map == MAP_MAUVILLE_CITY_GYM
++                 || map == MAP_LAVARIDGE_TOWN_GYM_1F || map == MAP_LAVARIDGE_TOWN_GYM_B1F || map == MAP_PETALBURG_CITY_GYM
++                 || map == MAP_FORTREE_CITY_GYM || map == MAP_MOSSDEEP_CITY_GYM || map == MAP_SOOTOPOLIS_CITY_GYM_1F
++                 || map == MAP_SOOTOPOLIS_CITY_GYM_B1F || gMapHeader.regionMapSectionId == MAPSEC_EVER_GRANDE_CITY;
++        if (gBattleEnvironment == BATTLE_ENVIRONMENT_SAND || gBattleEnvironment == BATTLE_ENVIRONMENT_WATER)
++            place |= PLACE_TIDE;
++        if (gBattleEnvironment == BATTLE_ENVIRONMENT_CAVE)
++            place |= PLACE_ROCKS;
++        if (gBattleEnvironment == BATTLE_ENVIRONMENT_LONG_GRASS || gMapHeader.regionMapSectionId == MAPSEC_PETALBURG_WOODS)
++            place |= PLACE_SNARES;
++        if (sB.weather & B_WEATHER_RAIN)
++            place |= PLACE_PUDDLES;
++        if (place && !gym)
++            sPlacePending = place;   // set up once the field's own panels are down (below)
++    }
+     if (PlaceField())
++    {
++        if (sPlacePending)
++            Place_Start(sPlacePending), sPlacePending = 0;
+         return;
++    }
+     for (side = 0; side < 2; side++)
+     {
+         u8 type = PANEL_NORMAL;
+@@ -162,6 +428,8 @@ void Field_StartConditions(void)
+             type = PANEL_CRACKED, n = 1;
+         ScatterSide(side, type, n);
+     }
++    if (sPlacePending)
++        Place_Start(sPlacePending), sPlacePending = 0;
+ }
+ 
+ // A NET CHALLENGE's preset field (POC-14, TUNE): permanent weather and panels that never fade.
+@@ -375,6 +643,8 @@ bool8 Field_CanStand(u8 side, s8 x, s8 y)
+         return FALSE;
+     if (side == SIDE_PLAYER ? x >= PLAYER_COLS : x < PLAYER_COLS)
+         return FALSE;
++    if (sB.rockHp[y][x])
++        return FALSE;   // POC-27: a fallen rock
+     if (side == SIDE_ENEMY && sB.foeCount > 1)
+     {
+         s8 k = Foe_At(x, y, FALSE);   // a pack doesn't share panels (BN viruses never do)
+@@ -413,6 +683,8 @@ void Field_Step(u8 side, s8 nx, s8 ny)
+     // panel you step onto cracks
+     if (f->navi.bug[3] && sB.panel[ny][nx] == PANEL_NORMAL && Random() % 8 < (u32)(f->navi.bug[3] + 1))
+         Field_SetPanel(nx, ny, PANEL_CRACKED);
++    if (sB.snare[ny][nx] == 1)
++        Snare(side, nx, ny);   // POC-27
+ }
+ 
+ // Move a fighter `panels` columns along its row: dir -1 = toward its own back column, +1 = toward the foe. Stops at
+@@ -780,6 +1052,8 @@ void Field_Update(void)
+         for (c = 0; c < GRID_COLS; c++)
+             if (sB.panelTimer[r][c] && --sB.panelTimer[r][c] == 0)
+                 sB.panel[r][c] = PANEL_NORMAL;
++    if (sB.place)
++        Place_Update();   // POC-27
+ 
+     FighterFrame(SIDE_PLAYER);
+     for (s = 0; s < sB.foeCount; s++)
+diff --git a/src/pkbn/grid_moves.c b/src/pkbn/grid_moves.c
+index 3738499..f16a546 100644
+--- a/src/pkbn/grid_moves.c
++++ b/src/pkbn/grid_moves.c
+@@ -148,9 +148,15 @@ static const struct PkbnNaviStats *AttackNavi(const struct Attack *a)
+ u16 Speed_StepFrames(const struct Fighter *f)
+ {
+     s32 spd = Moves_EffectiveSpeed(f);
++    u16 n;
+     if (spd < 0)
+         spd = 0;
+-    return (u16)(5 + (8 * 60 + (spd + 60) / 2) / (spd + 60));
++    n = (u16)(5 + (8 * 60 + (spd + 60) / 2) / (spd + 60));
++    // POC-27: a puddle slows whoever isn't a Water type (or floating) to half pace
++    if (sB.panel[f->y][f->x] == PANEL_PUDDLE && !Field_Floats(f)
++     && f->bm.types[0] != TYPE_WATER && f->bm.types[1] != TYPE_WATER)
++        n *= 2;
++    return n;
+ }
+ 
+ u16 Speed_Scale(const struct Fighter *f, u16 frames)
+@@ -1100,6 +1106,8 @@ static void ApplyHit(struct Attack *a, bool8 last)
+ 
+     def->bm.hp -= dmg;
+     def->hurtFlash = 8;
++    if (sB.place & PLACE_PUDDLES)
++        Place_Conduct(defSide, a->move, dmg);   // POC-27: Electric spreads over joined puddles
+     def->lastHitFrame = sB.frame ? sB.frame : 1;
+     if (defSide == SIDE_PLAYER && dmg > 0)
+         Busting_NoteHit(a->serial);   // POC-12: every attack that hurts counts against the Busting Level
+@@ -1220,6 +1228,14 @@ static bool8 StrikeCells(struct Attack *a, const u8 cells[GRID_ROWS][GRID_COLS],
+ {
+     struct Fighter *opp = &sB.f[a->side ^ 1];
+     PanelsReact(a, cells);
++    {
++        // POC-27: a move that reaches a fallen rock breaks it
++        s32 r, c;
++        for (r = 0; r < GRID_ROWS; r++)
++            for (c = 0; c < GRID_COLS; c++)
++                if (cells[r][c] && sB.rockHp[r][c])
++                    Place_HitRock(c, r, TRUE);
++    }
+     if (a->side == SIDE_PLAYER && sB.foeCount > 1)
+     {
+         // a pack: everyone standing in the area is hit (BN WideSword through two viruses)
+@@ -1274,6 +1290,8 @@ static void DirectCells(u8 side, struct Attack *a, s8 x, s8 y, u8 cells[GRID_ROW
+             for (c = x + dir; c >= 0 && c < GRID_COLS; c += dir)
+             {
+                 cells[r][c] = 1;
++                if (sB.rockHp[r][c])
++                    break;   // POC-27: a fallen rock takes the shot
+                 if ((side == SIDE_PLAYER && sB.foeCount > 1) ? Foe_At(c, r, TRUE) >= 0
+                                                               : (opp->x == c && opp->y == r && !opp->invuln))
+                 {
+@@ -1685,6 +1703,13 @@ static void UpdateTravel(struct Attack *a)
+                 Field_SetPanel(a->px, r, PANEL_CRACKED);
+             Mark(a->cells, a->px, r);
+             FlashPanel(a->px, r, 2);
++            if (sB.rockHp[r][a->px] && (a->kind == GK_BALL || a->kind == GK_DELAYED || !three))
++            {
++                Place_HitRock(a->px, r, TRUE);   // POC-27: a fallen rock stops it
++                FlashPanel(a->px, r, 10);
++                Finish(a);
++                return;
++            }
+             if (!a->hitDone && ProjectileHits(a, a->px, r))
+             {
+                 a->hitDone = TRUE;
+@@ -1964,6 +1989,15 @@ void Moves_ApplyBuster(u8 side)
+     for (c = me->x + Facing(side); c >= 0 && c < GRID_COLS; c += Facing(side))
+     {
+         cells[me->y][c] = 1;
++        if (sB.rockHp[me->y][c])
++        {
++            // POC-27: a fallen rock takes the shot (a charged one breaks it)
++            Place_HitRock(c, me->y, charged);
++            sVisBusterSide = side;
++            FlashCells(cells, charged ? 10 : 3);
++            sVisBusterSide = 0xFF;
++            return;
++        }
+         if (opp->x == c && opp->y == me->y)
+             break;
+     }
+-- 
+2.43.0
+

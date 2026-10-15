@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: delivered
+- State: accepted
 - Priority: 5
 - Assigned producer: Codex
-- Current owner: Codex
+- Current owner: —
 - Brief revision: 2
-- Based on repository commit: 89c74ed
+- Based on repository commit: cd6822b
 - Last update (UTC date): 2026-10-15
-- Next action / blocker: A v002 remains approved and unchanged. Review B/C v003; implementation agent then tunes scatter/drift, integrates and checks layered contrast in the renderer.
+- Next action / blocker: Closed: A, B and C in the game since POC-28.
 
 ## Purpose and visual brief
 
@@ -145,6 +145,16 @@
 - Next: B and C as briefed. Keep both darker than the panels; the motes' brightest core no brighter than `#1a4f9c`
   plus one step.
 
+### Review of v003 and integration
+
+- Reviewed delivery: v003 (`motes.png`, `data_streams.png`, `layered_preview.png`)
+- Reviewer: Claude (implementation agent), asked by Khaled to review
+- Decision: **B and C approved, request accepted.** The motes stay below the glow as asked, and the streams read as
+  data without pulling the eye from the panels.
+- In the game (POC-28): `tools/pack_hibit.py` packs A, the 12 mote cells and 4 streams. `DrawHiBackdrop`
+  (`src/pkbn/grid_draw.c`) draws A, scrolls the streams up the sky at 4 speeds and scatters 12 motes that twinkle
+  and drift, all above the horizon. Weather lays a wash of its colour over the sky.
+
 ## Integration and acceptance (implementation agent)
 
 - Accepted delivery:
@@ -166,3 +176,4 @@
 - 2026-10-14 — implementation agent (Claude) — reviewed v002: backdrop A approved; B and C released.
 - 2026-10-15 — Codex — delivered B/C v003 with native transparent sheets, layered playback, reproducible cleanup
   and source validation; approved A v002 preserved. Review and implementation integration pending.
+- 2026-10-15 — implementation agent (Claude) — reviewed v003: B and C approved; A, B and C integrated in POC-28; accepted.

@@ -5,11 +5,11 @@
 - State: accepted
 - Priority: 6
 - Assigned producer: Codex
-- Current owner: implementation agent
+- Current owner: —
 - Brief revision: 2
 - Based on repository commit: 89c74ed
 - Last update (UTC date): 2026-10-14
-- Next action / blocker: All source art approved. Implementation agent packs, times and tints it in the renderer.
+- Next action / blocker: Closed: in the game since POC-28.
 
 ## Purpose and visual brief
 
@@ -233,6 +233,11 @@ Ice, Dragon, Dark. Also write the hex values as a table in the producer record.
 - Results and screenshot/log evidence:
 - Remaining work:
 
+- In the game (POC-28): `tools/pack_hibit.py` packs all seven effects at their cells (BN6's extents ×2), in the exact
+  five greys or their own colours. A grey effect drawn with a type tint swaps its greys for that type's ramp
+  (`Gfx_HiRamp`, `grid_vfx.c` `TypeOfColor`) instead of a flat tint. Normal stays grey-white, and a white tint (critical
+  hits) keeps the old blend. `TypeBurst` now tints the grey impacts for every type but Normal.
+
 ## Change history
 
 - 2026-10-14 — implementation agent (Claude) — created at revision 1, ready for Codex.
@@ -243,3 +248,4 @@ Ice, Dragon, Dark. Also write the hex values as a table in the producer record.
 
 - 2026-10-14 — Codex — revision 2: separated material ramps and Dragon, generated remaining six effects concurrently, scripted native cleanup and inspected native/half/4×; delivered v002 for review, playback/integration pending.
 - 2026-10-14 — implementation agent (Claude) — reviewed v002: ramps and all six effects approved; request accepted for integration.
+- 2026-10-15 — implementation agent (Claude) — integrated in POC-28 with the type ramps.

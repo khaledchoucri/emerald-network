@@ -1,0 +1,660 @@
+From b30193762299558fce8a82f825f0c9b670485b86 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Thu, 15 Oct 2026 14:56:16 +0300
+Subject: [PATCH 100/101] POC-28: Codex's approved art through the whole battle
+ - the Net backdrop with drifting data streams and twinkling motes
+ (ASSET-005), impacts in the type colour ramps (ASSET-006), HUD plates, tags,
+ bars and gauge (ASSET-007), the Program Advance moment (ASSET-008), the
+ Custom screen (ASSET-009), strikes incl. new STAB and JAWS (ASSET-010);
+ 9-slice drawing, grey-art tinting; a stronger tide shimmer
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/gfx.h   |  42 ++++++++
+ src/pkbn/gfx.c       | 111 +++++++++++++++++++--
+ src/pkbn/grid_draw.c | 232 +++++++++++++++++++++++++++++++++++++++----
+ src/pkbn/grid_vfx.c  |  45 ++++++++-
+ 4 files changed, 402 insertions(+), 28 deletions(-)
+
+diff --git a/include/pkbn/gfx.h b/include/pkbn/gfx.h
+index 5506e7f..aeaee59 100644
+--- a/include/pkbn/gfx.h
++++ b/include/pkbn/gfx.h
+@@ -88,4 +88,46 @@ bool8 Fx_Loops(u8 id);
+ const struct PkbnImage *Gfx_HiPanel(u8 side, u8 type);
+ const struct PkbnImage *Gfx_HiLip(u8 side);
+ 
++
++// ---- POC-28: Codex's art for the rest of the battle (ASSET-005..010; tools/pack_hibit.py) -------------------------
++// Effects only our art has (no BN6 counterpart): STAB and JAWS. Without the hi-bit pack they fall back to BN6's
++// SPIKE and FANG.
++#define FX_HI_STAB (FX_COUNT + 0)
++#define FX_HI_JAWS (FX_COUNT + 1)
++bool8 Fx_HasHi(u8 id);                     // our hi-bit art is in and on for this effect
++bool8 Fx_IsGrey(u8 id);                    // drawn in the five greys: the type ramp colours it (Gfx_HiRamp)
++const u16 *Gfx_HiRamp(u8 type);            // a 6-entry palette (0 clear, 1..5 dark to light) for TYPE_*, or NULL
++// Still pictures: the backdrop, the HUD (ASSET-007) and the Custom screen (ASSET-009). NULL without the art.
++enum
++{
++    HI_BACKDROP,
++    HI_H1_PLAYER, HI_H1_FOE, HI_H1_SYNC1, HI_H1_SYNC2, HI_H2_TAG, HI_H3_TROUGH, HI_H3_FILL,
++    HI_H4_FRAME, HI_H4_FILL, HI_H4_FULL1, HI_H4_FULL2, HI_H4_FULL3, HI_H4_FULL4, HI_H5_LINE,
++    HI_C1_WINDOW, HI_C2_ART, HI_C3_SLOT, HI_C5_OK1, HI_C5_OK2,
++    HI_C4_TL1, HI_C4_TR1, HI_C4_BL1, HI_C4_BR1, HI_C4_TL2, HI_C4_TR2, HI_C4_BL2, HI_C4_BR2,
++    HI_C6_TAB, HI_C7_PA1, HI_C7_PA2,
++    HI_MOTE_0_0, HI_MOTE_0_1, HI_MOTE_0_2, HI_MOTE_0_3,   // ASSET-005 B: 2x2, 4x4, 6x6 motes, 4 twinkle frames each
++    HI_MOTE_1_0, HI_MOTE_1_1, HI_MOTE_1_2, HI_MOTE_1_3,
++    HI_MOTE_2_0, HI_MOTE_2_1, HI_MOTE_2_2, HI_MOTE_2_3,
++    HI_STREAM_0, HI_STREAM_1, HI_STREAM_2, HI_STREAM_3,    // ASSET-005 C: data streams
++    // ASSET-008, the Program Advance moment: the card turning (front, 3/4, edge, back), its trail (grey), the emblem
++    // arriving (6) and settled, the burst (grey), the name banner (9-slice), its shine, the 17 type symbols (grey,
++    // Normal .. Dark without ???)
++    HI_PA_CARD_0, HI_PA_CARD_1, HI_PA_CARD_2, HI_PA_CARD_3,
++    HI_PA_TRAIL_0, HI_PA_TRAIL_1, HI_PA_TRAIL_2, HI_PA_TRAIL_3,
++    HI_PA_EMBLEM_0, HI_PA_EMBLEM_1, HI_PA_EMBLEM_2, HI_PA_EMBLEM_3, HI_PA_EMBLEM_4, HI_PA_EMBLEM_5, HI_PA_EMBLEM_6,
++    HI_PA_BURST_0, HI_PA_BURST_1, HI_PA_BURST_2, HI_PA_BURST_3, HI_PA_BURST_4, HI_PA_BURST_5,
++    HI_PA_BANNER,
++    HI_PA_SHINE_0, HI_PA_SHINE_1, HI_PA_SHINE_2, HI_PA_SHINE_3,
++    HI_PA_SYM_0, HI_PA_SYM_1, HI_PA_SYM_2, HI_PA_SYM_3, HI_PA_SYM_4, HI_PA_SYM_5, HI_PA_SYM_6, HI_PA_SYM_7, HI_PA_SYM_8,
++    HI_PA_SYM_9, HI_PA_SYM_10, HI_PA_SYM_11, HI_PA_SYM_12, HI_PA_SYM_13, HI_PA_SYM_14, HI_PA_SYM_15, HI_PA_SYM_16,
++    HI_STILL_COUNT
++};
++const struct PkbnImage *Gfx_HiStill(u8 id);
++// A 9-slice draw of a hi-bit picture into the canvas box (x, y, w, h) (canvas pixels): corners of `cw` x `ch` image
++// pixels stay as they are, edges and the middle repeat their middle row / column. pal: NULL = the picture's own.
++void Gfx_DrawSlice9(u16 *fb, const struct PkbnImage *img, s32 x, s32 y, s32 w, s32 h, s32 cw, s32 ch, const u16 *pal);
++// A grey picture's palette coloured from one colour: 1..5 = dark outline .. highlight.
++void Gfx_GreyTint(u16 color, u16 out[6]);
++
+ #endif // GUARD_PKBN_GFX_H
+diff --git a/src/pkbn/gfx.c b/src/pkbn/gfx.c
+index 59a0bd1..d462508 100644
+--- a/src/pkbn/gfx.c
++++ b/src/pkbn/gfx.c
+@@ -362,20 +362,117 @@ struct PkbnImage Gfx_TypeIcon(u8 type)
+ }
+ 
+ // POC-24: an effect's frames - our hi-bit ones when they exist (and PKBN_HIBIT isn't 0), else BN6's.
+-static void FxFrames(u8 id, const struct PkbnFxFrame **frames, u32 *count, bool8 *loop)
++static s32 HiFxIndex(u8 id)
+ {
+ #if HAVE_HIBIT
+     u32 i;
+     if (gPkbnHiBit)
+         for (i = 0; i < ARRAY_COUNT(sHiFx); i++)
+             if (sHiFx[i].fx == id)
+-            {
+-                *frames = &sHiFxFrames[sHiFx[i].first];
+-                *count = sHiFx[i].count;
+-                *loop = sHiFx[i].loop;
+-                return;
+-            }
++                return i;
++#endif
++    (void)id;
++    return -1;
++}
++
++bool8 Fx_HasHi(u8 id)
++{
++    return HiFxIndex(id) >= 0;
++}
++
++bool8 Fx_IsGrey(u8 id)
++{
++#if HAVE_HIBIT && defined(PKBN_HIBIT_RAMPS)
++    s32 i = HiFxIndex(id);
++    return i >= 0 && sHiFx[i].grey;
++#else
++    (void)id;
++    return FALSE;
++#endif
++}
++
++const u16 *Gfx_HiRamp(u8 type)
++{
++#if HAVE_HIBIT && defined(PKBN_HIBIT_RAMPS)
++    if (gPkbnHiBit && type < ARRAY_COUNT(sHiRamp))
++        return sHiRamp[type];
++#endif
++    (void)type;
++    return NULL;
++}
++
++const struct PkbnImage *Gfx_HiStill(u8 id)
++{
++#if HAVE_HIBIT && defined(PKBN_HIBIT_STILLS)
++    if (gPkbnHiBit && id < HI_STILL_COUNT)
++        return &sHiStill[id];
++#endif
++    (void)id;
++    return NULL;
++}
++
++void Gfx_GreyTint(u16 color, u16 out[6])
++{
++    out[0] = 0;
++    out[1] = Gfx_Blend(color, 0x0000, 11);
++    out[2] = Gfx_Blend(color, 0x0000, 6);
++    out[3] = color;
++    out[4] = Gfx_Blend(color, 0x7FFF, 6);
++    out[5] = Gfx_Blend(color, 0x7FFF, 11);
++}
++
++void Gfx_DrawSlice9(u16 *fb, const struct PkbnImage *img, s32 x, s32 y, s32 w, s32 h, s32 cw, s32 ch, const u16 *pal)
++{
++    // buffer pixels: an image pixel is S/2 buffer pixels (hi-bit) or S (old art)
++    const s32 S = gPkbnScale, k = img->hi ? 1 : 2;   // one image pixel = S * k / 2 buffer pixels
++    s32 bw = w * S, bh = h * S, bx = x * S, by = y * S, i, j;
++    s32 iw = img->w, ih = img->h, ccw = cw * S * k / 2, cch = ch * S * k / 2;
++    if (pal == NULL)
++        pal = img->pal;
++    for (j = 0; j < bh; j++)
++    {
++        s32 sy;
++        if (j < cch)
++            sy = j * 2 / (S * k);
++        else if (j >= bh - cch)
++            sy = ih - 1 - (bh - 1 - j) * 2 / (S * k);
++        else
++            sy = ch + ((j - cch) * 2 / (S * k)) % (ih - 2 * ch > 0 ? ih - 2 * ch : 1);
++        for (i = 0; i < bw; i++)
++        {
++            s32 sx;
++            u8 idx;
++            if (i < ccw)
++                sx = i * 2 / (S * k);
++            else if (i >= bw - ccw)
++                sx = iw - 1 - (bw - 1 - i) * 2 / (S * k);
++            else
++                sx = cw + ((i - ccw) * 2 / (S * k)) % (iw - 2 * cw > 0 ? iw - 2 * cw : 1);
++            if (sx < 0 || sy < 0 || sx >= iw || sy >= ih)
++                continue;
++            idx = img->px[sy * iw + sx];
++            if (idx)
++                PlotPhys(fb, bx + i, by + j, pal[idx], 0, 0, 0);
++        }
++    }
++}
++
++static void FxFrames(u8 id, const struct PkbnFxFrame **frames, u32 *count, bool8 *loop)
++{
++#if HAVE_HIBIT
++    s32 i = HiFxIndex(id);
++    if (i >= 0)
++    {
++        *frames = &sHiFxFrames[sHiFx[i].first];
++        *count = sHiFx[i].count;
++        *loop = sHiFx[i].loop;
++        return;
++    }
+ #endif
++    if (id == FX_HI_STAB)
++        id = FX_SPIKE;   // POC-28: without our art, the BN6 picture these replaced
++    else if (id == FX_HI_JAWS)
++        id = FX_FANG;
+     *frames = &sBn6Frames[sBn6Anims[id].first];
+     *count = sBn6Anims[id].count;
+     *loop = sBn6Anims[id].loop;
+diff --git a/src/pkbn/grid_draw.c b/src/pkbn/grid_draw.c
+index 143c162..a6250ab 100644
+--- a/src/pkbn/grid_draw.c
++++ b/src/pkbn/grid_draw.c
+@@ -101,6 +101,26 @@ static void TextOutlined(u16 *fb, s32 x, s32 y, const char *s, u16 col, u16 ring
+ }
+ 
+ // A BN-style window: dark translucent fill, light rim, 1-pixel rounded corners.
++// POC-28: ASSET-007's plates and tags, 9-sliced to the box (8 x 8 corners; a tag's caps 6 wide). FALSE without the art.
++static bool8 HiPlate(u16 *fb, u8 still, s32 x, s32 y, s32 w, s32 h)
++{
++    const struct PkbnImage *img = Gfx_HiStill(still);
++    if (img == NULL)
++        return FALSE;
++    Gfx_DrawSlice9(fb, img, x, y, w, h, 8, 8, NULL);
++    return TRUE;
++}
++
++static bool8 HiTag(u16 *fb, s32 x, s32 y, s32 w, u16 col)
++{
++    u16 pal[6];
++    if (Gfx_HiStill(HI_H2_TAG) == NULL)
++        return FALSE;
++    Gfx_GreyTint(col, pal);
++    Gfx_DrawSlice9(fb, Gfx_HiStill(HI_H2_TAG), x, y, w, 9, 6, 0, pal);
++    return TRUE;
++}
++
+ void Draw_Box(u16 *fb, s32 x, s32 y, s32 w, s32 h, u16 fill, u16 rim, u8 fillAmt)
+ {
+     Gfx_FillBlend(fb, x + 1, y + 1, w - 2, h - 2, fill, fillAmt);
+@@ -114,6 +134,16 @@ static void DrawHpBar(u16 *fb, s32 x, s32 y, s32 w, u16 hp, u16 maxHP)
+ {
+     s32 fill = maxHP ? (w - 2) * hp / maxHP : 0;
+     u16 col = (hp * 5 <= maxHP) ? COL_HP_LOW : (hp * 2 <= maxHP) ? COL_HP_MID : COL_HP;
++    if (Gfx_HiStill(HI_H3_TROUGH) != NULL)
++    {
++        // POC-28: ASSET-007 H3 - the trough (6 px caps), the grey fill strip coloured green / yellow / red
++        u16 pal[6];
++        Gfx_DrawSlice9(fb, Gfx_HiStill(HI_H3_TROUGH), x, y, w, 4, 6, 4, NULL);
++        Gfx_GreyTint(col, pal);
++        if (fill > 0)
++            Gfx_DrawSlice9(fb, Gfx_HiStill(HI_H3_FILL), x + 1, y + 1, fill, 2, 1, 0, pal);
++        return;
++    }
+     Pkbn_FillRect(fb, x, y, w, 4, COL_BLACK);
+     Pkbn_FillRect(fb, x + 1, y + 1, fill, 2, col);
+     Pkbn_FillRect(fb, x + 1, y + 1, fill, 1, Gfx_Blend(col, COL_WHITE, 6));
+@@ -133,9 +163,42 @@ static const char *StatusTag(const struct Fighter *f, u16 *col)
+ 
+ // ---- backdrop ----------------------------------------------------------------------------------------------
+ 
++// POC-28: Codex's Net backdrop (ASSET-005 A), its data streams drifting up the sky and its motes twinkling (B, C);
++// weather lays a wash of its colour over the sky. TUNE: positions, speeds, wash strengths.
++static bool8 DrawHiBackdrop(u16 *fb, u32 t)
++{
++    static const s16 sStreamX[4] = { 18, 77, 166, 233 };
++    const struct PkbnImage *bd = Gfx_HiStill(HI_BACKDROP);
++    s32 k;
++    if (bd == NULL)
++        return FALSE;
++    Gfx_Draw(fb, bd, 0, 0, 0, 0, 0);
++    Gfx_ClipRect(0, 0, CW, 74);   // streams and motes stay above the horizon
++    for (k = 0; k < 4; k++)
++    {
++        const struct PkbnImage *s = Gfx_HiStill(HI_STREAM_0 + k);
++        s32 span = 74 + s->h / 2, y = 74 - (s32)((t / (3 + k) + k * 41) % span);
++        Gfx_Draw(fb, s, sStreamX[k], y, 0, 0, 0);
++    }
++    for (k = 0; k < 12; k++)
++    {
++        u8 size = (u8)(k % 3), frame = (u8)((t / 8 + k * 3) % 4);
++        s32 x = (k * 97 + 13 + (s32)(t / (40 + k * 7))) % CW, y = 5 + (k * 53) % 64;
++        Gfx_Draw(fb, Gfx_HiStill(HI_MOTE_0_0 + size * 4 + frame), x, y, 0, 0, 0);
++    }
++    Gfx_ClipNone();
++    if (sB.weather & B_WEATHER_RAIN)      Gfx_FillBlend(fb, 0, 0, CW, 76, RGB(1, 2, 6), 5);
++    if (sB.weather & B_WEATHER_SUN)       Gfx_FillBlend(fb, 0, 0, CW, 76, RGB(31, 14, 4), 4);
++    if (sB.weather & B_WEATHER_SANDSTORM) Gfx_FillBlend(fb, 0, 0, CW, 76, RGB(22, 16, 7), 5);
++    if (sB.weather & B_WEATHER_HAIL)      Gfx_FillBlend(fb, 0, 0, CW, 76, RGB(20, 26, 31), 4);
++    return TRUE;
++}
++
+ static void DrawBackdrop(u16 *fb, u32 t)
+ {
+     s32 x, y;
++    if (DrawHiBackdrop(fb, t))
++        return;
+     u16 top = RGB(1, 3, 8), bot = RGB(2, 9, 14), line = RGB(4, 14, 18);
+     if (sB.weather & B_WEATHER_RAIN)      { top = RGB(1, 2, 6);  bot = RGB(2, 5, 12);  line = RGB(4, 8, 18); }
+     if (sB.weather & B_WEATHER_SUN)       { top = RGB(10, 4, 2); bot = RGB(18, 9, 3);  line = RGB(26, 14, 4); }
+@@ -197,7 +260,7 @@ static void DrawPlace(u16 *fb, s32 c, s32 r, s32 x, s32 y, u32 t)
+     if ((sB.place & PLACE_TIDE) && (c == 0 || c == GRID_COLS - 1) && sB.tideStage)
+     {
+         if (sB.tideStage == 1)
+-            Gfx_FillBlend(fb, x + 2, y + 2, PANEL_W - 4, PANEL_H - 4, RGB(14, 26, 31), (t & 8) ? 7 : 3);   // it's coming
++            Gfx_FillBlend(fb, x + 2, y + 2, PANEL_W - 4, PANEL_H - 4, RGB(14, 26, 31), (t & 8) ? 11 : 6);   // it's coming
+         else
+         {
+             s32 k;
+@@ -1098,8 +1161,9 @@ static void DrawPlayerHud(u16 *fb)
+     s32 x;
+     // BN's HP box, top left: the number is what you watch
+     // Full Synchro (POC-14): the HP box glows gold, BN's emotion window in short
+-    Draw_Box(fb, 2, 2, 48, 17, sB.fullSynchro ? RGB(14, 10, 2) : RGB(4, 8, 20),
+-             sB.fullSynchro ? ((sTick & 8) ? COL_GAUGE_FULL : RGB(31, 31, 20)) : COL_BOX_EDGE, 13);
++    if (!HiPlate(fb, sB.fullSynchro ? ((sTick & 8) ? HI_H1_SYNC1 : HI_H1_SYNC2) : HI_H1_PLAYER, 2, 2, 48, 17))
++        Draw_Box(fb, 2, 2, 48, 17, sB.fullSynchro ? RGB(14, 10, 2) : RGB(4, 8, 20),
++                 sB.fullSynchro ? ((sTick & 8) ? COL_GAUGE_FULL : RGB(31, 31, 20)) : COL_BOX_EDGE, 13);
+     snprintf(line, sizeof(line), "%u", f->bm.hp);
+     TextBig(fb, 46 - Pkbn_EmTextWidth(line, PKBN_FONT_NORMAL), 2, line,
+             (f->bm.hp * 5 <= f->bm.maxHP) ? RGB(31, 14, 10) : (f->bm.hp * 2 <= f->bm.maxHP) ? RGB(31, 28, 10) : COL_WHITE);
+@@ -1110,7 +1174,8 @@ static void DrawPlayerHud(u16 *fb)
+     x = Text(fb, x + 3, 0, line, COL_DIM);
+     if (tag)
+     {
+-        Draw_Box(fb, x + 2, 3, Pkbn_EmTextWidth(tag, PKBN_FONT_SMALL) + 4, 9, col, col, 16);
++        if (!HiTag(fb, x + 2, 3, Pkbn_EmTextWidth(tag, PKBN_FONT_SMALL) + 4, col))
++            Draw_Box(fb, x + 2, 3, Pkbn_EmTextWidth(tag, PKBN_FONT_SMALL) + 4, 9, col, col, 16);
+         Text(fb, x + 4, 0, tag, COL_WHITE);
+     }
+     if (f->crossType)
+@@ -1147,13 +1212,15 @@ static void DrawEnemyHud(u16 *fb)
+     snprintf(line, sizeof(line), "%s Lv%u", f->name, f->bm.level);
+     w = Pkbn_EmTextWidth(line, PKBN_FONT_SMALL);
+     x = CW - 4 - w;
+-    Draw_Box(fb, x - 4, 2, w + 8, 17, RGB(12, 4, 6), RGB(31, 20, 20), 12);
++    if (!HiPlate(fb, HI_H1_FOE, x - 4, 2, w + 8, 17))
++        Draw_Box(fb, x - 4, 2, w + 8, 17, RGB(12, 4, 6), RGB(31, 20, 20), 12);
+     Text(fb, x, 0, line, COL_WHITE);
+     DrawHpBar(fb, x, 12, w, f->bm.hp, f->bm.maxHP);
+     if (tag)
+     {
+         s32 tw = Pkbn_EmTextWidth(tag, PKBN_FONT_SMALL) + 4;
+-        Draw_Box(fb, x - 6 - tw, 3, tw, 9, col, col, 16);
++        if (!HiTag(fb, x - 6 - tw, 3, tw, col))
++            Draw_Box(fb, x - 6 - tw, 3, tw, 9, col, col, 16);
+         Text(fb, x - 4 - tw, 0, tag, COL_WHITE);
+         x -= tw + 2;
+     }
+@@ -1164,7 +1231,8 @@ static void DrawEnemyHud(u16 *fb)
+         s32 nw;
+         snprintf(ncp, sizeof(ncp), "NCP %u", f->navi.programsRun);
+         nw = Pkbn_EmTextWidth(ncp, PKBN_FONT_SMALL) + 4;
+-        Draw_Box(fb, x - 6 - nw, 3, nw, 9, RGB(6, 10, 22), COL_BOX_EDGE, 16);
++        if (!HiTag(fb, x - 6 - nw, 3, nw, RGB(6, 10, 22)))
++            Draw_Box(fb, x - 6 - nw, 3, nw, 9, RGB(6, 10, 22), COL_BOX_EDGE, 16);
+         Text(fb, x - 4 - nw, 0, ncp, COL_WHITE);
+     }
+     x = CW - 4 - w;
+@@ -1200,9 +1268,24 @@ static void DrawGauge(u16 *fb, u32 t)
+     s32 x = 76, y = 25, w = 112, fill = (w - 4) * sB.gauge / CUSTOM_FRAMES;
+     bool8 full = sB.gauge >= CUSTOM_FRAMES;
+     u16 c = full ? Gfx_Blend(COL_GAUGE_FULL, COL_WHITE, (u8)((t / 3) % 8)) : COL_GAUGE;
+-    Draw_Box(fb, x, y, w, 8, RGB(2, 3, 8), COL_BOX_EDGE, 16);
+-    Pkbn_FillRect(fb, x + 2, y + 2, fill, 4, c);
+-    Pkbn_FillRect(fb, x + 2, y + 2, fill, 1, Gfx_Blend(c, COL_WHITE, 8));
++    if (Gfx_HiStill(HI_H4_FRAME) != NULL)
++    {
++        // POC-28: ASSET-007 H4 - the frame, the grey strip in the gauge's colour, the light running round when full
++        u16 pal[6];
++        s32 hf = 110 * sB.gauge / CUSTOM_FRAMES;
++        Gfx_Draw(fb, Gfx_HiStill(HI_H4_FRAME), x, y, 0, 0, 0);
++        Gfx_GreyTint(c, pal);
++        if (hf > 0)
++            Gfx_DrawSlice9(fb, Gfx_HiStill(HI_H4_FILL), x + 1, y + 2, hf, 4, 1, 0, pal);
++        if (full)
++            Gfx_Draw(fb, Gfx_HiStill(HI_H4_FULL1 + (t / 4) % 4), x, y, 0, 0, 0);
++    }
++    else
++    {
++        Draw_Box(fb, x, y, w, 8, RGB(2, 3, 8), COL_BOX_EDGE, 16);
++        Pkbn_FillRect(fb, x + 2, y + 2, fill, 4, c);
++        Pkbn_FillRect(fb, x + 2, y + 2, fill, 1, Gfx_Blend(c, COL_WHITE, 8));
++    }
+     Text(fb, x - 2 - Pkbn_EmTextWidth("CUSTOM", PKBN_FONT_SMALL), y - 4, "CUSTOM", full ? COL_WHITE : RGB(22, 24, 28));
+     if (full && ((t / 16) & 1))
+         TextCentered(fb, x + w / 2, y + 5, "PRESS L / R", COL_GAUGE_FULL, FALSE);
+@@ -1455,6 +1538,14 @@ static void DrawSlotFrame(u16 *fb, s32 x, s32 y, s32 w, s32 h, u16 base, bool8 d
+ {
+     u16 top = dim ? Gfx_Blend(base, COL_BLACK, 10) : base;
+     s32 i;
++    if (Gfx_HiStill(HI_C3_SLOT) != NULL)
++    {
++        // POC-28: ASSET-009 C3 - the grey card frame in the chip's colour (dimmed when it can't be picked)
++        u16 pal[6];
++        Gfx_GreyTint(top, pal);
++        Gfx_DrawSlice9(fb, Gfx_HiStill(HI_C3_SLOT), x, y, w, h, 8, 8, pal);
++        return;
++    }
+     Pkbn_FillRect(fb, x, y, w, h, RGB(1, 2, 5));
+     for (i = 1; i < h - 1; i++)
+         Pkbn_FillRect(fb, x + 1, y + i, w - 2, 1, Gfx_Blend(top, COL_BLACK, (u8)(2 + i * 8 / h)));
+@@ -1466,6 +1557,16 @@ static void DrawCursorFrame(u16 *fb, s32 x, s32 y, s32 w, s32 h, u32 t)
+     // BN's blinking gold cursor brackets
+     u16 c = ((t / 8) & 1) ? COL_GAUGE_FULL : RGB(31, 31, 24);
+     s32 k = ((t / 8) & 1) ? 1 : 0;
++    if (Gfx_HiStill(HI_C4_TL1) != NULL)
++    {
++        // POC-28: ASSET-009 C4 - four gold brackets, two blink frames
++        u8 f = k ? 4 : 0;
++        Gfx_Draw(fb, Gfx_HiStill(HI_C4_TL1 + f), x - 2 - k, y - 2 - k, 0, 0, 0);
++        Gfx_Draw(fb, Gfx_HiStill(HI_C4_TR1 + f), x + w - 4 + k, y - 2 - k, 0, 0, 0);
++        Gfx_Draw(fb, Gfx_HiStill(HI_C4_BL1 + f), x - 2 - k, y + h - 4 + k, 0, 0, 0);
++        Gfx_Draw(fb, Gfx_HiStill(HI_C4_BR1 + f), x + w - 4 + k, y + h - 4 + k, 0, 0, 0);
++        return;
++    }
+     x -= 2 + k; y -= 2 + k; w += 4 + 2 * k; h += 4 + 2 * k;
+     Pkbn_FillRect(fb, x, y, 6, 2, c);  Pkbn_FillRect(fb, x, y, 2, 6, c);
+     Pkbn_FillRect(fb, x + w - 6, y, 6, 2, c);  Pkbn_FillRect(fb, x + w - 2, y, 2, 6, c);
+@@ -1480,7 +1581,10 @@ static void DrawArtBackground(u16 *fb, u16 tint, u32 t)
+         Pkbn_FillRect(fb, ART_X, ART_Y + i, ART_W, 1, Gfx_Blend(Gfx_Blend(tint, COL_BLACK, 9), COL_BLACK, (u8)(i * 7 / ART_H)));
+     for (i = 0; i < ART_W; i += 12) // a faint moving grid, like BN's chip window
+         Gfx_FillBlend(fb, ART_X + (i + (s32)(t / 3)) % ART_W, ART_Y, 1, ART_H, COL_WHITE, 2);
+-    Pkbn_FrameRect(fb, ART_X - 1, ART_Y - 1, ART_W + 2, ART_H + 2, RGB(20, 24, 31));
++    if (Gfx_HiStill(HI_C2_ART) != NULL)
++        Gfx_Draw(fb, Gfx_HiStill(HI_C2_ART), ART_X - 2, ART_Y - 2, 0, 0, 0);   // POC-28: ASSET-009 C2
++    else
++        Pkbn_FrameRect(fb, ART_X - 1, ART_Y - 1, ART_W + 2, ART_H + 2, RGB(20, 24, 31));
+ }
+ 
+ static void DrawChipArt(u16 *fb, u32 t)
+@@ -1713,8 +1817,11 @@ static void DrawSlots(u16 *fb, u32 t)
+         }
+         if (x + SLOT_W <= CUS_W)
+         {
+-            DrawSlotFrame(fb, x, y, SLOT_W - 2, SLOT_H, RGB(28, 22, 4), FALSE);
+-            TextBig(fb, x + 2, y + 5, "OK", ((t / 16) & 1) ? COL_WHITE : RGB(6, 4, 0));
++            if (Gfx_HiStill(HI_C5_OK1) != NULL)
++                Gfx_Draw(fb, Gfx_HiStill(((t / 16) & 1) ? HI_C5_OK2 : HI_C5_OK1), x, y, 0, 0, 0);   // POC-28: C5
++            else
++                DrawSlotFrame(fb, x, y, SLOT_W - 2, SLOT_H, RGB(28, 22, 4), FALSE);
++            TextBig(fb, x + 2, y + 5, "OK", ((t / 16) & 1) ? COL_WHITE : Gfx_HiStill(HI_C5_OK1) ? COL_GAUGE_FULL : RGB(6, 4, 0));
+             if (sB.cursor == sB.handCount + 2)
+                 DrawCursorFrame(fb, x, y, SLOT_W - 2, SLOT_H, t);   // POC-18a: OK is a slot
+         }
+@@ -1744,7 +1851,14 @@ static void DrawChosenColumn(u16 *fb, u32 t)
+             ChipName(line, sizeof(line), ch->move);
+         }
+         // slides in from the window edge as it is chosen
+-        Draw_Box(fb, x, y, 76, 14, Gfx_Blend(c, COL_BLACK, 6), Gfx_Blend(c, COL_WHITE, 6), 15);
++        if (Gfx_HiStill(HI_C6_TAB) != NULL)
++        {
++            u16 pal[6];   // POC-28: ASSET-009 C6, in the chip's type colour
++            Gfx_GreyTint(c, pal);
++            Gfx_DrawSlice9(fb, Gfx_HiStill(HI_C6_TAB), x, y, 76, 14, 8, 8, pal);
++        }
++        else
++            Draw_Box(fb, x, y, 76, 14, Gfx_Blend(c, COL_BLACK, 6), Gfx_Blend(c, COL_WHITE, 6), 15);
+         snprintf(line + strlen(line), sizeof(line) - strlen(line), "%s", "");
+         Text(fb, x + 4, y + 1, line, COL_WHITE);
+     }
+@@ -1754,7 +1868,10 @@ static void DrawChosenColumn(u16 *fb, u32 t)
+         s32 y = 16 + sB.queueCount * 16 + 2;
+         char pa[40];
+         snprintf(pa, sizeof(pa), "%s", sB.paPreview);
+-        Draw_Box(fb, CUS_W + 2, y, 84, 26, RGB(16, 2, 10), ((t / 4) & 1) ? COL_PA : COL_WHITE, 15);
++        if (Gfx_HiStill(HI_C7_PA1) != NULL)
++            Gfx_Draw(fb, Gfx_HiStill(((t / 4) & 1) ? HI_C7_PA2 : HI_C7_PA1), CUS_W + 2, y, 0, 0, 0);   // POC-28: C7
++        else
++            Draw_Box(fb, CUS_W + 2, y, 84, 26, RGB(16, 2, 10), ((t / 4) & 1) ? COL_PA : COL_WHITE, 15);
+         Text(fb, CUS_W + 6, y - 1, "PROGRAM ADVANCE", ((t / 4) & 1) ? COL_WHITE : COL_PA);
+         Text(fb, CUS_W + 6, y + 10, pa, COL_GAUGE_FULL);
+     }
+@@ -1805,8 +1922,11 @@ static void DrawCustomScreen(u16 *fb)
+     // the field stays visible on the right, dimmed
+     Gfx_Darken(fb, 0, 0, CW, CH, 5);
+     // window: BN6's blue Custom window with a light rim
+-    for (i = 0; i < CH; i++)
+-        Pkbn_FillRect(fb, 0, i, CUS_W, 1, Gfx_Blend(RGB(5, 9, 22), RGB(2, 4, 12), (u8)(i * 16 / CH)));
++    if (Gfx_HiStill(HI_C1_WINDOW) != NULL)
++        Gfx_Draw(fb, Gfx_HiStill(HI_C1_WINDOW), 0, 0, 0, 0, 0);   // POC-28: ASSET-009 C1
++    else
++        for (i = 0; i < CH; i++)
++            Pkbn_FillRect(fb, 0, i, CUS_W, 1, Gfx_Blend(RGB(5, 9, 22), RGB(2, 4, 12), (u8)(i * 16 / CH)));
+     Pkbn_FillRect(fb, CUS_W, 0, 2, CH, RGB(20, 24, 31));
+     Pkbn_FillRect(fb, CUS_W + 2, 0, 1, CH, RGB(2, 3, 8));
+     TextBig(fb, 6, -2, "CUSTOM", COL_GAUGE_FULL);
+@@ -2074,6 +2194,82 @@ static void DrawChipStack(u16 *fb)
+ static u16 sPAAnimMoves[3];
+ static u8 sPAAnimPA;
+ 
++// POC-28: a type's symbol (ASSET-008 P5) in its colour ramp, drawn at (x, y) with its 16 x 16 at scale/256
++static void DrawTypeSymbol(u16 *fb, u8 type, s32 x, s32 y, s32 scale)
++{
++    const struct PkbnImage *sym = Gfx_HiStill(HI_PA_SYM_0 + (type < TYPE_MYSTERY ? type : type - 1));
++    struct PkbnImage img;
++    const u16 *ramp = Gfx_HiRamp(type);
++    if (sym == NULL || type >= NUMBER_OF_MON_TYPES || type == TYPE_MYSTERY)
++        return;
++    img = *sym;
++    if (ramp != NULL)
++        img.pal = ramp;
++    Gfx_DrawScaled(fb, &img, x, y, scale, scale, 0, 0, 0);
++}
++
++// POC-28: the Program Advance moment in Codex's parts (ASSET-008; the storyboard is ASSET-002): the three chips' cards
++// fly in with their trails, turn edge-on as they meet, the emblem arrives over a burst in the PA's type, then the
++// name banner with its shine. Same 44 frames as before (TUNE: the beats below).
++static bool8 DrawPAFormingHi(u16 *fb, s32 k)
++{
++    s32 i, cx = CW / 2, cy = 52;
++    const struct PkbnProgramAdvance *pa = &PKBN_PA(sPAAnimPA);
++    if (Gfx_HiStill(HI_PA_CARD_0) == NULL)
++        return FALSE;
++    if (k < 18)
++    {
++        // the cards: in from the sides (front up, the move's type symbol in the window), turning edge-on as they meet
++        u8 face = k < 14 ? HI_PA_CARD_0 : k < 16 ? HI_PA_CARD_1 : HI_PA_CARD_2;
++        for (i = 0; i < 3; i++)
++        {
++            s32 from = (i - 1) * 84, x = cx + (k < 14 ? from * (14 - k) / 14 : 0), y = cy - 22;
++            u8 type = gBattleMoves[sPAAnimMoves[i]].type;
++            if (k < 14 && i != 1)
++            {
++                u16 pal[6];
++                struct PkbnImage tr = *Gfx_HiStill(HI_PA_TRAIL_0 + (k / 2) % 4);
++                const u16 *ramp = Gfx_HiRamp(type);
++                Gfx_GreyTint(Vfx_TypeColor(type), pal);
++                tr.pal = ramp ? ramp : pal;
++                if (i == 0)
++                    Gfx_Draw(fb, &tr, x - 18 - 48, y + 16, 0, 0, 0);            // behind the left card, pointing in
++                else
++                    Gfx_Draw(fb, &tr, x + 18, y + 16, GFX_FLIPX, 0, 0);         // (mirrored for the right one)
++            }
++            Gfx_Draw(fb, Gfx_HiStill(face), x - 18, y, 0, 0, 0);
++            if (k < 14)
++                DrawTypeSymbol(fb, type, x - 18 + 10, y + 10, 256);
++        }
++        return TRUE;
++    }
++    if (k < 31)
++    {
++        // the burst in the PA's colour behind the emblem arriving
++        s32 f = (k - 18) / 2;
++        struct PkbnImage bu = *Gfx_HiStill(HI_PA_BURST_0 + (f < 6 ? f : 5));
++        const u16 *ramp = Gfx_HiRamp(pa->type);
++        if (ramp != NULL)
++            bu.pal = ramp;
++        if (f < 6)
++            Gfx_Draw(fb, &bu, cx - 52, cy - 52, 0, 0, 0);
++        Gfx_Draw(fb, Gfx_HiStill(HI_PA_EMBLEM_0 + (f < 6 ? f : 5)), cx - 32, cy - 32, 0, 0, 0);
++        return TRUE;
++    }
++    {
++        // settled: the emblem with the PA's type symbol, the banner with its name and power, the shine running over it
++        char line[32];
++        s32 bw = 120, bx = cx - bw / 2, by = cy + 34;
++        Gfx_Draw(fb, Gfx_HiStill(HI_PA_EMBLEM_6), cx - 32, cy - 32, 0, 0, 0);
++        DrawTypeSymbol(fb, pa->type, cx - 16, cy - 16, 512);
++        Gfx_DrawSlice9(fb, Gfx_HiStill(HI_PA_BANNER), bx, by, bw, 18, 10, 10, NULL);
++        snprintf(line, sizeof(line), "%s %u", pa->name, pa->power);
++        TextCentered(fb, cx, by + 2, line, COL_WHITE, TRUE);
++        Gfx_Draw(fb, Gfx_HiStill(HI_PA_SHINE_0 + ((k - 31) / 3) % 4), bx, by, GFX_ADD, 0, 0);
++    }
++    return TRUE;
++}
++
+ static void DrawPAForming(u16 *fb)
+ {
+     s32 k, i, cx = CW / 2, cy = 58;
+@@ -2082,6 +2278,8 @@ static void DrawPAForming(u16 *fb)
+     k = PA_ANIM - sPAAnimT;
+     if (sB.state == ST_FIGHT && !sB.hitStop)
+         sPAAnimT--;
++    if (DrawPAFormingHi(fb, k))
++        return;
+     if (k < 14)
+     {
+         // the three chips come together
+diff --git a/src/pkbn/grid_vfx.c b/src/pkbn/grid_vfx.c
+index 9f2fd36..e8b160b 100644
+--- a/src/pkbn/grid_vfx.c
++++ b/src/pkbn/grid_vfx.c
+@@ -141,6 +141,16 @@ void Vfx_Reset(void)
+ 
+ struct TypeLook { u8 fx; u8 tinted; u8 layer; s8 dy; };
+ 
++// POC-28: which type a tint colour came from (Vfx_TypeColor), for the colour ramps; 0xFF = none (a plain tint)
++static u8 TypeOfColor(u16 color)
++{
++    u8 t;
++    for (t = 0; t < NUMBER_OF_MON_TYPES; t++)
++        if (t != TYPE_MYSTERY && (Vfx_TypeColor(t) & 0x7FFF) == (color & 0x7FFF))
++            return t;
++    return 0xFF;
++}
++
+ static struct TypeLook TypeImpact(u8 type)
+ {
+     struct TypeLook l = { FX_HIT_STAR, FALSE, VFX_LAYER_AIR, -14 };
+@@ -170,7 +180,9 @@ static struct TypeLook TypeImpact(u8 type)
+ static void TypeBurst(u8 type, s32 x, s32 y, bool8 big)
+ {
+     struct TypeLook l = TypeImpact(type);
+-    struct Particle *p = Fx(l.fx, l.layer, x, y + l.dy, l.tinted ? GFX_TINT : 0, Vfx_TypeColor(type), 8, 0);
++    // POC-28: our grey impacts always take the type's ramp (Normal stays grey-white)
++    bool8 tint = l.tinted || (Fx_IsGrey(l.fx) && type != TYPE_NORMAL);
++    struct Particle *p = Fx(l.fx, l.layer, x, y + l.dy, tint ? GFX_TINT : 0, Vfx_TypeColor(type), 8, 0);
+     if (p && Fx_Loops(l.fx))
+         p->life = big ? 22 : 14;
+ }
+@@ -563,6 +575,13 @@ static void Strike(u16 move, u8 type, s32 x, s32 y, u32 flip, bool8 wide)
+         Fx(FX_CLAW, VFX_LAYER_AIR, x, y - 18, flip | tint, tc, 7, 18);
+         break;
+     case STRIKE_BITE:
++        if (Fx_HasHi(FX_HI_JAWS))
++        {
++            // POC-28: our JAWS (ASSET-010), red for Normal-type bites as the drawn jaws were
++            Fx(FX_HI_JAWS, VFX_LAYER_AIR, x, y - 20, flip | GFX_TINT, type == TYPE_NORMAL ? Vfx_TypeColor(TYPE_FIGHTING) : tc, 8, 0);
++            Shake(3, 1);
++            break;
++        }
+         if ((p = Spawn(P_JAWS, VFX_LAYER_AIR, x, y - 20)) != NULL)
+         {
+             p->life = 20;
+@@ -583,7 +602,9 @@ static void Strike(u16 move, u8 type, s32 x, s32 y, u32 flip, bool8 wide)
+         Shake(4, 1);
+         return;
+     case STRIKE_STAB:
+-        if ((p = Fx(FX_SPIKE, VFX_LAYER_AIR, x - (flip ? -10 : 10), y - 18, flip | tint, tc, 6, 16)) != NULL)
++        // POC-28: our STAB (ASSET-010) when it's in; BN6's upright spike otherwise
++        if ((p = Fx(Fx_HasHi(FX_HI_STAB) ? FX_HI_STAB : FX_SPIKE, VFX_LAYER_AIR, x - (flip ? -10 : 10), y - 18,
++                    flip | tint, tc, 6, 16)) != NULL)
+             p->vx = flip ? -24 : 24;
+         break;
+     case STRIKE_WHIP:
+@@ -1021,12 +1042,28 @@ void Vfx_DrawLayer(u16 *fb, u8 layer)
+         switch (p->type)
+         {
+         case P_SPRITE:
++        {
++            const struct PkbnImage *img = Fx_Frame(p->id, p->t);
++            struct PkbnImage ramped;
++            u32 fl = (p->flags & ~PF_FADE) | ((p->flags & PF_FADE) && p->t + 5 >= p->life ? GFX_HALF : 0);
+             if (p->clipL || p->clipR)
+                 Gfx_ClipX(p->clipL, p->clipR);
+-            Gfx_DrawScaled(fb, Fx_Frame(p->id, p->t), p->x / 16, p->y / 16, p->scale, p->scale,
+-                           (p->flags & ~PF_FADE) | ((p->flags & PF_FADE) && p->t + 5 >= p->life ? GFX_HALF : 0), p->color, p->amt);
++            if ((fl & GFX_TINT) && img->hi && Fx_IsGrey(p->id))
++            {
++                // POC-28: our grey effects take the type's colour ramp (ASSET-006 part C) instead of a flat tint
++                const u16 *ramp = Gfx_HiRamp(TypeOfColor(p->color));
++                if (ramp != NULL)
++                {
++                    ramped = *img;
++                    ramped.pal = ramp;
++                    img = &ramped;
++                    fl &= ~GFX_TINT;
++                }
++            }
++            Gfx_DrawScaled(fb, img, p->x / 16, p->y / 16, p->scale, p->scale, fl, p->color, p->amt);
+             Gfx_ClipX(-9999, 9999);
+             break;
++        }
+         case P_NUMBER:
+             DrawNumber(fb, p);
+             break;
+-- 
+2.43.0
+
