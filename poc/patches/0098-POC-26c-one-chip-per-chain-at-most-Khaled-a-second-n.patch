@@ -1,0 +1,60 @@
+From 31eae2490d69216bf260e8791cd5a9e41e2e55f8 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Thu, 15 Oct 2026 09:53:29 +0300
+Subject: [PATCH] POC-26c: one * chip per chain at most (Khaled) - a second *
+ never joins a chain, the Unison's * third chip included
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ src/pkbn/folder.c      | 5 +++++
+ src/pkbn/grid_battle.c | 3 ++-
+ 2 files changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index 1d24419..6e36bef 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -528,6 +528,7 @@ bool8 PkbnFolder_CanAppend(const struct Folder *folder, const u8 *queue, u8 queu
+ {
+     u32 common = 0xFFFFFFFF;
+     bool8 sameMove = TRUE;
++    u8 wilds = 0;
+     s32 i;
+ 
+     for (i = 0; i < queueCount; i++)
+@@ -539,6 +540,7 @@ bool8 PkbnFolder_CanAppend(const struct Folder *folder, const u8 *queue, u8 queu
+             return FALSE;       // already queued
+         q = &folder->chips[queue[i]];
+         common &= LetterMask(q->letter);
++        wilds += q->letter == LETTER_WILD;
+         if (cand == FOLDER_QUEUE_WILD || q->move != folder->chips[cand].move)
+             sameMove = FALSE;
+         if (gBattleMoves[q->move].effect == EFFECT_BATON_PASS)
+@@ -556,6 +558,9 @@ bool8 PkbnFolder_CanAppend(const struct Folder *folder, const u8 *queue, u8 queu
+ 
+     {
+         const struct FolderChip *c = &folder->chips[cand];
++        // POC-26b (Khaled): one * chip per chain at most - a second * never joins, whatever it is
++        if (c->letter == LETTER_WILD && wilds > 0)
++            return FALSE;
+         // BN rule: one shared code, or all the same chip.
+         if ((common & LetterMask(c->letter)) == 0 && !(sameMove && queueCount > 0))
+             return FALSE;
+diff --git a/src/pkbn/grid_battle.c b/src/pkbn/grid_battle.c
+index 283b1a9..bd4cd5e 100644
+--- a/src/pkbn/grid_battle.c
++++ b/src/pkbn/grid_battle.c
+@@ -1433,7 +1433,8 @@ bool8 PkbnGrid_HandSelectable(u8 pos)
+             return TRUE;
+         if (sB.queueCount == 2 && sB.queue[0] < QUEUE_PA_BASE && sB.queue[1] < QUEUE_PA_BASE
+          && sB.folder.chips[sB.queue[0]].move == gPkbnUnisonPA.recipe[0]
+-         && sB.folder.chips[sB.queue[1]].move == gPkbnUnisonPA.recipe[1] && c->letter == LETTER_WILD)
++         && sB.folder.chips[sB.queue[1]].move == gPkbnUnisonPA.recipe[1] && c->letter == LETTER_WILD
++         && sB.folder.chips[sB.queue[0]].letter != LETTER_WILD && sB.folder.chips[sB.queue[1]].letter != LETTER_WILD)
+             return TRUE;
+     }
+     AliveTable(alive);
+-- 
+2.43.0
+

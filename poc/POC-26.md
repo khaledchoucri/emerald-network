@@ -1,6 +1,6 @@
 # POC-26: Out of the buster rut
 
-**Patches:** `0096-POC-26-…` (the gameplay) and `0097-POC-26b-version-0.26.patch`, on top of 0001–0095.
+**Patches:** `0096-POC-26-…` (the gameplay), `0097-POC-26b-version-0.26.patch` and `0098-POC-26c-…` (one `*` per chain), on top of 0001–0095.
 
 Your play log from 14 Oct showed why wild battles had turned into holding B with fast-forward on:
 
@@ -83,6 +83,9 @@ It now lands in a plus. Only the middle panel pins the target, and the four arms
   it takes the one your folder already has the most of. That's the equipped folder, or the whole pack while the folder
   is auto-built. A `*` (a rare drop, a shiny catch) stays `*`. Shop shelves and the candy list don't roll: they show a
   fixed unlocked code.
+- **One `*` per chain (POC-26c, patch `0098`).** A chain may hold at most one `*` chip. A second `*` can't join, even
+  the same chip, and the Unison's `*` third chip can't follow a `*`. Tested with a forced hand of three `*` chips: the
+  second can't be picked.
 - **One new hand a battle (D5).** On the Custom screen, before you pick anything, R puts the whole hand under the pile
   and deals a new one. The footer shows "R:NEW" while you still have it.
 
