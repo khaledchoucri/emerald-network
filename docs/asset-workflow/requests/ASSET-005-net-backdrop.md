@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 5
 - Assigned producer: Codex
 - Current owner: Codex
 - Brief revision: 2
 - Based on repository commit: 89c74ed
-- Last update (UTC date): 2026-10-14
-- Next action / blocker: A v002 approved. Codex delivers B (motes) and C (data streams).
+- Last update (UTC date): 2026-10-15
+- Next action / blocker: A v002 remains approved and unchanged. Review B/C v003; implementation agent then tunes scatter/drift, integrates and checks layered contrast in the renderer.
 
 ## Purpose and visual brief
 
@@ -67,7 +67,7 @@
 
 ## Producer record
 
-- Brief revision used: 2 (latest delivery v002).
+- Brief revision used: 2 (latest delivery v003 B/C; approved A remains v002).
 - Tool: image_gen.imagegen; exact prompt/reference list in the sample's PROMPT.md. Raw outputs retained under raw/ for reproducibility, not intended for runtime use.
 - Programmatic processing: authorized by PIPELINE.md Source-art rules item 7. Exact config and operations are in processing.json / validation.json; shared helper: poc/assets/generated/_tools/prepare_samples.py. Run from repository root with the sample's processing.json. Python dependencies: Pillow and NumPy.
 - Delivery scaling: native files plus exact 4× nearest-neighbor review PNGs and half-size previews. Raw generator dimensions were not native or exact integer multiples; cleanup reconstructs/packs the specified delivery geometry without claiming the raw art met that constraint.
@@ -89,6 +89,33 @@
 - Generated source was 1536×1024. Reproducible `v002/cleanup.py` resizes with nearest neighbour, replaces noisy sky with flat bands, translates generated floor geometry 16 px down and snaps grid colours. Exact prompt, source, processing and validation are retained; Pillow/NumPy required. This version uses its own cleanup script rather than the v001 shared helper.
 - Dimension, opacity, palette, sky-step, glow and dense-floor checks pass. Visual review confirms panels remain brighter in the contrast preview. Preview uses cropped/resized source panels; it is not a renderer screenshot. Pixel staircase line width varies in perspective.
 - User approval and in-game contrast/HUD integration remain pending. B/C are held. v001 is preserved as review history.
+
+### Delivery v003 — B motes and C data streams, 2026-10-15
+
+- Native B: `poc/assets/generated/ASSET-005/v003/motes.png`, 48×34 RGBA. Three rows for 2×2, 4×4 and 6×6
+  squares, each containing four 6×6 cells; 8 px transparent gaps between cells and rows. Each square has one
+  lighter core pixel. Frame order is medium / bright / medium / dim; each holds 8 game frames and loops.
+- Native C: `poc/assets/generated/ASSET-005/v003/data_streams.png`, 56×120 RGBA. Four 8×120 cells, 8 px clear
+  gaps, left-to-right occupied bounds 4×40, 6×64, 8×92 and 4×120. Static dashed streaks; runtime scroll remains
+  the implementation agent's responsibility. Body/edge colors are #0b2550 and #103473.
+- Both sheets have binary alpha, no opaque pixels in gutters, and zero RGB beneath alpha 0. Motes use four
+  quiet blues, with maximum core #2467b0: one step above the review's #1a4f9c reference. No bright cyan/white
+  from the original brief palette is used, following the newer v002 review's contrast requirement.
+- Raw source: `v003/raw/particles.png`, 1536×1024 RGBA. It contained soft halos and approximate geometry, so
+  it did not satisfy the native contract. Authorized scripted processing reconstructs exact square motes, extracts
+  strong dash-row geometry from four source crops, removes halo/weak runs, snaps native dimensions and packs.
+  Exact generation prompt/references and cleanup assumptions are in `v003/PROMPT.md`; reproduce with
+  `python poc/assets/generated/ASSET-005/v003/cleanup.py` using `processing.json` (Pillow/NumPy required).
+- Review files: `motes_review_4x.png`, `data_streams_review_4x.png` and matching `_review_half.png` files;
+  `layered_preview.png` plus 4×/half previews; `layered_playback.gif` demonstrates a complete twinkle loop and
+  upward stream drift over approved A v002. Fixed preview positions/speeds are illustrative, not engine settings.
+  GIF hold rounding is 130/140 ms; source timing remains exactly 8/60 seconds per mote phase.
+- `v003/validation.json` records successful dimensions, binary alpha, occupied bounds, clear gutters, exact
+  square areas, single core pixels, brightness cap, at least three dashes per stream, GIF frame/delay/loop decoding,
+  and unchanged approved-A checksum. Native and enlarged views were inspected; the scene stays quiet and dim.
+- A v002 was not regenerated or modified. B/C are delivered for review, not runtime acceptance. Half-size
+  nearest-neighbor views can lose one-pixel cores; final readability, scatter density, panel/HUD contrast,
+  scrolling and in-game screenshot/clip evidence remain with the implementation agent.
 
 ## Consolidated review
 
@@ -137,3 +164,5 @@
 
 - 2026-10-14 — Codex — delivered revision 2 backdrop A with visible sky bands, 12 px horizon glow and dense floor depth; source checks passed, user and runtime review pending.
 - 2026-10-14 — implementation agent (Claude) — reviewed v002: backdrop A approved; B and C released.
+- 2026-10-15 — Codex — delivered B/C v003 with native transparent sheets, layered playback, reproducible cleanup
+  and source validation; approved A v002 preserved. Review and implementation integration pending.

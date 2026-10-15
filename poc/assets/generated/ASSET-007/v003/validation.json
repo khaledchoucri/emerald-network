@@ -1,0 +1,187 @@
+{
+  "h2_tag": {
+    "size": [
+      40,
+      18
+    ],
+    "opaque_colors": 4,
+    "alpha_values": [
+      0,
+      255
+    ]
+  },
+  "h3_trough": {
+    "size": [
+      88,
+      8
+    ],
+    "opaque_colors": 4,
+    "alpha_values": [
+      0,
+      255
+    ]
+  },
+  "h3_fill": {
+    "size": [
+      84,
+      4
+    ],
+    "opaque_colors": 4,
+    "alpha_values": [
+      255
+    ]
+  },
+  "h4_frame": {
+    "size": [
+      224,
+      16
+    ],
+    "opaque_colors": 5,
+    "alpha_values": [
+      0,
+      255
+    ]
+  },
+  "h4_fill": {
+    "size": [
+      220,
+      8
+    ],
+    "opaque_colors": 5,
+    "alpha_values": [
+      255
+    ]
+  },
+  "h5_line": {
+    "size": [
+      160,
+      22
+    ],
+    "opaque_colors": 5,
+    "alpha_values": [
+      0,
+      255
+    ]
+  },
+  "h4_full_1": {
+    "size": [
+      224,
+      16
+    ],
+    "opaque_colors": 1,
+    "alpha_values": [
+      0,
+      255
+    ]
+  },
+  "h4_full_2": {
+    "size": [
+      224,
+      16
+    ],
+    "opaque_colors": 1,
+    "alpha_values": [
+      0,
+      255
+    ]
+  },
+  "h4_full_3": {
+    "size": [
+      224,
+      16
+    ],
+    "opaque_colors": 1,
+    "alpha_values": [
+      0,
+      255
+    ]
+  },
+  "h4_full_4": {
+    "size": [
+      224,
+      16
+    ],
+    "opaque_colors": 1,
+    "alpha_values": [
+      0,
+      255
+    ]
+  },
+  "stretch_checks": {
+    "h2_tag": {
+      "horizontal_caps_px": 6,
+      "widths": [
+        20,
+        100
+      ],
+      "caps_identical": true,
+      "middle_edges_and_fill_uniform": true
+    },
+    "h3_trough": {
+      "horizontal_caps_px": 6,
+      "widths": [
+        40,
+        200
+      ],
+      "caps_identical": true,
+      "middle_edges_and_fill_uniform": true
+    },
+    "h5_line": {
+      "horizontal_caps_px": 8,
+      "widths": [
+        40,
+        300
+      ],
+      "caps_identical": true,
+      "middle_edges_and_fill_uniform": true
+    }
+  },
+  "text_clearance": {
+    "h2_px": 12,
+    "h5_px": 16,
+    "actual_game_font_tested": false
+  },
+  "h3_slice_adaptation": "6px horizontal cap, full8px height split4+4; literal6x6 top/bottom corners overlap and are unsupported",
+  "h5_frame_adaptation": "1outer+1litframe+1inner, not H1 1+3+1, to leave16px text room",
+  "h4_frame_fill_alignment": {
+    "frame": [
+      224,
+      16
+    ],
+    "fill": [
+      220,
+      8
+    ],
+    "fill_offset": [
+      2,
+      4
+    ]
+  },
+  "h4_overlay": {
+    "frames": 4,
+    "gap": 8,
+    "sheet": [
+      920,
+      16
+    ],
+    "timing_game_frames": [
+      4,
+      4,
+      4,
+      4
+    ],
+    "loop": true,
+    "center_fully_transparent": true,
+    "standalone_gif_preview_ms": 67,
+    "in_game_playback_tested": false
+  },
+  "raw_source": {
+    "sha256": "0d7c1d68dabbd6794e5fb4a308f2ab5fb0ac8c7ed9cbbcba3ba71d43f49155d1",
+    "size": [
+      1536,
+      1024
+    ],
+    "not_native_multiple": true
+  },
+  "in_game_tested": false
+}

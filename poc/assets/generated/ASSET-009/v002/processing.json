@@ -1,0 +1,77 @@
+{
+  "raw": "raw/custom_parts_generated.png",
+  "raw_dimensions": [
+    2172,
+    724
+  ],
+  "source_crops": {
+    "slot": [
+      56,
+      200,
+      275,
+      510
+    ],
+    "cursor_TL": [
+      334,
+      201,
+      423,
+      294
+    ],
+    "chosen_tab": [
+      907,
+      281,
+      1458,
+      418
+    ],
+    "pa_preview": [
+      1513,
+      237,
+      2127,
+      442
+    ]
+  },
+  "operations": [
+    "nearest-neighbor native resize",
+    "alpha threshold128",
+    "nearest RGB palette quantization",
+    "corner preservation and uniform middle edge reflow",
+    "flat plain interior replacement",
+    "exact index recolor for variants and blink",
+    "8px transparent animation gaps"
+  ],
+  "palettes": {
+    "greys": [
+      "#202020",
+      "#585858",
+      "#909090",
+      "#c8c8c8",
+      "#ffffff"
+    ],
+    "gold": [
+      "#0b0a14",
+      "#554016",
+      "#af842a",
+      "#e3b650",
+      "#ffe7a0"
+    ],
+    "magenta": [
+      "#0b0a14",
+      "#161b2d",
+      "#460c35",
+      "#8b1b58",
+      "#c9007c",
+      "#fa2d98",
+      "#ff65a5",
+      "#ffa6d1"
+    ]
+  },
+  "C1_optional_fill_adopted": "#0d2347",
+  "C2": "byte-identical to v001",
+  "scale": 1,
+  "raw_exact_integer_multiple": false,
+  "preview_scales": [
+    4,
+    0.5
+  ],
+  "layout_preview": "Illustrative arrangement only; no engine rendering or text test"
+}

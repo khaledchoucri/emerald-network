@@ -1,0 +1,44 @@
+# ASSET-010, brief revision 2
+
+Tool: `image_gen.imagegen`, transparent output requested. Five source generations run concurrently.
+All receive approved original `ASSET-006/v001/hit_review_4x.png`; SLASH also receives `ASSET-010/v001/slash_review_4x.png` for its approved thick middle frame and revision context.
+Retained raw files are original generated artwork; no extracted sprites are used.
+
+## slash
+
+```text
+Original hi-bit pixel art combat VFX for Emerald Network. Abstract shapes only, no characters, copyrighted sprites, actual creature body parts, weapons, interface or text. Transparent background. Use attached original HIT sprite ONLY for five neutral gray tones, precise hard pixel edges, dark 1pixel edges, square sparks. Colors exactly #202020,#585858,#909090,#c8c8c8,#ffffff. No blur soft glows anti-alias gradients checkerboard patterns or texture. White bright core, gray sharp edge bands. One horizontal row with evenly spaced separate frames and transparent gutters, each in an identical invisible cell. Draw at FOUR TIMES native resolution with every native pixel a 4x4 square. REVISION of attached slash: four portrait frames, each76x142native, 8native empty pixels between; final sheet native328x142 drawn1312x568. Cut diagonal TOPRIGHT toward BOTTOMLEFT, same centered anchor and extent. Frame1 thin SOLID uninterrupted white line2-3nativepixels wide with dark outline ONLY its outside edges. No hollow/checkered/dotted interior. Frame2 strong thick slash, preserve attached middleframe goodweight and shading, whitecore grayedge. No detached sparks or lonely specks in FIRST TWO FRAMES. Frame3 thick slash starts SPLITTING along its length, narrow few gaps, 3small square sparks attached visually to it. Frame4 thin BROKEN LINE REMNANT, with 4-6 square sparks emitted from breaks, still clearly a diagonal cut rather than scatter. Four stages thin solid -> thick solid -> splitting -> broken remnant. Fit centered art 50x112native inside76x142.
+```
+
+## stab
+
+```text
+Original hi-bit pixel art combat VFX for Emerald Network. Abstract shapes only, no characters, copyrighted sprites, actual creature body parts, weapons, interface or text. Transparent background. Use attached original HIT sprite ONLY for five neutral gray tones, precise hard pixel edges, dark 1pixel edges, square sparks. Colors exactly #202020,#585858,#909090,#c8c8c8,#ffffff. No blur soft glows anti-alias gradients checkerboard patterns or texture. White bright core, gray sharp edge bands. One horizontal row with evenly spaced separate frames and transparent gutters, each in an identical invisible cell. Draw at FOUR TIMES native resolution with every native pixel a 4x4 square. STAB abstract thrust effect. TWO LANDSCAPE frames62x26native each separated8nativeemptygap; sheet132x26native drawn528x104. Original slim white pointed spear of light facing RIGHT with dark gray edge and a tapered short trail on LEFT. NOT a physical spear, no metal handle or object. Frame1 sharp narrow thrust ending in clean white tip near right edge. Frame2 same thrust geometry and anchor, tiny fourpoint glint at its right tip, main thrust slightly shorter dimmer trail. Base at leftmiddle, tiprightmiddle. Geometry occupies 50x16 native at most. Give image generous whitespace around the row.
+```
+
+## slash_arc
+
+```text
+Original hi-bit pixel art combat VFX for Emerald Network. Abstract shapes only, no characters, copyrighted sprites, actual creature body parts, weapons, interface or text. Transparent background. Use attached original HIT sprite ONLY for five neutral gray tones, precise hard pixel edges, dark 1pixel edges, square sparks. Colors exactly #202020,#585858,#909090,#c8c8c8,#ffffff. No blur soft glows anti-alias gradients checkerboard patterns or texture. White bright core, gray sharp edge bands. One horizontal row with evenly spaced separate frames and transparent gutters, each in an identical invisible cell. Draw at FOUR TIMES native resolution with every native pixel a 4x4 square. SLASH_ARC curved swipe effect. THREE portrait frames142x176native percell with8nativegaps. Entirethreeframecanvas native442x176 drawn1768x704. Each frame centeredsameanchor and size. Clear sideways CRESCENT SWIPE sweeping from LEFT toward RIGHT, convex bright edge on RIGHT, opening toward LEFT. Thick middle and sharp thin tapered BOTH ends. Frame1 narrow earlycrescent sweeping upwardright. Frame2 full strong white crescent broadmiddle with two angulargray trailbands trailing LEFT. Frame3 thinner broken crescent still retains arc shape with just4square sparks. This must read CURVED ARC, not straight line, ring, starburst or a moon icon. Usesharp pixel staircase edges. Occupied120x140nativepercell.
+```
+
+## claw
+
+```text
+Original hi-bit pixel art combat VFX for Emerald Network. Abstract shapes only, no characters, copyrighted sprites, actual creature body parts, weapons, interface or text. Transparent background. Use attached original HIT sprite ONLY for five neutral gray tones, precise hard pixel edges, dark 1pixel edges, square sparks. Colors exactly #202020,#585858,#909090,#c8c8c8,#ffffff. No blur soft glows anti-alias gradients checkerboard patterns or texture. White bright core, gray sharp edge bands. One horizontal row with evenly spaced separate frames and transparent gutters, each in an identical invisible cell. Draw at FOUR TIMES native resolution with every native pixel a 4x4 square. CLAW abstract three-rake strike. THREE portrait frames84x204nativecells with8nativepixelgaps. Wholecanvas native268x204 drawn1072x816. THREE PARALLEL DIAGONAL claw rake MARKS tearing fromTOPLEFT towardBOTTOMRIGHT, like three narrow white slashes slantingdownright. No hand or claw objects, no monsterbody. Marks tall thin sharp white center darkgrayoutside outline, each tapered. EXACTLY THREE long parallel marks clearly separated, staggered slightly vertically so all fit tallcell70x168native. Frame1 three thin solid rakes, Frame2 three heavier torn-edge rakes with brightwhitecores, Frame3 three thinner broken rake remnants withfew square particles. Shared anchor allframes, not increasing scale.
+```
+
+## jaws
+
+```text
+Original hi-bit pixel art combat VFX for Emerald Network. Abstract shapes only, no characters, copyrighted sprites, actual creature body parts, weapons, interface or text. Transparent background. Use attached original HIT sprite ONLY for five neutral gray tones, precise hard pixel edges, dark 1pixel edges, square sparks. Colors exactly #202020,#585858,#909090,#c8c8c8,#ffffff. No blur soft glows anti-alias gradients checkerboard patterns or texture. White bright core, gray sharp edge bands. One horizontal row with evenly spaced separate frames and transparent gutters, each in an identical invisible cell. Draw at FOUR TIMES native resolution with every native pixel a 4x4 square. JAWS abstract bite VFX, FIVE portrait frames64x96nativecells and8nativeemptygap, wholecanvas native352x96 drawn1408x384. Two abstract rows of triangular white FANG SHAPES, upperrow pointing DOWN and lowerrow pointing UP, grayouteredge. Just angular floating energychevrons, no gums mouth face flesh tongue creature or actual animaljaws. Read bite while wholly abstract,4big triangular teeth in eachrow. Centeredx32,y48sameanchorallframes. Frame1 OPEN: upperrowy20 lowerrowy76, rows separated. Frame2 HALFCLOSED: upperrowy30 lowerrowy66. Frame3 SNAPSHUT: rows meet at y48, teeth interlock, tiny4squareparks. Frame4 HOLD: sameclosedrows. Frame5 FADE: hardbinaryopaque graybrokenfang fragments around samecenter,noopacityfading. Allfive cellsidenticalwidth. VFX is snapping top and bottom together, notmoving sideways. Maintain consistent teeth geometry as rows translate.
+```
+
+## SLASH first-frame correction
+
+The row generation repeated the rejected checkered core; a standalone first-frame generation was made with no image reference. Its source is `raw/slash_first.png`.
+
+```text
+Original abstract pixel art VFX sprite. ONE SINGLE VERY THIN DIAGONAL STROKE of solid continuous WHITE light, leaning from TOP RIGHT toward BOTTOM LEFT. No other objects or particles or sparks. Target portrait canvas 76x142 native, drawn 4x as304x568. Stroke occupies44x108native centered. White core exactly2to3pixels wide, pure #ffffff CONTINUOUS uninterrupted SOLID fill along its entire length, no holes, no checker pattern, no segmented stripes, no alternatingcolors across itslength, no dashed rope. Straight thin solidwhite line with a 1nativepixel dark gray #202020 outline OUTSIDE its edge only. Gray thin edge #909090 permittedonlyoutside whitecore. Sharp pixel staircase silhouette. This is a luminous SLASH, abstractline not a rope chain blade weapon or lightningzigzag. Transparent background, no grids, no text no shadows, no blur, no antialias. Ensure the white CORE is a singleconnected solidcontinuous narrow diagonal shape from tip to tip.
+```
+

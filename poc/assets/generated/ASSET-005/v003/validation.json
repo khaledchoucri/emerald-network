@@ -1,0 +1,536 @@
+{
+  "brief_revision": 2,
+  "delivery": "v003 B/C only",
+  "raw": {
+    "path": "raw/particles.png",
+    "sha256": "195c59f75e67ef7dd595409f6106e2a9c63bbd3d632c2750d92305f796cf3801",
+    "size": [
+      1536,
+      1024
+    ]
+  },
+  "operations": [
+    {
+      "operation": "exact_square_mote_geometry",
+      "sizes": [
+        2,
+        4,
+        6
+      ],
+      "native_cell": [
+        6,
+        6
+      ],
+      "frames_per_row": 4,
+      "rows": 3,
+      "gap": 8,
+      "lighter_core_pixels": 1,
+      "phase_colors": [
+        [
+          "#103473",
+          "#1a4f9c"
+        ],
+        [
+          "#1a4f9c",
+          "#2467b0"
+        ],
+        [
+          "#103473",
+          "#1a4f9c"
+        ],
+        [
+          "#0b2550",
+          "#103473"
+        ]
+      ],
+      "generation_role": "shape/palette source; reconstructed to exact tiny pixel squares"
+    },
+    {
+      "operation": "source_dash_row_projection_and_native_snap",
+      "index": 0,
+      "source_crop": [
+        380,
+        590,
+        432,
+        820
+      ],
+      "native_width": 4,
+      "native_height": 40,
+      "alpha_threshold": 128,
+      "row_coverage_minimum": 0.12,
+      "source_row_trim": [
+        4,
+        222
+      ],
+      "minimum_row_contrast": 16,
+      "minimum_source_dash_rows": 8,
+      "occupied_native_rows": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        26,
+        27,
+        28,
+        30,
+        31,
+        32,
+        33,
+        36,
+        37,
+        38,
+        39
+      ],
+      "body": "#0b2550",
+      "edge": "#103473"
+    },
+    {
+      "operation": "source_dash_row_projection_and_native_snap",
+      "index": 1,
+      "source_crop": [
+        612,
+        548,
+        666,
+        870
+      ],
+      "native_width": 6,
+      "native_height": 64,
+      "alpha_threshold": 128,
+      "row_coverage_minimum": 0.12,
+      "source_row_trim": [
+        7,
+        317
+      ],
+      "minimum_row_contrast": 16,
+      "minimum_source_dash_rows": 8,
+      "occupied_native_rows": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63
+      ],
+      "body": "#0b2550",
+      "edge": "#103473"
+    },
+    {
+      "operation": "source_dash_row_projection_and_native_snap",
+      "index": 2,
+      "source_crop": [
+        842,
+        480,
+        906,
+        930
+      ],
+      "native_width": 8,
+      "native_height": 92,
+      "alpha_threshold": 128,
+      "row_coverage_minimum": 0.12,
+      "source_row_trim": [
+        6,
+        443
+      ],
+      "minimum_row_contrast": 16,
+      "minimum_source_dash_rows": 8,
+      "occupied_native_rows": [
+        0,
+        1,
+        2,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        72,
+        73,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91
+      ],
+      "body": "#0b2550",
+      "edge": "#103473"
+    },
+    {
+      "operation": "source_dash_row_projection_and_native_snap",
+      "index": 3,
+      "source_crop": [
+        1098,
+        465,
+        1156,
+        975
+      ],
+      "native_width": 4,
+      "native_height": 120,
+      "alpha_threshold": 128,
+      "row_coverage_minimum": 0.12,
+      "source_row_trim": [
+        8,
+        503
+      ],
+      "minimum_row_contrast": 16,
+      "minimum_source_dash_rows": 8,
+      "occupied_native_rows": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        65,
+        66,
+        67,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        101,
+        102,
+        103,
+        106,
+        107,
+        108,
+        109,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119
+      ],
+      "body": "#0b2550",
+      "edge": "#103473"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "motes.png",
+      "dimensions": [
+        48,
+        34
+      ],
+      "sha256": "65585e22a5d0540035512e43cbce27861dc900eb6ca5b4da9d1a01891dfba5ea",
+      "visible_colors": [
+        "#0b2550",
+        "#103473",
+        "#1a4f9c",
+        "#2467b0"
+      ],
+      "checks": {
+        "size": true,
+        "binary_alpha": true,
+        "nonempty": true,
+        "transparent_RGB_zero": true,
+        "brightness_cap": true
+      },
+      "passed": true
+    },
+    {
+      "path": "motes_review_4x.png",
+      "dimensions": [
+        192,
+        136
+      ],
+      "sha256": "18e55a26e2ffdbdb436e9f1a05e02cbcf36d585a2ec218baa0f000c2bb5ebca1",
+      "visible_colors": [
+        "#0b2550",
+        "#103473",
+        "#1a4f9c",
+        "#2467b0"
+      ],
+      "checks": {
+        "size": true,
+        "binary_alpha": true,
+        "nonempty": true,
+        "transparent_RGB_zero": true,
+        "brightness_cap": true
+      },
+      "passed": true,
+      "review_only": true
+    },
+    {
+      "path": "motes_review_half.png",
+      "dimensions": [
+        24,
+        17
+      ],
+      "sha256": "505464913ad43d464fde889e7c494bad8659d787101eed5660ba78e4545b5521",
+      "visible_colors": [
+        "#0b2550",
+        "#103473",
+        "#1a4f9c"
+      ],
+      "checks": {
+        "size": true,
+        "binary_alpha": true,
+        "nonempty": true,
+        "transparent_RGB_zero": true,
+        "brightness_cap": true
+      },
+      "passed": true,
+      "review_only": true
+    },
+    {
+      "path": "data_streams.png",
+      "dimensions": [
+        56,
+        120
+      ],
+      "sha256": "18ee8f942c8dc75b5363bebc45b160c92a2d3886a6eb95c84ad9f7cab62dddfe",
+      "visible_colors": [
+        "#0b2550",
+        "#103473"
+      ],
+      "checks": {
+        "size": true,
+        "binary_alpha": true,
+        "nonempty": true,
+        "transparent_RGB_zero": true,
+        "brightness_cap": true
+      },
+      "passed": true
+    },
+    {
+      "path": "data_streams_review_4x.png",
+      "dimensions": [
+        224,
+        480
+      ],
+      "sha256": "00e50adb1742d462a30f0eadaa1406627889fa3429238435b6371dfe8ee82fe5",
+      "visible_colors": [
+        "#0b2550",
+        "#103473"
+      ],
+      "checks": {
+        "size": true,
+        "binary_alpha": true,
+        "nonempty": true,
+        "transparent_RGB_zero": true,
+        "brightness_cap": true
+      },
+      "passed": true,
+      "review_only": true
+    },
+    {
+      "path": "data_streams_review_half.png",
+      "dimensions": [
+        28,
+        60
+      ],
+      "sha256": "da7d1660ec229dd3bb4e211d84d74d563549a29df752f9988a642a746467d642",
+      "visible_colors": [
+        "#0b2550",
+        "#103473"
+      ],
+      "checks": {
+        "size": true,
+        "binary_alpha": true,
+        "nonempty": true,
+        "transparent_RGB_zero": true,
+        "brightness_cap": true
+      },
+      "passed": true,
+      "review_only": true
+    }
+  ],
+  "sheet_checks": {
+    "mote_horizontal_gaps": true,
+    "mote_vertical_gaps": true,
+    "stream_gaps": true,
+    "mote_sizes": true,
+    "stream_dimensions": true,
+    "stream_0_actual_occupied_bounds": true,
+    "stream_0_multiple_dashes": true,
+    "stream_1_actual_occupied_bounds": true,
+    "stream_1_multiple_dashes": true,
+    "stream_2_actual_occupied_bounds": true,
+    "stream_2_multiple_dashes": true,
+    "stream_3_actual_occupied_bounds": true,
+    "stream_3_multiple_dashes": true,
+    "mote_2_phase_0_one_core": true,
+    "mote_2_phase_1_one_core": true,
+    "mote_2_phase_2_one_core": true,
+    "mote_2_phase_3_one_core": true,
+    "mote_4_phase_0_one_core": true,
+    "mote_4_phase_1_one_core": true,
+    "mote_4_phase_2_one_core": true,
+    "mote_4_phase_3_one_core": true,
+    "mote_6_phase_0_one_core": true,
+    "mote_6_phase_1_one_core": true,
+    "mote_6_phase_2_one_core": true,
+    "mote_6_phase_3_one_core": true,
+    "preview_has_16_frames": true,
+    "preview_loops": true,
+    "preview_delay_roundtrip": true,
+    "approved_A_unchanged": true
+  },
+  "animation": {
+    "mote_frames": 4,
+    "hold_game_frames": 8,
+    "fps": 60,
+    "loops": true,
+    "stream_sprites_static": true,
+    "preview_frame_count": 16,
+    "preview_gif_delay_ms": [
+      130,
+      130,
+      140,
+      130,
+      130,
+      140,
+      130,
+      130,
+      140,
+      130,
+      130,
+      140,
+      130,
+      130,
+      140,
+      130
+    ],
+    "preview_gif_sha256": "db0a0ae18f2e7c7961a525bc4b153bab16a58ab9821285b0e8114becee2e751c",
+    "preview_engine_motion": "illustrative fixed scatter and drift"
+  },
+  "approved_A": {
+    "path": "poc/assets/generated/ASSET-005/v002/backdrop.png",
+    "sha256": "a4f48ed4a35e0665afb2323a1bfb74e381d946d84948c1382e61793d8666849b"
+  },
+  "limits": [
+    "Layered playback is a preparation preview, not an in-game test.",
+    "Final stream scroll and mote density/speeds remain implementation choices.",
+    "Small 1px cores may alias in half-size nearest-neighbor review."
+  ],
+  "all_checks_passed": true
+}

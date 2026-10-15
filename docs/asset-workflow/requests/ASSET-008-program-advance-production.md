@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 8
 - Assigned producer: Codex
 - Current owner: Codex
 - Brief revision: 2
 - Based on repository commit: 89c74ed
-- Last update (UTC date): 2026-10-14
-- Next action / blocker: P1–P6 approved except two type symbols. Codex redraws Fighting and Ground in P5 (revision 2 below).
+- Last update (UTC date): 2026-10-15
+- Next action / blocker: Reviewer checks v003 Fighting clenched fist and Ground fissured mound; other15 P5 cells and approved P1–P4/P6 remain unchanged.
 
 ## Purpose and visual brief
 
@@ -83,7 +83,7 @@
 
 ## Producer record
 
-- Brief revision used: 1.
+- Brief revision used: 2 (latest v003 P5 correction; approved P1–P4/P6 remain v002).
 - Tool: image_gen.imagegen; exact prompt/reference list in the sample's PROMPT.md. Raw outputs retained under raw/ for reproducibility, not intended for runtime use.
 - Programmatic processing: authorized by PIPELINE.md Source-art rules item 7. Exact config and operations are in processing.json / validation.json; shared helper: poc/assets/generated/_tools/prepare_samples.py. Run from repository root with the sample's processing.json. Python dependencies: Pillow and NumPy.
 - Delivery scaling: native files plus exact 4× nearest-neighbor review PNGs and half-size previews. Raw generator dimensions were not native or exact integer multiples; cleanup reconstructs/packs the specified delivery geometry without claiming the raw art met that constraint.
@@ -115,6 +115,15 @@
 - Reproduction: `python poc/assets/generated/ASSET-008/v002/prepare.py` from repository root, Pillow and NumPy. `processing.json` contains every explicit crop, palette and stage configuration. Uses the existing shared helper read-only. Authorized cleanup thresholds alpha128, removes detached components smaller than32 source pixels, trims and aspect-preserving nearest-neighbour fits, packs native cells, normalizes emblem symbol reservation and banner nine-slice interior. Emblem/burst common scale retains staged expansion. Shine placements x18/78/138/198 in240px cells.
 - Visual checks: distinct type silhouettes at native and half size; turning views read as the approved card, arrival flashes/badge and burst stages are distinguishable; empty emblem and banner spaces reserved for engine text/symbol. Source-art checks passed. This is delivered for review, not runtime accepted.
 - Limitations: raw generator output did not land on requested integer-multiple canvas dimensions; delivery geometry was reconstructed without claiming generator-native grid compliance. Trail silhouettes occupy about55×20 inside96×24 cells to preserve source proportions. Emblem stage3 is a segmented nearly-full rim rather than a smaller uniform scaled badge. GIFs repeat for inspection; actual once/loop policy and game-frame timings remain engine-owned. Flip continuity, 120–420px banner stretches and the full `trio_pa` moment must be checked in the hi-bit renderer before acceptance.
+
+### Delivery v003 — P5 Fighting/Ground revision only
+
+- Brief revision2. Image generation redrew only Fighting as one clenched fist, and Ground as a cracked earth mound with a jagged split. Other artwork remains on the previously approved revisions.
+- Native replacement sheet: `poc/assets/generated/ASSET-008/v003/type_symbols.png`,672×32; seventeen32×32 cells with8px clear gaps in the existing order. All15 other cells are **pixel-identical RGBA** to v002, including transparent RGB data; all gaps unchanged. Changed indices1 (Fighting) and4 (Ground).
+- Individual replacement cells: `fighting.png` and `ground.png`, each32×32. Reviews: `type_symbols_review_4x.png` (2688×128) and `type_symbols_review_half.png` (336×16).
+- Exact five-grey membership, binary alpha, geometry, clear gaps, nonempty sheet and per-cell equality checks passed; output/source hashes and every equality result in `validation.json`. Fist and fissured mound inspected at native,4× and half size; no text, logos or copied game symbols.
+- Reproduction: `python poc/assets/generated/ASSET-008/v003/prepare.py` from repository root (Pillow/NumPy). Raw image, exact prompt/reference, crop/palette config and script retained in the same directory. Supported cleanup: threshold alpha128; trim explicit source crops; remove detached components below64 source pixels; aspect-preserving nearest-neighbour fit within28×28 in32×32 cell; quantize to exact five greys; replace two cells in a copy of v002.
+- Limitation: raw generator canvas1774×887 did not meet requested integer scale; documented native cleanup supplies delivery geometry. Ground is a deliberately low mound silhouette (about28×15 inside its cell), distinct from Rock's taller boulder. These revised sources await review; in-game acceptance remains implementation-owned.
 
 ## Consolidated review
 
@@ -160,3 +169,5 @@
 
 - 2026-10-14 — Codex — delivered v002 complete P1 turning and P2–P6 source sheets; original v001 preserved; source review and in-game acceptance pending.
 - 2026-10-14 — implementation agent (Claude) — reviewed v002: P1–P4, P6 and the shine approved; Fighting and Ground symbols revised (revision 2).
+
+- 2026-10-15 — Codex — delivered v003 P5 Fighting/Ground revision; verified other15 cells and gaps unchanged from v002; review pending.

@@ -1,0 +1,96 @@
+{
+  "window_body": {
+    "size": [
+      264,
+      352
+    ],
+    "colors": 7,
+    "alpha": [
+      255
+    ],
+    "sha256": "4b5e476ba3f7de2573ad5218fbc8253cc2ffd34b89df8741dec51a41e9f895f1"
+  },
+  "art_frame": {
+    "size": [
+      252,
+      120
+    ],
+    "colors": 3,
+    "alpha": [
+      0,
+      255
+    ],
+    "sha256": "c020e88a73156b8fa723f136cad2306eb414198847ada9cb9f0bb424e3eddebd"
+  },
+  "slot": {
+    "size": [
+      44,
+      56
+    ],
+    "colors": 5,
+    "alpha": [
+      0,
+      255
+    ],
+    "sha256": "006a6fcfad978fd2ec2f360231f4b7dd657c3fffa5b51b09cc3539639974c97b"
+  },
+  "ok": {
+    "size": [
+      96,
+      56
+    ],
+    "colors": 5,
+    "alpha": [
+      0,
+      255
+    ],
+    "sha256": "7741c579823cc8c3534d04a5a18d8795a6171c4c05c704abb38804f83a28b72e"
+  },
+  "cursor": {
+    "size": [
+      152,
+      12
+    ],
+    "colors": 4,
+    "alpha": [
+      0,
+      255
+    ],
+    "sha256": "60633a29b89c012183549624ae50538257c9f31f717db0e9cbd5f204253437d6"
+  },
+  "chosen_tab": {
+    "size": [
+      152,
+      28
+    ],
+    "colors": 5,
+    "alpha": [
+      0,
+      255
+    ],
+    "sha256": "c2b47759f30cdbb9cece53a21246e48a97da8d7d6c7fe3196d35588ad0f3b59c"
+  },
+  "pa_preview": {
+    "size": [
+      344,
+      52
+    ],
+    "colors": 8,
+    "alpha": [
+      0,
+      255
+    ],
+    "sha256": "e29eb2d9e060815b4be88a82ddd5744440ff696283b11e83a4db8402c7ff726a"
+  },
+  "checks": {
+    "dimensions": true,
+    "binary_alpha": true,
+    "C1_edge_fix": true,
+    "C2_byte_identical": true,
+    "five_grey_membership": true,
+    "uniform_9slice_edges": true,
+    "frame_alpha_geometry": true,
+    "clear_8px_gaps": true,
+    "in_game": false
+  }
+}

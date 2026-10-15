@@ -1,0 +1,33 @@
+{
+  "source": "raw/hud_parts_generated.png",
+  "operations": [
+    "interpret generated frame family as indexed stepped masks",
+    "normalize dimensions and strokes for text-safe thin parts",
+    "remove soft background/fill variation by explicit native reconstruction",
+    "quantize to explicit palettes",
+    "construct uniform horizontal stretch edges",
+    "construct four clockwise hard rim-light phases",
+    "pack8px gaps;nearest4x/half previews"
+  ],
+  "gray_palette": [
+    "#202020",
+    "#585858",
+    "#909090",
+    "#c8c8c8",
+    "#ffffff"
+  ],
+  "blue_palette": [
+    "#000000",
+    "#0b0a14",
+    "#667b99",
+    "#9db0ca",
+    "#536787",
+    "#0d2347"
+  ],
+  "h5_fill": "#14315b",
+  "dependencies": [
+    "Pillow",
+    "NumPy"
+  ],
+  "script": "cleanup.py"
+}

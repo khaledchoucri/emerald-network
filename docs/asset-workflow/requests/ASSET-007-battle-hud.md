@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 7
 - Assigned producer: Codex
 - Current owner: Codex
 - Brief revision: 2
 - Based on repository commit: 89c74ed
-- Last update (UTC date): 2026-10-14
-- Next action / blocker: H1 v002 approved. Codex delivers H2–H5 in the same frame family.
+- Last update (UTC date): 2026-10-15
+- Next action / blocker: review H2–H5 v003, including documented thin-part slicing/border adaptations; H1 v002 remains approved and unchanged.
 
 ## Purpose and visual brief
 
@@ -91,7 +91,7 @@
 
 ## Producer record
 
-- Brief revision used: 1.
+- Brief revision used: 2 (H1 v002 approved; latest H2–H5 delivery v003).
 - Tool: image_gen.imagegen; exact prompt/reference list in the sample's PROMPT.md. Raw outputs retained under raw/ for reproducibility, not intended for runtime use.
 - Programmatic processing: authorized by PIPELINE.md Source-art rules item 7. Exact config and operations are in processing.json / validation.json; shared helper: poc/assets/generated/_tools/prepare_samples.py. Run from repository root with the sample's processing.json. Python dependencies: Pillow and NumPy.
 - Delivery scaling: native files plus exact 4× nearest-neighbor review PNGs and half-size previews. Raw generator dimensions were not native or exact integer multiples; cleanup reconstructs/packs the specified delivery geometry without claiming the raw art met that constraint.
@@ -114,6 +114,15 @@
 - Player fill is flat `#0d2347`. All variants have a `#0b0a14` outer 1px outline, 3px colorway frame with top/left highlight, 1px dark inner outline and flat fill. Stepped face notches remain within the 8×8 corner slices. Colorways share one index image; Synchro changes only rim colors, fill stays unchanged.
 - Actual assertions (`validation.json`): each part exact 96×34; alpha only 0/255; five visible colors per part; every non-corner edge and center uniform; all corner patches preserved when stretched to player 44×24, player 200×34 and foe 60×34; middle-edge material widths exactly 1+3+1; identical geometry for colorways; unchanged Synchro fill. `processing.json` records palettes and operations. Run `python poc/assets/generated/ASSET-007/v002/cleanup.py` with Pillow/NumPy.
 - Inspected native, half and 4× colorway previews and 4× stretch previews: colorways remain distinct and the dark outline separates the heavier rim. Fully decoded all delivery PNGs and checked transparent sheet gaps. Actual game-font fit, half-size readability in battle context, pulse playback (8/8 game frames, loop), low-HP state screenshots and renderer integration remain untested and owned by the implementation agent. H2–H5 remain gated on review of revised H1; no other HUD parts generated.
+
+### Delivery v003 — H2–H5 completion (brief revision 2)
+
+- Path: `poc/assets/generated/ASSET-007/v003/`. Native parts: `h2_tag.png` 40×18; `h3_trough.png` 88×8 and `h3_fill.png` 84×4; `h4_frame.png` 224×16 and `h4_fill.png` 220×8; `h5_line.png` 160×22. H1 v002 is unchanged.
+- `h4_full.png` is four 224×16 rim-light overlays in one 920×16 row with 8px empty gaps, plus individual phase PNGs. Hard white-blue highlight travels clockwise; center is alpha 0. Timing metadata is 4/4/4/4 game frames, loop. Composite PNGs and a standalone approximately 67ms/frame GIF are review aids, not renderer playback evidence.
+- Generated original source using the approved H1 family, then authorized script normalization. Exact prompt/references in `PROMPT.md`; unchanged raw 1536×1024 source under `raw/`. Raw did not meet native-grid proportions and contained soft fill/background variation. `cleanup.py` reconstructs indexed stepped frames and grayscale strips at the exact native sizes, rather than claiming raw pixels met the brief. Reproduce with `python poc/assets/generated/ASSET-007/v003/cleanup.py` (Pillow, NumPy); `processing.json` records palettes and operations.
+- Thin-part adaptations for implementation review: H3's 8px height cannot contain nonoverlapping 6×6 upper/lower corners, so use 6px horizontal caps split into 4px upper/lower halves. H3 has 1px outline plus 1px rim, no separate inner outline, preserving the 84×4 fill at (2,2). H4 uses 2px sides and 4px top/bottom borders to fit its 220×8 fill at (2,4), with dark inner lines on horizontal edges. H5 uses 1px outline + 1px lit rim + 1px inner outline so its 22px height leaves the specified 16px font room; H1's full 1+3+1 border would leave only 12px. These preserve dimensions and text room and need implementation review, not silent changes to the brief.
+- Actual checks (`validation.json`): alpha only 0/255; all parts ≤16 colors; H2 and both fill strips use only ASSET-006 gray tones; uniform non-corner horizontal edges/fills; horizontal caps identical at H2 widths 20/100, H3 40/200 and H5 40/300; overlay centers and 8px sheet gaps clear; all delivery PNGs fully decode. Native, half and 4× parts and stretch previews inspected. H5 has a flat brighter `#14315b` fill; no text or icons baked into assets.
+- Remaining: game-font rendering/fit, actual overlay playback, renderer slicing and gauge behavior, low-HP/Full Synchro/full-gauge screenshots, and in-game acceptance. No game integration performed; standalone GIF playback was not tested.
 
 ## Consolidated review
 
@@ -157,3 +166,4 @@
 - 2026-10-14 — implementation agent (Claude) — reviewed v001 for Khaled; brief revision 2 (fill contrast against the sky, panel-weight frame).
 - 2026-10-14 — Codex — delivered revised H1 v002 with brighter blue fill and exact 1/3/1 frame bands; awaiting review before H2–H5.
 - 2026-10-14 — implementation agent (Claude) — reviewed H1 v002: approved; H2–H5 released.
+- 2026-10-15 — Codex — delivered H2–H5 v003 with native files, previews and reproducible cleanup; thin-part frame/slicing adaptations explicitly recorded for implementation review.

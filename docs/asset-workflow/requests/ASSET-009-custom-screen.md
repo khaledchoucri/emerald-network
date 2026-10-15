@@ -2,14 +2,14 @@
 
 ## Coordination
 
-- State: ready
+- State: delivered
 - Priority: 9
 - Assigned producer: Codex
-- Current owner: Codex
+- Current owner: implementation agent
 - Brief revision: 1
 - Based on repository commit: 89c74ed
-- Last update (UTC date): 2026-10-14
-- Next action / blocker: C1/C2 approved with one fix. Codex fixes the right edge of C1 and delivers C3–C7.
+- Last update (UTC date): 2026-10-15
+- Next action / blocker: Review v002 complete C1–C7 delivery; implementation agent checks text, slices, blink playback and Custom-screen states in renderer.
 
 ## Purpose and visual brief
 
@@ -101,6 +101,17 @@
 - Technical adaptation for review: C2's required 4 px bezel cannot fit H1's 1+3+1 px frame thickness. C2 uses 1 outer + 2 lit + 1 inner px, with square steps on its outer corners and the ENTIRE rectangular art window transparent. C1 uses H1's full weight and stepped inset corners.
 - Validation: full PNG decode; exact part sizes; C1 fully opaque; C2 complete 244×112 aperture clear; ≤16 shared colors; binary alpha; C2 composite position. Native/4× visual inspection: clean plain interiors, no text/icons/logos. Rendering/text fit/game screenshots untested. C3–C7 not generated pending sample review.
 
+### Delivery v002 — C1 edge correction and C3–C7
+
+- Brief revision 1 plus consolidated C1/C2 review; original v001 preserved. Files under `poc/assets/generated/ASSET-009/v002/`.
+- C1 `window_body.png`: 264×352 opaque. Right and bottom straight runs now outline / three #536787 / outline, checked numerically. Optional #0d2347 body fill adopted to separate the window from the Net sky. C2 `art_frame.png` is byte-identical to approved v001. `custom_sample.png` composites C2 at (6,26).
+- C3 `slot.png`: 44×56 in the exact five greys, 8×8 slice corners. C5 `ok.png`: two 44×56 cells, 8 px gap, gold index recolors of the identical C3 geometry; holds 16/16, loop.
+- C4 `cursor.png`: eight 12×12 cells in one row with 8 px gaps, ordered TL1/TR1/BL1/BR1/TL2/TR2/BL2/BR2; each orientation blinks with holds 8/8, loop. Separate `cursor_tl.png`, `cursor_tr.png`, `cursor_bl.png`, `cursor_br.png` contain two states each for convenient import. Gold palette, transparent L-shaped brackets.
+- C6 `chosen_tab.png`: 152×28 in the exact five greys; flat left end, stepped right end, 8×8 slices. C7 `pa_preview.png`: two 168×52 cells, 8 px gap, approved ASSET-008 magenta palette, 10×10 slices, identical geometry and flat fill; holds 4/4, loop. Light moves only on the rim.
+- Source: original image_gen output `raw/custom_parts_generated.png` (2172×724). References inspected/supplied: v001 Custom sample and approved ASSET-008 front/back review. Full prompt in `PROMPT.md`. `cleanup.py` + `processing.json` reproduce crop, nearest-neighbor resize, palette quantization, alpha threshold, preservation of generated corner silhouettes, uniform edge reflow, flat-fill cleanup, exact recolors and sheet packing. Raw geometry was approximate, not a claimed exact integer multiple. Delivery is native scale, plus exact 4× and half-size previews.
+- Review views: `parts_review.png`, `layout_review.png` (illustrative arrangement only), `stretch_checks.png`, `slot_type_checks.png` (Fire/Water/Grass and widened 92×56 ball slot). All have `_review_4x.png` and `_half.png` versions.
+- Checks in `validation.json`: decoded PNGs, exact cells/sheets, binary alpha, C1 fully opaque, C2 transparent window preserved, C1 edge fix, C2 byte identity, ≤16 shared C1/C2 colors, exact C3/C6 grey membership, uniform 9-slice edges/fills, unchanged blink alpha masks, transparent 8 px gaps. Visual inspection at native/4×: clean blank fills, distinguishable tinted slots and selection brackets, no text/icons/logos. Manifest specifies holds/order/slices; actual game playback, font fit, slice wiring and required game screenshots remain implementation work.
+
 ## Consolidated review
 
 - Reviewed delivery: v001 (`window_body.png`, `art_frame.png`, `custom_sample.png`)
@@ -130,3 +141,5 @@
 
 - 2026-10-14 — Codex — delivered C1/C2 sample v001 in revised H1 family; exact geometry/alpha/palette checks passed; dimensional bezel adaptation recorded; sample review pending.
 - 2026-10-14 — implementation agent (Claude) — reviewed C1/C2 v001: approved with a C1 right-edge fix; C3–C7 released.
+
+- 2026-10-15 — Codex — delivered v002 corrected C1, preserved approved C2, and C3–C7 with palette/alpha/slice/geometry checks; implementation review pending.

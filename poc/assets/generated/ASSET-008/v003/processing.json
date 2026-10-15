@@ -1,0 +1,40 @@
+{
+  "brief_revision": 2,
+  "base": "poc/assets/generated/ASSET-008/v002/type_symbols.png",
+  "alpha_threshold": 128,
+  "minimum_component_pixels": 64,
+  "native_cell": [
+    32,
+    32
+  ],
+  "gap": 8,
+  "palette": [
+    "#202020",
+    "#585858",
+    "#909090",
+    "#c8c8c8",
+    "#ffffff"
+  ],
+  "replacements": [
+    {
+      "name": "fighting",
+      "index": 1,
+      "crop": [
+        300,
+        250,
+        700,
+        660
+      ]
+    },
+    {
+      "name": "ground",
+      "index": 4,
+      "crop": [
+        980,
+        350,
+        1520,
+        660
+      ]
+    }
+  ]
+}

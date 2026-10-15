@@ -1,0 +1,88 @@
+{
+  "C1": {
+    "file": "window_body.png",
+    "cell": [
+      264,
+      352
+    ]
+  },
+  "C2": {
+    "file": "art_frame.png",
+    "cell": [
+      252,
+      120
+    ],
+    "aperture": [
+      4,
+      4,
+      244,
+      112
+    ]
+  },
+  "C3": {
+    "file": "slot.png",
+    "cell": [
+      44,
+      56
+    ],
+    "slices": 8
+  },
+  "C4": {
+    "file": "cursor.png",
+    "cell": [
+      12,
+      12
+    ],
+    "order": [
+      "TL1",
+      "TR1",
+      "BL1",
+      "BR1",
+      "TL2",
+      "TR2",
+      "BL2",
+      "BR2"
+    ],
+    "holds": [
+      8,
+      8
+    ],
+    "loop": true
+  },
+  "C5": {
+    "file": "ok.png",
+    "cell": [
+      44,
+      56
+    ],
+    "frames": 2,
+    "holds": [
+      16,
+      16
+    ],
+    "loop": true
+  },
+  "C6": {
+    "file": "chosen_tab.png",
+    "cell": [
+      152,
+      28
+    ],
+    "slices": 8
+  },
+  "C7": {
+    "file": "pa_preview.png",
+    "cell": [
+      168,
+      52
+    ],
+    "frames": 2,
+    "holds": [
+      4,
+      4
+    ],
+    "loop": true,
+    "slices": 10
+  },
+  "gap": 8
+}

@@ -1,0 +1,146 @@
+{
+  "source": "raw/particles.png",
+  "approved_backdrop": "poc/assets/generated/ASSET-005/v002/backdrop.png",
+  "alpha_threshold": 128,
+  "minimum_row_contrast": 16,
+  "minimum_source_blue": 70,
+  "minimum_source_dash_rows": 8,
+  "row_coverage_minimum": 0.12,
+  "core_cap": "#2467b0",
+  "mote_colors": [
+    [
+      "#103473",
+      "#1a4f9c"
+    ],
+    [
+      "#1a4f9c",
+      "#2467b0"
+    ],
+    [
+      "#103473",
+      "#1a4f9c"
+    ],
+    [
+      "#0b2550",
+      "#103473"
+    ]
+  ],
+  "streams": [
+    {
+      "crop": [
+        380,
+        590,
+        432,
+        820
+      ],
+      "width": 4,
+      "height": 40,
+      "body": "#0b2550",
+      "edge": "#103473"
+    },
+    {
+      "crop": [
+        612,
+        548,
+        666,
+        870
+      ],
+      "width": 6,
+      "height": 64,
+      "body": "#0b2550",
+      "edge": "#103473"
+    },
+    {
+      "crop": [
+        842,
+        480,
+        906,
+        930
+      ],
+      "width": 8,
+      "height": 92,
+      "body": "#0b2550",
+      "edge": "#103473"
+    },
+    {
+      "crop": [
+        1098,
+        465,
+        1156,
+        975
+      ],
+      "width": 4,
+      "height": 120,
+      "body": "#0b2550",
+      "edge": "#103473"
+    }
+  ],
+  "stream_positions": [
+    [
+      68,
+      8
+    ],
+    [
+      185,
+      32
+    ],
+    [
+      339,
+      -12
+    ],
+    [
+      452,
+      44
+    ]
+  ],
+  "mote_positions": [
+    [
+      0,
+      35,
+      33,
+      0
+    ],
+    [
+      0,
+      291,
+      54,
+      1
+    ],
+    [
+      0,
+      402,
+      21,
+      2
+    ],
+    [
+      1,
+      119,
+      75,
+      1
+    ],
+    [
+      1,
+      375,
+      102,
+      3
+    ],
+    [
+      1,
+      474,
+      59,
+      2
+    ],
+    [
+      2,
+      245,
+      109,
+      2
+    ],
+    [
+      2,
+      84,
+      118,
+      0
+    ]
+  ]
+}
