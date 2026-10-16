@@ -27,6 +27,7 @@ python3 /path/to/tools/campaign_report.py /tmp/pkbn-campaign
 | `PKBN_TEST_SEED=n` | The same run again, battle for battle |
 | `PKBN_CAMP_CATCH=n` | Throws balls at new species while the party has fewer than n (default 4; 0 = the starter alone) |
 | `PKBN_BOT=buster` | A player who only holds B (the default is the smart test bot from POC-12) |
+| `PKBN_BOT_PA=1` | POC-32: the test player looks for a Program Advance in its hand first (a named recipe or a type trio) |
 | `PKBN_TEST_EXP_SHARE=1` | Gen 6's Exp. Share on from the start |
 | `PKBN_TEST_TUTORIAL=1` | The lessons on, as for a new player |
 
@@ -55,7 +56,8 @@ python3 /path/to/tools/campaign_report.py /tmp/pkbn-campaign
   - **Healing:** it heals when the lead faints or the party falls below a third of its HP.
 - **Losing:** a lost trainer battle whites out as in the game. The player grinds 4 wild battles where it last found
   some, then tries again, up to 3 times, before it gives up (logged as GAVE UP).
-- **Not simulated:** walking, items, editing the folder, R's new hand, and looking for Program Advances.
+- **Not simulated:** walking, items, editing the folder and R's new hand. Looking for Program Advances only with
+  `PKBN_BOT_PA=1` (POC-32).
 
 ## What the first 30 runs showed (0.28, 15 Oct)
 

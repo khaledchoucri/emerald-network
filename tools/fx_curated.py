@@ -60,4 +60,16 @@ FX = [
     ('LOGS',            4, 0x34, 0),
     ('BARRIER',         4, 0x47, 1),
     ('CRACK',           5, 0x03, 0),
+    # POC-32 (Khaled's M4b picks): chip animations of their own for new moves. Found by following each chip's attack
+    # (bn6f AIAttackJumptable, asm/asm31.s) to the objects it spawns and their sprite_load calls.
+    ('FIRE_BURNER',     3, 0x0e, 0),  # FireBrn1 (chip 20): the burner's flame (T3 object 0x4 `sub_80C53FA`, asm31:28414)
+    ('ELEC_PULSE',      4, 0x40, 0),  # ElcPuls1 (34): the pulse rings (T3 0x8c)
+    ('SANDWORM',        1, 0x1a, 1),  # SandWrm1 (101): the worm's claw bursting up (T3 0xcb)
+    ('LANCE',           3, 0x44, 0),  # Lance (119): the lance (T3 0x6f)
+    ('DRAGON',          1, 0x10, 4),  # HeatDrgn/AquaDrgn (46, 48): the dragon's head mid-arc (T3 0xc9 plays 2-6, asm31:80979)
+    ('DRILL',           3, 0x58, 1),  # DrilArm (51): the drill arm, spinning (tempAttackObject entry 0x20)
+    ('BEES',            4, 0x31, 0),  # RskyHny1 (37): the bee swarm (T3 0x74 `riskyHoneyObject_init_80D30F4`, asm31:57441)
+    ('NEEDLE',          4, 0x17, 4),  # AquaNdl1 (61): a needle diving from above (T3 0x50 `sub_80CE554`, asm31:47352)
+    ('MAGNET_FIELD',    4, 0x43, 0),  # MagCoil (183): the magnetic field (T3 0x95)
+    ('BOLT_ROW',        4, 0x12, 0),  # DolThdr1 (31): the bolt along the row (T3 0x82; BOLT_ORANGE is its column)
 ]

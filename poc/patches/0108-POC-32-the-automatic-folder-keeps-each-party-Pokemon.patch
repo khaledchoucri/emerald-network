@@ -1,0 +1,557 @@
+From fe66c160aeabd214bcf98f8dbf30e11d7fc6fc01 Mon Sep 17 00:00:00 2001
+From: Khaled <khaledchoucri@gmail.com>
+Date: Fri, 16 Oct 2026 13:14:42 +0300
+Subject: [PATCH 108/109] POC-32: the automatic folder keeps each party
+ Pokemon's ladder trio in its shared code and the named Program Advances the
+ pack and party can make (F1a, up to half the folder; gPkbnLadderOf); BN6 chip
+ animations for 14 new moves (M4b: Tornado, FireBrn, ElcPuls, SandWrm, Lance,
+ HeatDrgn, DrilArm, RskyHny bees, MoonBld, AquaNdl, CornSht, MagCoil, BlkBomb,
+ DolThdr); PKBN_BOT_PA=1 makes the test player look for Program Advances
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01FbWSqvcg6G5Gpw6ynvR5tJ
+---
+ include/pkbn/fx_ids.h     |  10 ++
+ include/pkbn/move_table.h |   4 +
+ src/pkbn/bot.c            |  79 +++++++++++++
+ src/pkbn/folder.c         |  82 ++++++++++++++
+ src/pkbn/grid_vfx.c       |   2 +
+ src/pkbn/move_table.c     | 233 +++++++++++++++++++++++++++++++++++---
+ 6 files changed, 397 insertions(+), 13 deletions(-)
+
+diff --git a/include/pkbn/fx_ids.h b/include/pkbn/fx_ids.h
+index c31d820..221f110 100644
+--- a/include/pkbn/fx_ids.h
++++ b/include/pkbn/fx_ids.h
+@@ -59,6 +59,16 @@ enum PkbnFxId
+     FX_LOGS, // bn6f 4:0x34 anim 0
+     FX_BARRIER, // bn6f 4:0x47 anim 1
+     FX_CRACK, // bn6f 5:0x03 anim 0
++    FX_FIRE_BURNER, // bn6f 3:0x0e anim 0
++    FX_ELEC_PULSE, // bn6f 4:0x40 anim 0
++    FX_SANDWORM, // bn6f 1:0x1a anim 1
++    FX_LANCE, // bn6f 3:0x44 anim 0
++    FX_DRAGON, // bn6f 1:0x10 anim 4
++    FX_DRILL, // bn6f 3:0x58 anim 1
++    FX_BEES, // bn6f 4:0x31 anim 0
++    FX_NEEDLE, // bn6f 4:0x17 anim 4
++    FX_MAGNET_FIELD, // bn6f 4:0x43 anim 0
++    FX_BOLT_ROW, // bn6f 4:0x12 anim 0
+     FX_COUNT
+ };
+ 
+diff --git a/include/pkbn/move_table.h b/include/pkbn/move_table.h
+index 3fd9e4f..eb392d5 100644
+--- a/include/pkbn/move_table.h
++++ b/include/pkbn/move_table.h
+@@ -77,6 +77,10 @@ struct PkbnMoveInfo
+ 
+ extern const struct PkbnMoveInfo gPkbnMoveInfo[];
+ 
++// POC-32 (F1): a species' ladder (moves[0] = MOVE_NONE: none)
++struct PkbnLadder { u8 code; u16 moves[3]; };
++extern const struct PkbnLadder gPkbnLadderOf[];
++
+ // Program Advances (tools/lanes_curated.py PROGRAM_ADVANCES + tools/attacks_curated.py PA_EFFECTS)
+ #define PKBN_PA_COUNT 49
+ #define PA_CONFUSE       0xFFFFFFFF // pseudo-status: confusion
+diff --git a/src/pkbn/bot.c b/src/pkbn/bot.c
+index 154c989..7a9b9c4 100644
+--- a/src/pkbn/bot.c
++++ b/src/pkbn/bot.c
+@@ -190,6 +190,63 @@ static void NoteCustom(bool8 idle)
+     sIdle = idle ? sIdle + 1 : 0;
+ }
+ 
++// POC-32: with PKBN_BOT_PA=1 the test player looks for a Program Advance in its hand first: a named recipe in order, or
++// a type trio (three different damaging moves of one type, rising power), whose codes chain (one code, or *), that the
++// Pokémon in can use. It picks the three in order; if one stops being selectable it drops the plan. (The bot only.)
++static s8 sPlan[3] = { -1, -1, -1 };
++static u8 sPlanAt;
++
++static bool8 ChainCodes(u8 a, u8 b, u8 c)
++{
++    u8 l[3] = { a, b, c }, code = 0xFF, k;
++    for (k = 0; k < 3; k++)
++        if (l[k] != LETTER_WILD)
++        {
++            if (code != 0xFF && code != l[k])
++                return FALSE;
++            code = l[k];
++        }
++    return TRUE;
++}
++
++static bool8 FindPlan(void)
++{
++    s32 i, j, k, p;
++    const struct BattlePokemon *bm = &sB.f[SIDE_PLAYER].bm;
++    for (i = 0; i < sB.handCount; i++)
++        for (j = 0; j < sB.handCount; j++)
++            for (k = 0; k < sB.handCount; k++)
++            {
++                const struct FolderChip *a, *b, *c;
++                u16 ma, mb, mc;
++                bool8 ok = FALSE;
++                if (i == j || j == k || i == k || sB.hand[i] == FOLDER_STRUGGLE || sB.hand[j] == FOLDER_STRUGGLE
++                 || sB.hand[k] == FOLDER_STRUGGLE)
++                    continue;
++                a = &sB.folder.chips[sB.hand[i]], b = &sB.folder.chips[sB.hand[j]], c = &sB.folder.chips[sB.hand[k]];
++                if (a->owner != CHIP_SHARED || b->owner != CHIP_SHARED || c->owner != CHIP_SHARED
++                 || !ChainCodes(a->letter, b->letter, c->letter))
++                    continue;
++                ma = a->move, mb = b->move, mc = c->move;
++                if (!Chip_CanUse(bm, ma) || !Chip_CanUse(bm, mb) || !Chip_CanUse(bm, mc))
++                    continue;
++                for (p = 0; p < PKBN_PA_COUNT && !ok; p++)
++                    ok = gPkbnProgramAdvances[p].recipe[0] == ma && gPkbnProgramAdvances[p].recipe[1] == mb
++                      && gPkbnProgramAdvances[p].recipe[2] == mc;
++                if (!ok && ma != mb && mb != mc && ma != mc && gBattleMoves[ma].power > 1
++                 && gBattleMoves[ma].type == gBattleMoves[mb].type && gBattleMoves[mb].type == gBattleMoves[mc].type
++                 && gBattleMoves[ma].type != TYPE_MYSTERY && gBattleMoves[ma].power <= gBattleMoves[mb].power
++                 && gBattleMoves[mb].power <= gBattleMoves[mc].power)
++                    ok = TRUE;
++                if (ok)
++                {
++                    sPlan[0] = i, sPlan[1] = j, sPlan[2] = k, sPlanAt = 0;
++                    return TRUE;
++                }
++            }
++    return FALSE;
++}
++
+ void PkbnBot_Custom(u16 *pressed)
+ {
+     s32 i, best = -1, bestScore = 0;
+@@ -215,6 +272,27 @@ void PkbnBot_Custom(u16 *pressed)
+         *pressed = sB.cursor == sB.handCount ? A_BUTTON : PkbnGrid_CursorKeyToward(sB.handCount);
+         return;
+     }
++    {
++        static s8 sPA = -1;
++        if (sPA < 0)
++            sPA = getenv("PKBN_BOT_PA") != NULL;
++        if (sPA && PickedCount() == 0 && !sB.wildPicked)
++        {
++            sPlan[0] = -1;
++            FindPlan();
++        }
++        if (sPA && sPlan[0] >= 0)
++        {
++            while (sPlanAt < 3 && sB.picked[sPlan[sPlanAt]])
++                sPlanAt++;
++            if (sPlanAt < 3 && PkbnGrid_HandSelectable(sPlan[sPlanAt]))
++            {
++                *pressed = sB.cursor == sPlan[sPlanAt] ? A_BUTTON : PkbnGrid_CursorKeyToward(sPlan[sPlanAt]);
++                return;
++            }
++            sPlan[0] = -1;   // done, or a chip can't be picked: back to the usual choice
++        }
++    }
+     if (PickedCount() < BOT_MAX_PICKS)
+         for (i = 0; i < sB.handCount; i++)
+         {
+@@ -227,6 +305,7 @@ void PkbnBot_Custom(u16 *pressed)
+         }
+     if (best < 0)
+     {
++        sPlan[0] = -1;
+         NoteCustom(PickedCount() == 0 && !sB.wildPicked);
+         *pressed = START_BUTTON;
+         return;
+diff --git a/src/pkbn/folder.c b/src/pkbn/folder.c
+index 6e36bef..50a1c47 100644
+--- a/src/pkbn/folder.c
++++ b/src/pkbn/folder.c
+@@ -333,6 +333,86 @@ static void GreedyFill(struct Folder *folder, const struct BattlePokemon *party,
+     }
+ }
+ 
++static void AddChip(struct Folder *folder, u16 mv, u8 letter, u8 size);
++#define PKBN_FOLDER_LOG(...) do { printf("[pkbn] " __VA_ARGS__); printf("\n"); } while (0)
++
++// POC-32 (Khaled's pick F1): before the greedy fill, the automatic folder puts in what makes Program Advances.
++//  1. Each party Pokémon's ladder (gPkbnLadderOf): its three moves in their shared code (or *), when the pack has all
++//     three in it and the Pokémon can use them. Two of each for the lead, one of each for the others.
++//  2. The named Program Advances (gPkbnProgramAdvances) the pack and party can make: one of each recipe chip, in a
++//     code all three have (or *).
++// At most half the folder goes to this (TUNE); the greedy fill does the rest as before.
++static s32 CodeFor(const struct Folder *folder, u16 mv, u8 code, u8 need)
++{
++    if (LetterLeft(folder, mv, code) >= need)
++        return code;
++    if (LetterLeft(folder, mv, LETTER_WILD) >= need)
++        return LETTER_WILD;
++    return -1;
++}
++
++static u8 SeedProgramAdvances(struct Folder *folder, const struct BattlePokemon *party, u8 partyCount, u8 size)
++{
++    u8 budget = size / 2, ladders = 0, pas = 0;
++    s32 p, k, i, l;
++    for (p = 0; p < partyCount; p++)
++    {
++        const struct PkbnLadder *ld;
++        u8 copies = p == 0 ? 2 : 1, c;
++        if (party[p].species == SPECIES_NONE || party[p].species >= NUM_SPECIES)
++            continue;
++        ld = &gPkbnLadderOf[party[p].species];
++        if (ld->moves[0] == MOVE_NONE)
++            continue;
++        for (k = 0; k < 3; k++)
++            if (!PkbnFolder_MoveIsChip(ld->moves[k]) || !Chip_CanUse(&party[p], ld->moves[k])
++             || CodeFor(folder, ld->moves[k], ld->code, 1) < 0)
++                break;
++        if (k < 3 || folder->count + 3 > budget)
++            continue;
++        for (c = 0; c < copies && folder->count + 3 <= budget; c++)
++            for (k = 0; k < 3; k++)
++            {
++                s32 code = CodeFor(folder, ld->moves[k], ld->code, 1);
++                if (code >= 0)
++                    AddChip(folder, ld->moves[k], code, size);
++            }
++        ladders++;
++    }
++    for (i = 0; i < PKBN_PA_COUNT && folder->count + 3 <= budget; i++)
++    {
++        const u16 *r = gPkbnProgramAdvances[i].recipe;
++        s32 code = -1;
++        for (k = 0; k < 3; k++)
++        {
++            for (p = 0; p < partyCount; p++)
++                if (Chip_CanUse(&party[p], r[k]))
++                    break;
++            if (!PkbnFolder_MoveIsChip(r[k]) || p == partyCount)
++                break;
++        }
++        if (k < 3)
++            continue;
++        for (l = 0; l < LETTER_WILD && code < 0; l++)
++            if (CodeFor(folder, r[0], l, 1) >= 0 && CodeFor(folder, r[1], l, r[1] == r[0] ? 2 : 1) >= 0
++             && CodeFor(folder, r[2], l, 1 + (r[2] == r[0]) + (r[2] == r[1])) >= 0)
++                code = l;
++        if (code < 0)
++            continue;
++        for (k = 0; k < 3; k++)
++        {
++            s32 c2 = CodeFor(folder, r[k], code, 1);
++            if (c2 >= 0)
++                AddChip(folder, r[k], c2, size);
++        }
++        pas++;
++    }
++    if (ladders || pas)
++        PKBN_FOLDER_LOG("folder: seeded %u ladder%s and %u Program Advance%s (%u chips)", ladders, ladders == 1 ? "" : "s",
++                        pas, pas == 1 ? "" : "s", folder->count);
++    return ladders + pas;
++}
++
+ // The folder (design 08 §11): the edited folder when there is one (FOLDER editor, later), otherwise auto-built
+ // from the pack: greedy, one copy at a time, favouring chips several party members can use and members that
+ // have little so far (tools/shared_folder_sim.py's "balanced" builder). BN6 copy caps by MB.
+@@ -380,6 +460,7 @@ void PkbnFolder_Build(struct Folder *folder, const struct BattlePokemon *party,
+         }
+     }
+ 
++    SeedProgramAdvances(folder, party, partyCount, size);   // POC-32 (F1)
+     GreedyFill(folder, party, partyCount, size, NULL, -1);
+ 
+ shuffle:
+@@ -750,6 +831,7 @@ u8 PkbnFolder_BuildStyle(u8 style, const struct BattlePokemon *party, u8 partyCo
+         break;
+     }
+     default:
++        SeedProgramAdvances(&f, party, partyCount, size);   // POC-32 (F1): BALANCED is the automatic folder
+         GreedyFill(&f, party, partyCount, size, NULL, -1);
+         break;
+     }
+diff --git a/src/pkbn/grid_vfx.c b/src/pkbn/grid_vfx.c
+index 90e3757..acfc4ef 100644
+--- a/src/pkbn/grid_vfx.c
++++ b/src/pkbn/grid_vfx.c
+@@ -1263,6 +1263,8 @@ void Vfx_DrawAttacks(u16 *fb)
+             }
+             else if (a->kind != GK_BOMB)
+                 DrawOrb(fb, x, y, TYPE_POISON, sT, a->side == SIDE_PLAYER ? 1 : -1);
++            else if (a->move == MOVE_GUNK_SHOT)
++                Gfx_Draw(fb, Fx_Frame(FX_BOMB, sT), x, y, GFX_TINT, PKBN_RGB(5, 3, 8), 7);   // POC-32 (M4b): BlkBomb's black bomb
+             else if (type == TYPE_ROCK || type == TYPE_GROUND)
+                 Gfx_Draw(fb, Fx_Frame(FX_ROCK, 0), x, y, 0, 0, 0);   // POC-15: what's thrown matches the move
+             else if (type == TYPE_FIRE)
+diff --git a/src/pkbn/move_table.c b/src/pkbn/move_table.c
+index 73a2acd..29bbc4b 100644
+--- a/src/pkbn/move_table.c
++++ b/src/pkbn/move_table.c
+@@ -6,6 +6,7 @@
+ #include "constants/pokemon.h"
+ #include "pkbn/move_table.h"
+ #include "pkbn/fx_ids.h"
++#include "constants/species.h"
+ 
+ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+ {
+@@ -373,18 +374,18 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_POISON_JAB] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('O'), LANE('P')} },
+     [MOVE_NIGHT_SLASH] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('N'), LANE('U')}, FX_SLASH + 1 },
+     [MOVE_AQUA_TAIL] = { GK_WIDESWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('R'), LANE('L')}, FX_WAVE + 1 },
+-    [MOVE_SEED_BOMB] = { GK_BOMB, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('G'), LANE('F')}, FX_LEAF + 1 },
++    [MOVE_SEED_BOMB] = { GK_BOMB, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('G'), LANE('F')}, FX_SPLASH + 1 },
+     [MOVE_AIR_SLASH] = { GK_AIRSHOT, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('W'), LANE('A')}, FX_WIND + 1 },
+-    [MOVE_X_SCISSOR] = { GK_WIDESWORD, BLAST_PLUS, 1, 0, 1, 0, 4, {LANE('F'), LANE('U'), LANE('G'), LANE('O')}, FX_SLASH + 1, LADDER('G') | LADDER('O') },
+-    [MOVE_BUG_BUZZ] = { GK_LINE3, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('V'), LANE('L'), LANE('O')}, FX_WIND + 1, LADDER('O') },
+-    [MOVE_DRAGON_PULSE] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('U'), LANE('M')}, FX_BEAM + 1 },
++    [MOVE_X_SCISSOR] = { GK_WIDESWORD, BLAST_PLUS, 1, 0, 1, 0, 4, {LANE('F'), LANE('U'), LANE('G'), LANE('O')}, FX_SLASH_WIDE2 + 1, LADDER('G') | LADDER('O') },
++    [MOVE_BUG_BUZZ] = { GK_LINE3, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('V'), LANE('L'), LANE('O')}, FX_BEES + 1, LADDER('O') },
++    [MOVE_DRAGON_PULSE] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('U'), LANE('M')}, FX_DRAGON + 1 },
+     [MOVE_POWER_GEM] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('Q'), LANE('M')}, FX_BEAM + 1 },
+     [MOVE_ENERGY_BALL] = { GK_BALL, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('G'), LANE('L')}, FX_LEAF + 1 },
+     [MOVE_BRAVE_BIRD] = { GK_DASH, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('W'), LANE('X')}, FX_WIND + 1 },
+-    [MOVE_EARTH_POWER] = { GK_SHOCKWAVE, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('Q'), LANE('L')}, FX_CRACK + 1, LADDER('Q') },
++    [MOVE_EARTH_POWER] = { GK_SHOCKWAVE, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('Q'), LANE('L')}, FX_SANDWORM + 1, LADDER('Q') },
+     [MOVE_GIGA_IMPACT] = { GK_DASH, BLAST_PLUS, 1, 0, 1, GF_RECHARGE, 1, {LANE('X')}, FX_EXPLODE + 1 },
+     [MOVE_BULLET_PUNCH] = { GK_FIREHIT, BLAST_PLUS, 1, 0, 1, GF_FAST, 3, {LANE('P'), LANE('A'), LANE('H')}, FX_HIT_SMALL + 1, LADDER('H') },
+-    [MOVE_ICE_SHARD] = { GK_FIREHIT, BLAST_PLUS, 1, 0, 1, GF_FAST, 2, {LANE('I'), LANE('A')}, FX_ICE_SPIKE + 1 },
++    [MOVE_ICE_SHARD] = { GK_FIREHIT, BLAST_PLUS, 1, 0, 1, GF_FAST, 2, {LANE('I'), LANE('A')}, FX_NEEDLE + 1 },
+     [MOVE_SHADOW_CLAW] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('N'), LANE('U')}, FX_CLAW + 1 },
+     [MOVE_THUNDER_FANG] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('C'), LANE('N')}, FX_SPARK + 1 },
+     [MOVE_ICE_FANG] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('I'), LANE('N')}, FX_ICE + 1, LADDER('I') },
+@@ -395,22 +396,228 @@ const struct PkbnMoveInfo gPkbnMoveInfo[MOVES_COUNT] =
+     [MOVE_ZEN_HEADBUTT] = { GK_DASH, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('M'), LANE('H')}, FX_CONFUSE + 1 },
+     [MOVE_MIRROR_SHOT] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('H'), LANE('N')}, FX_BEAM + 1 },
+     [MOVE_FLASH_CANNON] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('H'), LANE('L')}, FX_CANNON + 1 },
+-    [MOVE_DISCHARGE] = { GK_CONE, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('C')}, FX_SPARKS + 1 },
+-    [MOVE_LAVA_PLUME] = { GK_CONE, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('S'), LANE('O')}, FX_FIRE_BURST + 1, LADDER('S') },
+-    [MOVE_LEAF_STORM] = { GK_TORNADO, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('G'), LANE('X')}, FX_LEAF + 1 },
++    [MOVE_DISCHARGE] = { GK_CONE, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('C')}, FX_ELEC_PULSE + 1 },
++    [MOVE_LAVA_PLUME] = { GK_CONE, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('S'), LANE('O')}, FX_FIRE_BURNER + 1, LADDER('S') },
++    [MOVE_LEAF_STORM] = { GK_TORNADO, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('G'), LANE('X')}, FX_TORNADO + 1 },
+     [MOVE_CROSS_POISON] = { GK_WIDESWORD, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('O'), LANE('U')}, FX_SLASH + 1, LADDER('O') },
+     [MOVE_GUNK_SHOT] = { GK_BOMB, BLAST_PLUS, 1, 0, 1, 0, 1, {LANE('O')}, FX_POISON + 1 },
+-    [MOVE_IRON_HEAD] = { GK_DASH, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('H'), LANE('A')}, FX_HIT + 1, LADDER('H') },
+-    [MOVE_MAGNET_BOMB] = { GK_LOCKON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('H'), LANE('C')}, FX_BOMB + 1 },
+-    [MOVE_STONE_EDGE] = { GK_SHOCKWAVE, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('Q'), LANE('U')}, FX_SPIKE + 1 },
++    [MOVE_IRON_HEAD] = { GK_DASH, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('H'), LANE('A')}, FX_DRILL + 1, LADDER('H') },
++    [MOVE_MAGNET_BOMB] = { GK_LOCKON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('H'), LANE('C')}, FX_MAGNET_FIELD + 1 },
++    [MOVE_STONE_EDGE] = { GK_SHOCKWAVE, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('Q'), LANE('U')}, FX_LANCE + 1 },
+     [MOVE_BUG_BITE] = { GK_SWORD, BLAST_PLUS, 1, 0, 1, 0, 3, {LANE('F'), LANE('N'), LANE('Z')}, FX_FANG + 1, LADDER('Z') },
+-    [MOVE_CHARGE_BEAM] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('C'), LANE('U')}, FX_BEAM + 1, LADDER('C') },
++    [MOVE_CHARGE_BEAM] = { GK_CANNON, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('C'), LANE('U')}, FX_BOLT_ROW + 1, LADDER('C') },
+     [MOVE_AQUA_JET] = { GK_DASH, BLAST_PLUS, 1, 0, 1, GF_FAST, 2, {LANE('R'), LANE('A')}, FX_SPLASH + 1, LADDER('R') },
+     [MOVE_HEAD_SMASH] = { GK_DASH, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('X'), LANE('Q')}, FX_ROCKS + 1 },
+     [MOVE_DOUBLE_HIT] = { GK_SWORD, BLAST_PLUS, 2, 0, 1, 0, 2, {LANE('F'), LANE('L')}, FX_HIT + 1 },
+     [MOVE_OMINOUS_WIND] = { GK_TORNADO, BLAST_PLUS, 1, 0, 1, 0, 2, {LANE('N'), LANE('W')}, FX_WIND + 1 },
+ };
+ 
++// POC-32 (F1): each Hoenn line's ladder (data/learnset_ladders.json), for the automatic folder
++const struct PkbnLadder gPkbnLadderOf[NUM_SPECIES] =
++{
++    [SPECIES_ABRA] = { LANE('M'), {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC} },
++    [SPECIES_ABSOL] = { LANE('N'), {MOVE_KNOCK_OFF, MOVE_BITE, MOVE_FAINT_ATTACK} },
++    [SPECIES_AGGRON] = { LANE('H'), {MOVE_METAL_CLAW, MOVE_STEEL_WING, MOVE_IRON_HEAD} },
++    [SPECIES_ALAKAZAM] = { LANE('M'), {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC} },
++    [SPECIES_ALTARIA] = { LANE('U'), {MOVE_TWISTER, MOVE_DRAGON_BREATH, MOVE_DRAGON_CLAW} },
++    [SPECIES_ANORITH] = { LANE('Q'), {MOVE_ROCK_BLAST, MOVE_ROCK_TOMB, MOVE_ROCK_SLIDE} },
++    [SPECIES_ARMALDO] = { LANE('Q'), {MOVE_ROCK_BLAST, MOVE_ROCK_TOMB, MOVE_ROCK_SLIDE} },
++    [SPECIES_ARON] = { LANE('H'), {MOVE_METAL_CLAW, MOVE_STEEL_WING, MOVE_IRON_HEAD} },
++    [SPECIES_AZUMARILL] = { LANE('A'), {MOVE_TACKLE, MOVE_SWIFT, MOVE_BODY_SLAM} },
++    [SPECIES_AZURILL] = { LANE('A'), {MOVE_TACKLE, MOVE_SWIFT, MOVE_BODY_SLAM} },
++    [SPECIES_BAGON] = { LANE('U'), {MOVE_TWISTER, MOVE_DRAGON_BREATH, MOVE_DRAGON_CLAW} },
++    [SPECIES_BALTOY] = { LANE('Q'), {MOVE_MUD_SLAP, MOVE_BONE_CLUB, MOVE_EARTH_POWER} },
++    [SPECIES_BANETTE] = { LANE('N'), {MOVE_ASTONISH, MOVE_SHADOW_SNEAK, MOVE_SHADOW_BALL} },
++    [SPECIES_BARBOACH] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_BEAUTIFLY] = { LANE('O'), {MOVE_TWINEEDLE, MOVE_SILVER_WIND, MOVE_BUG_BUZZ} },
++    [SPECIES_BELDUM] = { LANE('H'), {MOVE_BULLET_PUNCH, MOVE_METAL_CLAW, MOVE_STEEL_WING} },
++    [SPECIES_BELLOSSOM] = { LANE('G'), {MOVE_ABSORB, MOVE_GIGA_DRAIN, MOVE_MAGICAL_LEAF} },
++    [SPECIES_BLAZIKEN] = { LANE('S'), {MOVE_EMBER, MOVE_FIRE_PUNCH, MOVE_BLAZE_KICK} },
++    [SPECIES_BRELOOM] = { LANE('G'), {MOVE_BULLET_SEED, MOVE_MEGA_DRAIN, MOVE_GIGA_DRAIN} },
++    [SPECIES_CACNEA] = { LANE('G'), {MOVE_BULLET_SEED, MOVE_GIGA_DRAIN, MOVE_NEEDLE_ARM} },
++    [SPECIES_CACTURNE] = { LANE('G'), {MOVE_BULLET_SEED, MOVE_GIGA_DRAIN, MOVE_NEEDLE_ARM} },
++    [SPECIES_CAMERUPT] = { LANE('S'), {MOVE_FIRE_SPIN, MOVE_EMBER, MOVE_LAVA_PLUME} },
++    [SPECIES_CARVANHA] = { LANE('R'), {MOVE_AQUA_JET, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_CASCOON] = { LANE('O'), {MOVE_TWINEEDLE, MOVE_SILVER_WIND, MOVE_BUG_BUZZ} },
++    [SPECIES_CASTFORM] = { LANE('A'), {MOVE_TACKLE, MOVE_SWIFT, MOVE_BODY_SLAM} },
++    [SPECIES_CHIMECHO] = { LANE('M'), {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC} },
++    [SPECIES_CHINCHOU] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_CLAMPERL] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_CLAYDOL] = { LANE('Q'), {MOVE_MUD_SLAP, MOVE_BONE_CLUB, MOVE_EARTH_POWER} },
++    [SPECIES_COMBUSKEN] = { LANE('S'), {MOVE_EMBER, MOVE_FIRE_PUNCH, MOVE_BLAZE_KICK} },
++    [SPECIES_CORPHISH] = { LANE('R'), {MOVE_BUBBLE, MOVE_BUBBLE_BEAM, MOVE_CRABHAMMER} },
++    [SPECIES_CORSOLA] = { LANE('R'), {MOVE_BUBBLE, MOVE_WATER_PULSE, MOVE_BUBBLE_BEAM} },
++    [SPECIES_CRADILY] = { LANE('Q'), {MOVE_ROCK_TOMB, MOVE_ANCIENT_POWER, MOVE_ROCK_SLIDE} },
++    [SPECIES_CRAWDAUNT] = { LANE('R'), {MOVE_BUBBLE, MOVE_BUBBLE_BEAM, MOVE_CRABHAMMER} },
++    [SPECIES_CROBAT] = { LANE('O'), {MOVE_POISON_FANG, MOVE_CROSS_POISON, MOVE_SLUDGE_BOMB} },
++    [SPECIES_DELCATTY] = { LANE('L'), {MOVE_DOUBLE_SLAP, MOVE_TACKLE, MOVE_BODY_SLAM} },
++    [SPECIES_DODRIO] = { LANE('W'), {MOVE_PECK, MOVE_AERIAL_ACE, MOVE_DRILL_PECK} },
++    [SPECIES_DODUO] = { LANE('W'), {MOVE_PECK, MOVE_AERIAL_ACE, MOVE_DRILL_PECK} },
++    [SPECIES_DONPHAN] = { LANE('Q'), {MOVE_MUD_SLAP, MOVE_BONEMERANG, MOVE_BONE_CLUB} },
++    [SPECIES_DUSCLOPS] = { LANE('N'), {MOVE_ASTONISH, MOVE_SHADOW_PUNCH, MOVE_SHADOW_BALL} },
++    [SPECIES_DUSKULL] = { LANE('N'), {MOVE_ASTONISH, MOVE_SHADOW_PUNCH, MOVE_SHADOW_BALL} },
++    [SPECIES_DUSTOX] = { LANE('O'), {MOVE_TWINEEDLE, MOVE_SILVER_WIND, MOVE_BUG_BUZZ} },
++    [SPECIES_ELECTRIKE] = { LANE('C'), {MOVE_THUNDER_SHOCK, MOVE_SHOCK_WAVE, MOVE_SPARK} },
++    [SPECIES_ELECTRODE] = { LANE('C'), {MOVE_CHARGE_BEAM, MOVE_SHOCK_WAVE, MOVE_SPARK} },
++    [SPECIES_EXPLOUD] = { LANE('A'), {MOVE_POUND, MOVE_STOMP, MOVE_HYPER_VOICE} },
++    [SPECIES_FEEBAS] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_FLYGON] = { LANE('Q'), {MOVE_SAND_TOMB, MOVE_MUD_SLAP, MOVE_EARTH_POWER} },
++    [SPECIES_GARDEVOIR] = { LANE('M'), {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC} },
++    [SPECIES_GEODUDE] = { LANE('Q'), {MOVE_ROCK_THROW, MOVE_ROCK_TOMB, MOVE_ROCK_SLIDE} },
++    [SPECIES_GIRAFARIG] = { LANE('M'), {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC} },
++    [SPECIES_GLALIE] = { LANE('I'), {MOVE_POWDER_SNOW, MOVE_ICY_WIND, MOVE_ICE_FANG} },
++    [SPECIES_GLOOM] = { LANE('G'), {MOVE_ABSORB, MOVE_RAZOR_LEAF, MOVE_GIGA_DRAIN} },
++    [SPECIES_GOLBAT] = { LANE('O'), {MOVE_POISON_FANG, MOVE_CROSS_POISON, MOVE_SLUDGE_BOMB} },
++    [SPECIES_GOLDEEN] = { LANE('R'), {MOVE_CLAMP, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_GOLDUCK] = { LANE('R'), {MOVE_AQUA_JET, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_GOLEM] = { LANE('Q'), {MOVE_ROCK_THROW, MOVE_ROCK_TOMB, MOVE_ROCK_SLIDE} },
++    [SPECIES_GOREBYSS] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_GRAVELER] = { LANE('Q'), {MOVE_ROCK_THROW, MOVE_ROCK_TOMB, MOVE_ROCK_SLIDE} },
++    [SPECIES_GRIMER] = { LANE('O'), {MOVE_POISON_FANG, MOVE_SLUDGE, MOVE_SLUDGE_BOMB} },
++    [SPECIES_GROUDON] = { LANE('Q'), {MOVE_MUD_SLAP, MOVE_MUD_SHOT, MOVE_EARTH_POWER} },
++    [SPECIES_GROVYLE] = { LANE('G'), {MOVE_MEGA_DRAIN, MOVE_GIGA_DRAIN, MOVE_LEAF_BLADE} },
++    [SPECIES_GRUMPIG] = { LANE('M'), {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC} },
++    [SPECIES_GULPIN] = { LANE('O'), {MOVE_SMOG, MOVE_SLUDGE, MOVE_SLUDGE_BOMB} },
++    [SPECIES_GYARADOS] = { LANE('R'), {MOVE_CLAMP, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_HARIYAMA] = { LANE('K'), {MOVE_ROCK_SMASH, MOVE_VITAL_THROW, MOVE_BRICK_BREAK} },
++    [SPECIES_HERACROSS] = { LANE('O'), {MOVE_LEECH_LIFE, MOVE_TWINEEDLE, MOVE_SIGNAL_BEAM} },
++    [SPECIES_HORSEA] = { LANE('R'), {MOVE_WATER_GUN, MOVE_OCTAZOOKA, MOVE_WATERFALL} },
++    [SPECIES_HUNTAIL] = { LANE('R'), {MOVE_CLAMP, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_IGGLYBUFF] = { LANE('F'), {MOVE_DOUBLE_SLAP, MOVE_POUND, MOVE_HYPER_VOICE} },
++    [SPECIES_ILLUMISE] = { LANE('O'), {MOVE_TWINEEDLE, MOVE_SILVER_WIND, MOVE_BUG_BUZZ} },
++    [SPECIES_JIGGLYPUFF] = { LANE('F'), {MOVE_DOUBLE_SLAP, MOVE_POUND, MOVE_HYPER_VOICE} },
++    [SPECIES_JIRACHI] = { LANE('H'), {MOVE_METAL_CLAW, MOVE_STEEL_WING, MOVE_IRON_HEAD} },
++    [SPECIES_KADABRA] = { LANE('M'), {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC} },
++    [SPECIES_KECLEON] = { LANE('L'), {MOVE_CUT, MOVE_SLASH, MOVE_BODY_SLAM} },
++    [SPECIES_KINGDRA] = { LANE('R'), {MOVE_WATER_GUN, MOVE_OCTAZOOKA, MOVE_WATERFALL} },
++    [SPECIES_KIRLIA] = { LANE('M'), {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC} },
++    [SPECIES_KOFFING] = { LANE('O'), {MOVE_SMOG, MOVE_SLUDGE, MOVE_SLUDGE_BOMB} },
++    [SPECIES_KYOGRE] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_LAIRON] = { LANE('H'), {MOVE_METAL_CLAW, MOVE_STEEL_WING, MOVE_IRON_HEAD} },
++    [SPECIES_LANTURN] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_LATIAS] = { LANE('U'), {MOVE_TWISTER, MOVE_DRAGON_BREATH, MOVE_DRAGON_CLAW} },
++    [SPECIES_LATIOS] = { LANE('U'), {MOVE_TWISTER, MOVE_DRAGON_BREATH, MOVE_DRAGON_CLAW} },
++    [SPECIES_LILEEP] = { LANE('Q'), {MOVE_ROCK_TOMB, MOVE_ANCIENT_POWER, MOVE_ROCK_SLIDE} },
++    [SPECIES_LINOONE] = { LANE('L'), {MOVE_CUT, MOVE_HEADBUTT, MOVE_BODY_SLAM} },
++    [SPECIES_LOMBRE] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_LOTAD] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_LOUDRED] = { LANE('A'), {MOVE_POUND, MOVE_STOMP, MOVE_HYPER_VOICE} },
++    [SPECIES_LUDICOLO] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_LUNATONE] = { LANE('Q'), {MOVE_ROCK_THROW, MOVE_ROCK_TOMB, MOVE_ROCK_SLIDE} },
++    [SPECIES_LUVDISC] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_MACHAMP] = { LANE('K'), {MOVE_KARATE_CHOP, MOVE_VITAL_THROW, MOVE_BRICK_BREAK} },
++    [SPECIES_MACHOKE] = { LANE('K'), {MOVE_KARATE_CHOP, MOVE_VITAL_THROW, MOVE_BRICK_BREAK} },
++    [SPECIES_MACHOP] = { LANE('K'), {MOVE_KARATE_CHOP, MOVE_VITAL_THROW, MOVE_BRICK_BREAK} },
++    [SPECIES_MAGCARGO] = { LANE('S'), {MOVE_FIRE_SPIN, MOVE_EMBER, MOVE_LAVA_PLUME} },
++    [SPECIES_MAGIKARP] = { LANE('R'), {MOVE_CLAMP, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_MAGNEMITE] = { LANE('C'), {MOVE_THUNDER_SHOCK, MOVE_SHOCK_WAVE, MOVE_SPARK} },
++    [SPECIES_MAGNETON] = { LANE('C'), {MOVE_THUNDER_SHOCK, MOVE_SHOCK_WAVE, MOVE_SPARK} },
++    [SPECIES_MAKUHITA] = { LANE('K'), {MOVE_ROCK_SMASH, MOVE_VITAL_THROW, MOVE_BRICK_BREAK} },
++    [SPECIES_MANECTRIC] = { LANE('C'), {MOVE_THUNDER_SHOCK, MOVE_SHOCK_WAVE, MOVE_SPARK} },
++    [SPECIES_MARILL] = { LANE('A'), {MOVE_TACKLE, MOVE_SWIFT, MOVE_BODY_SLAM} },
++    [SPECIES_MARSHTOMP] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_MASQUERAIN] = { LANE('O'), {MOVE_TWINEEDLE, MOVE_SILVER_WIND, MOVE_BUG_BUZZ} },
++    [SPECIES_MAWILE] = { LANE('H'), {MOVE_METAL_CLAW, MOVE_STEEL_WING, MOVE_IRON_HEAD} },
++    [SPECIES_MEDICHAM] = { LANE('L'), {MOVE_ROCK_SMASH, MOVE_FORCE_PALM, MOVE_BRICK_BREAK} },
++    [SPECIES_MEDITITE] = { LANE('L'), {MOVE_ROCK_SMASH, MOVE_FORCE_PALM, MOVE_BRICK_BREAK} },
++    [SPECIES_METAGROSS] = { LANE('H'), {MOVE_BULLET_PUNCH, MOVE_METAL_CLAW, MOVE_STEEL_WING} },
++    [SPECIES_METANG] = { LANE('H'), {MOVE_BULLET_PUNCH, MOVE_METAL_CLAW, MOVE_STEEL_WING} },
++    [SPECIES_MIGHTYENA] = { LANE('N'), {MOVE_KNOCK_OFF, MOVE_BITE, MOVE_CRUNCH} },
++    [SPECIES_MILOTIC] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_MINUN] = { LANE('C'), {MOVE_THUNDER_SHOCK, MOVE_SHOCK_WAVE, MOVE_THUNDER_PUNCH} },
++    [SPECIES_MUDKIP] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_MUK] = { LANE('O'), {MOVE_POISON_FANG, MOVE_SLUDGE, MOVE_SLUDGE_BOMB} },
++    [SPECIES_NATU] = { LANE('M'), {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC} },
++    [SPECIES_NINCADA] = { LANE('G'), {MOVE_LEECH_LIFE, MOVE_SILVER_WIND, MOVE_SIGNAL_BEAM} },
++    [SPECIES_NINETALES] = { LANE('S'), {MOVE_FIRE_SPIN, MOVE_EMBER, MOVE_BLAZE_KICK} },
++    [SPECIES_NINJASK] = { LANE('G'), {MOVE_LEECH_LIFE, MOVE_SILVER_WIND, MOVE_X_SCISSOR} },
++    [SPECIES_NOSEPASS] = { LANE('Q'), {MOVE_ROCK_THROW, MOVE_ROCK_TOMB, MOVE_ROCK_SLIDE} },
++    [SPECIES_NUMEL] = { LANE('S'), {MOVE_FIRE_SPIN, MOVE_EMBER, MOVE_LAVA_PLUME} },
++    [SPECIES_NUZLEAF] = { LANE('G'), {MOVE_BULLET_SEED, MOVE_GIGA_DRAIN, MOVE_LEAF_BLADE} },
++    [SPECIES_ODDISH] = { LANE('G'), {MOVE_ABSORB, MOVE_RAZOR_LEAF, MOVE_GIGA_DRAIN} },
++    [SPECIES_PELIPPER] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_CRABHAMMER} },
++    [SPECIES_PHANPY] = { LANE('Q'), {MOVE_MUD_SLAP, MOVE_BONEMERANG, MOVE_BONE_CLUB} },
++    [SPECIES_PICHU] = { LANE('C'), {MOVE_THUNDER_SHOCK, MOVE_SHOCK_WAVE, MOVE_THUNDER_PUNCH} },
++    [SPECIES_PIKACHU] = { LANE('C'), {MOVE_THUNDER_SHOCK, MOVE_SHOCK_WAVE, MOVE_THUNDER_PUNCH} },
++    [SPECIES_PINSIR] = { LANE('O'), {MOVE_LEECH_LIFE, MOVE_TWINEEDLE, MOVE_X_SCISSOR} },
++    [SPECIES_PLUSLE] = { LANE('C'), {MOVE_THUNDER_SHOCK, MOVE_SHOCK_WAVE, MOVE_THUNDER_PUNCH} },
++    [SPECIES_POOCHYENA] = { LANE('N'), {MOVE_KNOCK_OFF, MOVE_BITE, MOVE_CRUNCH} },
++    [SPECIES_PSYDUCK] = { LANE('R'), {MOVE_AQUA_JET, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_RAICHU] = { LANE('C'), {MOVE_THUNDER_SHOCK, MOVE_SHOCK_WAVE, MOVE_THUNDER_PUNCH} },
++    [SPECIES_RALTS] = { LANE('M'), {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC} },
++    [SPECIES_RAYQUAZA] = { LANE('U'), {MOVE_TWISTER, MOVE_DRAGON_BREATH, MOVE_DRAGON_CLAW} },
++    [SPECIES_REGICE] = { LANE('I'), {MOVE_ICY_WIND, MOVE_AURORA_BEAM, MOVE_ICE_PUNCH} },
++    [SPECIES_REGIROCK] = { LANE('Q'), {MOVE_ROCK_THROW, MOVE_ROCK_TOMB, MOVE_ROCK_SLIDE} },
++    [SPECIES_REGISTEEL] = { LANE('H'), {MOVE_METAL_CLAW, MOVE_STEEL_WING, MOVE_IRON_HEAD} },
++    [SPECIES_RELICANTH] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_RHYDON] = { LANE('Q'), {MOVE_MUD_SLAP, MOVE_BONEMERANG, MOVE_BONE_CLUB} },
++    [SPECIES_RHYHORN] = { LANE('Q'), {MOVE_MUD_SLAP, MOVE_BONEMERANG, MOVE_BONE_CLUB} },
++    [SPECIES_ROSELIA] = { LANE('G'), {MOVE_MEGA_DRAIN, MOVE_GIGA_DRAIN, MOVE_MAGICAL_LEAF} },
++    [SPECIES_SABLEYE] = { LANE('N'), {MOVE_KNOCK_OFF, MOVE_FAINT_ATTACK, MOVE_CRUNCH} },
++    [SPECIES_SALAMENCE] = { LANE('U'), {MOVE_TWISTER, MOVE_DRAGON_BREATH, MOVE_DRAGON_CLAW} },
++    [SPECIES_SANDSHREW] = { LANE('Q'), {MOVE_SAND_TOMB, MOVE_MUD_SLAP, MOVE_BONE_CLUB} },
++    [SPECIES_SANDSLASH] = { LANE('Q'), {MOVE_SAND_TOMB, MOVE_MUD_SLAP, MOVE_BONE_CLUB} },
++    [SPECIES_SCEPTILE] = { LANE('G'), {MOVE_MEGA_DRAIN, MOVE_GIGA_DRAIN, MOVE_LEAF_BLADE} },
++    [SPECIES_SEADRA] = { LANE('R'), {MOVE_WATER_GUN, MOVE_OCTAZOOKA, MOVE_WATERFALL} },
++    [SPECIES_SEAKING] = { LANE('R'), {MOVE_CLAMP, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_SEALEO] = { LANE('I'), {MOVE_POWDER_SNOW, MOVE_ICY_WIND, MOVE_AURORA_BEAM} },
++    [SPECIES_SEEDOT] = { LANE('G'), {MOVE_BULLET_SEED, MOVE_GIGA_DRAIN, MOVE_LEAF_BLADE} },
++    [SPECIES_SEVIPER] = { LANE('O'), {MOVE_POISON_FANG, MOVE_POISON_TAIL, MOVE_SLUDGE_BOMB} },
++    [SPECIES_SHARPEDO] = { LANE('R'), {MOVE_AQUA_JET, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_SHEDINJA] = { LANE('G'), {MOVE_LEECH_LIFE, MOVE_SILVER_WIND, MOVE_SIGNAL_BEAM} },
++    [SPECIES_SHELGON] = { LANE('U'), {MOVE_TWISTER, MOVE_DRAGON_BREATH, MOVE_DRAGON_CLAW} },
++    [SPECIES_SHIFTRY] = { LANE('G'), {MOVE_BULLET_SEED, MOVE_GIGA_DRAIN, MOVE_LEAF_BLADE} },
++    [SPECIES_SHROOMISH] = { LANE('G'), {MOVE_BULLET_SEED, MOVE_MEGA_DRAIN, MOVE_GIGA_DRAIN} },
++    [SPECIES_SHUPPET] = { LANE('N'), {MOVE_ASTONISH, MOVE_SHADOW_SNEAK, MOVE_SHADOW_BALL} },
++    [SPECIES_SILCOON] = { LANE('O'), {MOVE_TWINEEDLE, MOVE_SILVER_WIND, MOVE_BUG_BUZZ} },
++    [SPECIES_SKARMORY] = { LANE('H'), {MOVE_METAL_CLAW, MOVE_STEEL_WING, MOVE_IRON_HEAD} },
++    [SPECIES_SKITTY] = { LANE('L'), {MOVE_DOUBLE_SLAP, MOVE_TACKLE, MOVE_BODY_SLAM} },
++    [SPECIES_SLAKING] = { LANE('L'), {MOVE_CUT, MOVE_CRUSH_CLAW, MOVE_BODY_SLAM} },
++    [SPECIES_SLAKOTH] = { LANE('L'), {MOVE_CUT, MOVE_CRUSH_CLAW, MOVE_BODY_SLAM} },
++    [SPECIES_SLUGMA] = { LANE('S'), {MOVE_FIRE_SPIN, MOVE_EMBER, MOVE_LAVA_PLUME} },
++    [SPECIES_SNORUNT] = { LANE('I'), {MOVE_POWDER_SNOW, MOVE_ICY_WIND, MOVE_ICE_FANG} },
++    [SPECIES_SOLROCK] = { LANE('Q'), {MOVE_ROCK_THROW, MOVE_ROCK_TOMB, MOVE_ROCK_SLIDE} },
++    [SPECIES_SPHEAL] = { LANE('I'), {MOVE_POWDER_SNOW, MOVE_ICY_WIND, MOVE_AURORA_BEAM} },
++    [SPECIES_SPINDA] = { LANE('L'), {MOVE_TACKLE, MOVE_DIZZY_PUNCH, MOVE_BODY_SLAM} },
++    [SPECIES_SPOINK] = { LANE('M'), {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC} },
++    [SPECIES_STARMIE] = { LANE('R'), {MOVE_WATER_GUN, MOVE_BUBBLE_BEAM, MOVE_WATERFALL} },
++    [SPECIES_STARYU] = { LANE('R'), {MOVE_WATER_GUN, MOVE_BUBBLE_BEAM, MOVE_WATERFALL} },
++    [SPECIES_SURSKIT] = { LANE('O'), {MOVE_TWINEEDLE, MOVE_SILVER_WIND, MOVE_BUG_BUZZ} },
++    [SPECIES_SWABLU] = { LANE('U'), {MOVE_TWISTER, MOVE_DRAGON_BREATH, MOVE_DRAGON_CLAW} },
++    [SPECIES_SWALOT] = { LANE('O'), {MOVE_SMOG, MOVE_SLUDGE, MOVE_SLUDGE_BOMB} },
++    [SPECIES_SWAMPERT] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_SWELLOW] = { LANE('A'), {MOVE_PECK, MOVE_WING_ATTACK, MOVE_AERIAL_ACE} },
++    [SPECIES_TAILLOW] = { LANE('A'), {MOVE_PECK, MOVE_WING_ATTACK, MOVE_AERIAL_ACE} },
++    [SPECIES_TENTACOOL] = { LANE('R'), {MOVE_WATER_GUN, MOVE_BUBBLE_BEAM, MOVE_WATERFALL} },
++    [SPECIES_TENTACRUEL] = { LANE('R'), {MOVE_WATER_GUN, MOVE_BUBBLE_BEAM, MOVE_WATERFALL} },
++    [SPECIES_TORCHIC] = { LANE('S'), {MOVE_EMBER, MOVE_FIRE_PUNCH, MOVE_BLAZE_KICK} },
++    [SPECIES_TORKOAL] = { LANE('S'), {MOVE_FIRE_SPIN, MOVE_EMBER, MOVE_LAVA_PLUME} },
++    [SPECIES_TRAPINCH] = { LANE('Q'), {MOVE_SAND_TOMB, MOVE_MUD_SLAP, MOVE_EARTH_POWER} },
++    [SPECIES_TREECKO] = { LANE('G'), {MOVE_MEGA_DRAIN, MOVE_GIGA_DRAIN, MOVE_LEAF_BLADE} },
++    [SPECIES_TROPIUS] = { LANE('G'), {MOVE_RAZOR_LEAF, MOVE_GIGA_DRAIN, MOVE_MAGICAL_LEAF} },
++    [SPECIES_VIBRAVA] = { LANE('Q'), {MOVE_SAND_TOMB, MOVE_MUD_SLAP, MOVE_EARTH_POWER} },
++    [SPECIES_VIGOROTH] = { LANE('L'), {MOVE_CUT, MOVE_CRUSH_CLAW, MOVE_BODY_SLAM} },
++    [SPECIES_VILEPLUME] = { LANE('G'), {MOVE_ABSORB, MOVE_MEGA_DRAIN, MOVE_GIGA_DRAIN} },
++    [SPECIES_VOLBEAT] = { LANE('Z'), {MOVE_TWINEEDLE, MOVE_SILVER_WIND, MOVE_SIGNAL_BEAM} },
++    [SPECIES_VOLTORB] = { LANE('C'), {MOVE_CHARGE_BEAM, MOVE_SHOCK_WAVE, MOVE_SPARK} },
++    [SPECIES_VULPIX] = { LANE('S'), {MOVE_FIRE_SPIN, MOVE_EMBER, MOVE_BLAZE_KICK} },
++    [SPECIES_WAILMER] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_WAILORD] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_WALREIN] = { LANE('I'), {MOVE_POWDER_SNOW, MOVE_ICY_WIND, MOVE_AURORA_BEAM} },
++    [SPECIES_WEEZING] = { LANE('O'), {MOVE_SMOG, MOVE_SLUDGE, MOVE_SLUDGE_BOMB} },
++    [SPECIES_WHISCASH] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_WATERFALL} },
++    [SPECIES_WHISMUR] = { LANE('A'), {MOVE_POUND, MOVE_STOMP, MOVE_HYPER_VOICE} },
++    [SPECIES_WIGGLYTUFF] = { LANE('F'), {MOVE_DOUBLE_SLAP, MOVE_POUND, MOVE_HYPER_VOICE} },
++    [SPECIES_WINGULL] = { LANE('R'), {MOVE_WATER_GUN, MOVE_WATER_PULSE, MOVE_CRABHAMMER} },
++    [SPECIES_WOBBUFFET] = { LANE('M'), {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC} },
++    [SPECIES_WURMPLE] = { LANE('Z'), {MOVE_TWINEEDLE, MOVE_BUG_BITE, MOVE_SIGNAL_BEAM} },
++    [SPECIES_WYNAUT] = { LANE('M'), {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC} },
++    [SPECIES_XATU] = { LANE('M'), {MOVE_CONFUSION, MOVE_PSYBEAM, MOVE_PSYCHIC} },
++    [SPECIES_ZANGOOSE] = { LANE('L'), {MOVE_SCRATCH, MOVE_CRUSH_CLAW, MOVE_BODY_SLAM} },
++    [SPECIES_ZIGZAGOON] = { LANE('L'), {MOVE_CUT, MOVE_HEADBUTT, MOVE_BODY_SLAM} },
++    [SPECIES_ZUBAT] = { LANE('O'), {MOVE_POISON_FANG, MOVE_CROSS_POISON, MOVE_SLUDGE_BOMB} },
++};
++
+ const char *const gPkbnKindNames[GK_COUNT] =
+ {
+     [GK_CANNON] = "CANNON",
+-- 
+2.43.0
+
